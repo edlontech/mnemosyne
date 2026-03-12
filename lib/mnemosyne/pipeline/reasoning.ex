@@ -1,0 +1,127 @@
+defmodule Mnemosyne.Pipeline.Reasoning do
+  @moduledoc """
+  Parallel reasoning module that synthesizes retrieved memory candidates
+  into typed summaries.
+
+  Partitions candidates by node type, runs the appropriate reasoning
+  prompt for each non-empty partition in parallel, and returns a
+  `ReasonedMemory` struct.
+  """
+
+  alias Mnemosyne.Config
+  alias Mnemosyne.LLM
+  alias Mnemosyne.Pipeline.Prompts.ReasonEpisodic
+  alias Mnemosyne.Pipeline.Prompts.ReasonProcedural
+  alias Mnemosyne.Pipeline.Prompts.ReasonSemantic
+  alias Mnemosyne.Pipeline.Retrieval
+
+  use TypedStruct
+
+  typedstruct module: ReasonedMemory do
+    @moduledoc """
+    Result of reasoning over retrieved memory candidates.
+    Each field is nil when no candidates of that type were found.
+    """
+
+    field :episodic, String.t() | nil, default: nil
+    field :semantic, String.t() | nil, default: nil
+    field :procedural, String.t() | nil, default: nil
+  end
+
+  @doc """
+  Reasons over a retrieval result, producing typed summaries.
+
+  Options:
+    - `:llm` (required) - LLM module implementing the LLM behaviour
+    - `:query` (required) - The original query string
+    - `:llm_opts` - Additional LLM options (default: [])
+    - `:config` - Config struct for per-step model overrides
+  """
+  @spec reason(Retrieval.Result.t(), keyword()) :: {:ok, ReasonedMemory.t()} | {:error, term()}
+  def reason(%Retrieval.Result{candidates: candidates}, opts) do
+    llm = Keyword.fetch!(opts, :llm)
+    query = Keyword.fetch!(opts, :query)
+    llm_opts = Keyword.get(opts, :llm_opts, [])
+    config = Keyword.get(opts, :config)
+
+    tasks =
+      Enum.reject(
+        [
+          maybe_reason(:episodic, candidates, query, llm, llm_opts, config),
+          maybe_reason(:semantic, candidates, query, llm, llm_opts, config),
+          maybe_reason(:procedural, candidates, query, llm, llm_opts, config)
+        ],
+        &is_nil/1
+      )
+
+    results = Task.await_many(tasks, :timer.seconds(60))
+
+    case collect_results(results) do
+      {:ok, summaries} ->
+        memory =
+          Enum.reduce(summaries, %ReasonedMemory{}, fn {type, summary}, acc ->
+            Map.put(acc, type, summary)
+          end)
+
+        {:ok, memory}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp maybe_reason(type, candidates, query, llm, llm_opts, config) do
+    nodes = extract_nodes(candidates, type)
+
+    if nodes == [] do
+      nil
+    else
+      Task.async(fn ->
+        run_reasoning(type, query, nodes, llm, llm_opts, config)
+      end)
+    end
+  end
+
+  defp extract_nodes(candidates, type) do
+    candidates
+    |> Map.get(type, [])
+    |> Enum.map(fn {node, _score} -> node end)
+  end
+
+  defp run_reasoning(:episodic, query, nodes, llm, llm_opts, config) do
+    messages = ReasonEpisodic.build_messages(%{query: query, nodes: nodes})
+
+    with {:ok, %LLM.Response{content: content}} <-
+           llm.chat(messages, Config.llm_opts(config, :reason_episodic, llm_opts)),
+         {:ok, summary} <- ReasonEpisodic.parse_response(content) do
+      {:ok, {:episodic, summary}}
+    end
+  end
+
+  defp run_reasoning(:semantic, query, nodes, llm, llm_opts, config) do
+    messages = ReasonSemantic.build_messages(%{query: query, nodes: nodes})
+
+    with {:ok, %LLM.Response{content: content}} <-
+           llm.chat(messages, Config.llm_opts(config, :reason_semantic, llm_opts)),
+         {:ok, summary} <- ReasonSemantic.parse_response(content) do
+      {:ok, {:semantic, summary}}
+    end
+  end
+
+  defp run_reasoning(:procedural, query, nodes, llm, llm_opts, config) do
+    messages = ReasonProcedural.build_messages(%{query: query, nodes: nodes})
+
+    with {:ok, %LLM.Response{content: content}} <-
+           llm.chat(messages, Config.llm_opts(config, :reason_procedural, llm_opts)),
+         {:ok, summary} <- ReasonProcedural.parse_response(content) do
+      {:ok, {:procedural, summary}}
+    end
+  end
+
+  defp collect_results(results) do
+    Enum.reduce_while(results, {:ok, []}, fn
+      {:ok, pair}, {:ok, acc} -> {:cont, {:ok, [pair | acc]}}
+      {:error, _} = err, _acc -> {:halt, err}
+    end)
+  end
+end

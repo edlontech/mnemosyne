@@ -70,7 +70,7 @@ defmodule Mnemosyne.Pipeline.Episode do
 
     with {:ok, subgoal} <- infer_subgoal(llm, observation, action, episode.goal, config, llm_opts),
          {:ok, %Embedding.Response{vectors: [subgoal_embedding | _]}} <-
-           embedding.embed(subgoal, resolve_emb_opts(config)),
+           embedding.embed(subgoal, Config.embedding_opts(config)),
          {:ok, reward} <- evaluate_reward(llm, observation, action, subgoal, config, llm_opts),
          {:ok, state} <- summarize_state(llm, episode, config, llm_opts) do
       step = %{
@@ -105,7 +105,7 @@ defmodule Mnemosyne.Pipeline.Episode do
     messages = GetSubgoal.build_messages(%{observation: observation, action: action, goal: goal})
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, resolve_llm_opts(config, :get_subgoal, llm_opts)) do
+           llm.chat(messages, Config.llm_opts(config, :get_subgoal, llm_opts)) do
       GetSubgoal.parse_response(content)
     end
   end
@@ -115,7 +115,7 @@ defmodule Mnemosyne.Pipeline.Episode do
       GetReward.build_messages(%{observation: observation, action: action, subgoal: subgoal})
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, resolve_llm_opts(config, :get_reward, llm_opts)) do
+           llm.chat(messages, Config.llm_opts(config, :get_reward, llm_opts)) do
       GetReward.parse_response(content)
     end
   end
@@ -124,23 +124,9 @@ defmodule Mnemosyne.Pipeline.Episode do
     messages = GetState.build_messages(%{trajectory: episode.steps, goal: episode.goal})
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, resolve_llm_opts(config, :get_state, llm_opts)) do
+           llm.chat(messages, Config.llm_opts(config, :get_state, llm_opts)) do
       GetState.parse_response(content)
     end
-  end
-
-  defp resolve_llm_opts(nil, _step, base_opts), do: base_opts
-
-  defp resolve_llm_opts(config, step, base_opts) do
-    resolved = Config.resolve(config, step)
-    [model: resolved.model] ++ Map.to_list(resolved.opts) ++ base_opts
-  end
-
-  defp resolve_emb_opts(nil), do: []
-
-  defp resolve_emb_opts(config) do
-    resolved = Config.resolve_embedding(config)
-    [model: resolved.model] ++ Map.to_list(resolved.opts)
   end
 
   defp maybe_segment_trajectory(%{current_subgoal_embedding: nil} = episode, _new_embedding),

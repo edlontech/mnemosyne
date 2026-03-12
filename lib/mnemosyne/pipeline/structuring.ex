@@ -108,10 +108,10 @@ defmodule Mnemosyne.Pipeline.Structuring do
     messages = SemanticPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, resolve_llm_opts(config, :get_semantic, llm_opts)),
+           llm.chat(messages, Config.llm_opts(config, :get_semantic, llm_opts)),
          {:ok, facts} <- SemanticPrompt.parse_response(content),
          {:ok, %Embedding.Response{vectors: embeddings}} <-
-           embedding.embed_batch(facts, resolve_emb_opts(config)) do
+           embedding.embed_batch(facts, Config.embedding_opts(config)) do
       cs =
         Enum.zip(facts, embeddings)
         |> Enum.reduce(Changeset.new(), fn {fact, emb}, acc ->
@@ -133,12 +133,12 @@ defmodule Mnemosyne.Pipeline.Structuring do
     messages = ProceduralPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, resolve_llm_opts(config, :get_procedural, llm_opts)),
+           llm.chat(messages, Config.llm_opts(config, :get_procedural, llm_opts)),
          {:ok, instructions} <- ProceduralPrompt.parse_response(content),
          {:ok, %Embedding.Response{vectors: embeddings}} <-
            embedding.embed_batch(
              Enum.map(instructions, & &1.instruction),
-             resolve_emb_opts(config)
+             Config.embedding_opts(config)
            ) do
       cs =
         Enum.zip(instructions, embeddings)
@@ -162,23 +162,9 @@ defmodule Mnemosyne.Pipeline.Structuring do
     messages = GetReturn.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, resolve_llm_opts(config, :get_return, llm_opts)) do
+           llm.chat(messages, Config.llm_opts(config, :get_return, llm_opts)) do
       GetReturn.parse_response(content)
     end
-  end
-
-  defp resolve_llm_opts(nil, _step, base_opts), do: base_opts
-
-  defp resolve_llm_opts(config, step, base_opts) do
-    resolved = Config.resolve(config, step)
-    [model: resolved.model] ++ Map.to_list(resolved.opts) ++ base_opts
-  end
-
-  defp resolve_emb_opts(nil), do: []
-
-  defp resolve_emb_opts(config) do
-    resolved = Config.resolve_embedding(config)
-    [model: resolved.model] ++ Map.to_list(resolved.opts)
   end
 
   defp collect_results(results) do

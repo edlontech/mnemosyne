@@ -52,6 +52,24 @@ defmodule Mnemosyne.Config do
     %{model: config.embedding.model, opts: config.embedding.opts}
   end
 
+  @doc "Returns LLM keyword opts for a pipeline step, merging overrides with base opts."
+  @spec llm_opts(t() | nil, atom(), keyword()) :: keyword()
+  def llm_opts(nil, _step, base_opts), do: base_opts
+
+  def llm_opts(%__MODULE__{} = config, step, base_opts) do
+    resolved = resolve(config, step)
+    [model: resolved.model] ++ Map.to_list(resolved.opts) ++ base_opts
+  end
+
+  @doc "Returns embedding keyword opts from the config."
+  @spec embedding_opts(t() | nil) :: keyword()
+  def embedding_opts(nil), do: []
+
+  def embedding_opts(%__MODULE__{} = config) do
+    resolved = resolve_embedding(config)
+    [model: resolved.model] ++ Map.to_list(resolved.opts)
+  end
+
   @doc "Loads and validates config from the `:mnemosyne` application environment."
   @spec from_env() :: {:ok, t()} | {:error, term()}
   def from_env do
