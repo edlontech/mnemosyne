@@ -5,6 +5,7 @@ defmodule Mnemosyne.Graph.Similarity do
   Provides vector similarity scoring for knowledge graph node retrieval.
   """
 
+  @doc "Computes cosine similarity between two vectors, returning a value in [-1, 1]."
   @spec cosine_similarity([float()], [float()]) :: float()
   def cosine_similarity([], []), do: 0.0
 
@@ -16,13 +17,13 @@ defmodule Mnemosyne.Graph.Similarity do
       Scholar.Metrics.Distance.cosine(x, y)
       |> Nx.to_number()
 
-    if is_number(distance) and not (distance != distance) do
-      1.0 - distance
-    else
-      0.0
+    case distance do
+      d when is_float(d) -> 1.0 - d
+      _ -> 0.0
     end
   end
 
+  @doc "Returns the `k` most similar candidates to `query`, sorted by descending similarity."
   @spec top_k([float()], [{String.t(), [float()] | nil}], non_neg_integer()) ::
           [{String.t(), float()}]
   def top_k(query, candidates, k) do

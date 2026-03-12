@@ -6,8 +6,6 @@ defmodule Mnemosyne.Storage do
   graph data from a backing store.
   """
 
-  # TODO: Replace term() with Graph.t() and Graph.Changeset.t() once those types are defined.
-
   @type state :: term()
 
   @callback init(opts :: keyword()) :: {:ok, state()} | {:error, term()}

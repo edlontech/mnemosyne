@@ -2,11 +2,19 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
   use ExUnit.Case, async: false
   use Mimic
 
+  alias Mnemosyne.Config
+  alias Mnemosyne.Embedding
   alias Mnemosyne.Graph.Changeset
+  alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Episode
   alias Mnemosyne.Pipeline.Structuring
 
   @default_opts [llm: Mnemosyne.MockLLM, embedding: Mnemosyne.MockEmbedding]
+  @test_config %Config{
+    llm: %{model: "test:model", opts: %{}},
+    embedding: %{model: "test:embed", opts: %{}},
+    overrides: %{}
+  }
 
   setup :set_mimic_global
 
@@ -32,21 +40,25 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
     Mnemosyne.MockLLM
     |> stub(:chat, fn _messages, _opts ->
-      response =
+      content =
         Agent.get_and_update(agent, fn
           [head | tail] -> {head, tail}
           [] -> {"default", []}
         end)
 
-      {:ok, response}
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
     end)
   end
 
   defp stub_default_embedding do
     Mnemosyne.MockEmbedding
-    |> stub(:embed, fn _text -> {:ok, List.duplicate(0.1, 128)} end)
-    |> stub(:embed_batch, fn texts ->
-      {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)}
+    |> stub(:embed, fn _text, _opts ->
+      {:ok,
+       %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "mock:embed", usage: %{}}}
+    end)
+    |> stub(:embed_batch, fn texts, _opts ->
+      vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
     end)
   end
 
@@ -62,7 +74,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         |> Enum.find(%{content: ""}, &(&1.role == :system))
         |> Map.get(:content)
 
-      response =
+      content =
         cond do
           system_content =~ "factual knowledge" -> semantic_response
           system_content =~ "actionable instructions" -> procedural_response
@@ -70,7 +82,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
           true -> "default"
         end
 
-      {:ok, response}
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
     end)
 
     stub_default_embedding()
@@ -90,8 +102,8 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
       assert {:ok, %Changeset{} = cs} = Structuring.extract(episode, @default_opts)
 
-      assert length(cs.additions) > 0
-      assert length(cs.links) > 0
+      assert [_ | _] = cs.additions
+      assert [_ | _] = cs.links
 
       types = Enum.map(cs.additions, &struct_type/1) |> Enum.uniq() |> Enum.sort()
       assert :episodic in types
@@ -127,8 +139,48 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       {:ok, cs} = Structuring.extract(episode, @default_opts)
 
       subgoal_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Subgoal{}, &1))
-      assert length(subgoal_nodes) >= 1
+      assert [_ | _] = subgoal_nodes
       assert Enum.all?(subgoal_nodes, &(&1.parent_goal == "Optimize the database"))
+    end
+
+    test "accepts config option and resolves per-step opts" do
+      episode = build_closed_episode()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat, fn messages, opts ->
+        assert Keyword.get(opts, :model) == "test:model"
+
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content)
+
+        content =
+          cond do
+            system_content =~ "factual knowledge" ->
+              "Adding indexes improves query speed\nThe users table was the bottleneck"
+
+            system_content =~ "actionable instructions" ->
+              "WHEN: Query exceeds 1s\nDO: Add an index\nEXPECT: Sub-100ms response"
+
+            system_content =~ "return value" ->
+              "0.85"
+
+            true ->
+              "default"
+          end
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      stub_default_embedding()
+
+      opts = @default_opts ++ [config: @test_config]
+
+      assert {:ok, %Changeset{} = cs} = Structuring.extract(episode, opts)
+
+      assert [_ | _] = cs.additions
+      assert [_ | _] = cs.links
     end
 
     test "propagates LLM errors during extraction" do

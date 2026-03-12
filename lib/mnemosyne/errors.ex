@@ -42,6 +42,7 @@ defmodule Mnemosyne.Errors.Unknown.Unknown do
   """
   use Splode.Error, fields: [:error, :value], class: :unknown
 
+  @spec message(map()) :: String.t()
   def message(%{error: error}) do
     if is_binary(error), do: error, else: inspect(error)
   end

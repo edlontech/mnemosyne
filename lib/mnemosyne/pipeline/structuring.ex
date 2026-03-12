@@ -7,6 +7,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
   assembles a Graph.Changeset with all nodes and links.
   """
 
+  alias Mnemosyne.Config
+  alias Mnemosyne.Embedding
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
   alias Mnemosyne.Graph.Node.Procedural
@@ -18,6 +20,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
   alias Mnemosyne.Pipeline.Prompts.GetReturn
   alias Mnemosyne.Pipeline.Prompts.GetSemantic, as: SemanticPrompt
 
+  @doc "Extracts knowledge nodes from a closed episode into a changeset."
   @spec extract(Episode.t(), keyword()) :: {:ok, Changeset.t()} | {:error, term()}
   def extract(%Episode{closed: false}, _opts), do: {:error, :episode_not_closed}
 
@@ -25,10 +28,11 @@ defmodule Mnemosyne.Pipeline.Structuring do
     llm = Keyword.fetch!(opts, :llm)
     embedding = Keyword.fetch!(opts, :embedding)
     llm_opts = Keyword.get(opts, :llm_opts, [])
+    config = Keyword.get(opts, :config)
 
     changesets =
       episode.trajectories
-      |> Enum.map(&extract_trajectory(episode, &1, llm, embedding, llm_opts))
+      |> Enum.map(&extract_trajectory(episode, &1, llm, embedding, llm_opts, config))
       |> collect_results()
 
     case changesets do
@@ -37,13 +41,15 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end
   end
 
-  defp extract_trajectory(episode, trajectory, llm, embedding, llm_opts) do
+  defp extract_trajectory(episode, trajectory, llm, embedding, llm_opts, config) do
     extraction_tasks = [
-      Task.async(fn -> extract_semantic(trajectory, episode.goal, llm, embedding, llm_opts) end),
       Task.async(fn ->
-        extract_procedural(trajectory, episode.goal, llm, embedding, llm_opts)
+        extract_semantic(trajectory, episode.goal, llm, embedding, llm_opts, config)
       end),
-      Task.async(fn -> compute_return(trajectory, episode.goal, llm, llm_opts) end)
+      Task.async(fn ->
+        extract_procedural(trajectory, episode.goal, llm, embedding, llm_opts, config)
+      end),
+      Task.async(fn -> compute_return(trajectory, episode.goal, llm, llm_opts, config) end)
     ]
 
     [semantic_result, procedural_result, return_result] =
@@ -98,12 +104,14 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end)
   end
 
-  defp extract_semantic(trajectory, goal, llm, embedding, llm_opts) do
+  defp extract_semantic(trajectory, goal, llm, embedding, llm_opts, config) do
     messages = SemanticPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
-    with {:ok, response} <- llm.chat(messages, llm_opts),
-         {:ok, facts} <- SemanticPrompt.parse_response(response),
-         {:ok, embeddings} <- embedding.embed_batch(facts) do
+    with {:ok, %{content: content}} <-
+           llm.chat(messages, resolve_llm_opts(config, :get_semantic, llm_opts)),
+         {:ok, facts} <- SemanticPrompt.parse_response(content),
+         {:ok, %Embedding.Response{vectors: embeddings}} <-
+           embedding.embed_batch(facts, resolve_emb_opts(config)) do
       cs =
         Enum.zip(facts, embeddings)
         |> Enum.reduce(Changeset.new(), fn {fact, emb}, acc ->
@@ -121,12 +129,17 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end
   end
 
-  defp extract_procedural(trajectory, goal, llm, embedding, llm_opts) do
+  defp extract_procedural(trajectory, goal, llm, embedding, llm_opts, config) do
     messages = ProceduralPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
-    with {:ok, response} <- llm.chat(messages, llm_opts),
-         {:ok, instructions} <- ProceduralPrompt.parse_response(response),
-         {:ok, embeddings} <- embedding.embed_batch(Enum.map(instructions, & &1.instruction)) do
+    with {:ok, %{content: content}} <-
+           llm.chat(messages, resolve_llm_opts(config, :get_procedural, llm_opts)),
+         {:ok, instructions} <- ProceduralPrompt.parse_response(content),
+         {:ok, %Embedding.Response{vectors: embeddings}} <-
+           embedding.embed_batch(
+             Enum.map(instructions, & &1.instruction),
+             resolve_emb_opts(config)
+           ) do
       cs =
         Enum.zip(instructions, embeddings)
         |> Enum.reduce(Changeset.new(), fn {instr, emb}, acc ->
@@ -145,13 +158,27 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end
   end
 
-  defp compute_return(trajectory, goal, llm, llm_opts) do
+  defp compute_return(trajectory, goal, llm, llm_opts, config) do
     messages = GetReturn.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
-    with {:ok, response} <- llm.chat(messages, llm_opts),
-         {:ok, value} <- GetReturn.parse_response(response) do
-      {:ok, value}
+    with {:ok, %{content: content}} <-
+           llm.chat(messages, resolve_llm_opts(config, :get_return, llm_opts)) do
+      GetReturn.parse_response(content)
     end
+  end
+
+  defp resolve_llm_opts(nil, _step, base_opts), do: base_opts
+
+  defp resolve_llm_opts(config, step, base_opts) do
+    resolved = Config.resolve(config, step)
+    [model: resolved.model] ++ Map.to_list(resolved.opts) ++ base_opts
+  end
+
+  defp resolve_emb_opts(nil), do: []
+
+  defp resolve_emb_opts(config) do
+    resolved = Config.resolve_embedding(config)
+    [model: resolved.model] ++ Map.to_list(resolved.opts)
   end
 
   defp collect_results(results) do

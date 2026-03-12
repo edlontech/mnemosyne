@@ -15,9 +15,13 @@ defmodule Mnemosyne.Graph.Node.Subgoal do
   end
 
   defimpl Mnemosyne.Graph.Node do
+    @doc false
     def id(node), do: node.id
+    @doc false
     def embedding(node), do: node.embedding
+    @doc false
     def links(node), do: node.links
+    @doc false
     def node_type(_node), do: :subgoal
   end
 end

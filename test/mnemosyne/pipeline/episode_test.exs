@@ -2,30 +2,42 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
   use ExUnit.Case, async: true
   use Mimic
 
+  alias Mnemosyne.Config
+  alias Mnemosyne.Embedding
+  alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Episode
 
   @default_opts [llm: Mnemosyne.MockLLM, embedding: Mnemosyne.MockEmbedding]
+  @test_config %Config{
+    llm: %{model: "test:model", opts: %{}},
+    embedding: %{model: "test:embed", opts: %{}},
+    overrides: %{}
+  }
 
   defp stub_llm_responses(responses) do
     {:ok, agent} = Agent.start_link(fn -> responses end)
 
     Mnemosyne.MockLLM
     |> stub(:chat, fn _messages, _opts ->
-      response =
+      content =
         Agent.get_and_update(agent, fn
           [head | tail] -> {head, tail}
           [] -> {"default", []}
         end)
 
-      {:ok, response}
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
     end)
   end
 
   defp stub_embedding do
     Mnemosyne.MockEmbedding
-    |> stub(:embed, fn _text -> {:ok, List.duplicate(0.1, 128)} end)
-    |> stub(:embed_batch, fn texts ->
-      {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)}
+    |> stub(:embed, fn _text, _opts ->
+      {:ok,
+       %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "mock:embed", usage: %{}}}
+    end)
+    |> stub(:embed_batch, fn texts, _opts ->
+      vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
     end)
   end
 
@@ -72,6 +84,22 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
                Episode.append(episode, "obs", "act", @default_opts)
     end
 
+    test "accepts config option and resolves per-step opts" do
+      stub_embedding()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat, fn _messages, opts ->
+        assert Keyword.get(opts, :model) == "test:model"
+        {:ok, %LLM.Response{content: "0.8", model: "mock:test", usage: %{}}}
+      end)
+
+      episode = Episode.new("Test goal")
+      opts = @default_opts ++ [config: @test_config]
+
+      assert {:ok, _episode} =
+               Episode.append(episode, "saw something", "did something", opts)
+    end
+
     test "propagates LLM errors" do
       Mnemosyne.MockLLM
       |> stub(:chat, fn _messages, _opts -> {:error, :llm_failure} end)
@@ -95,7 +123,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       {:ok, closed} = Episode.close(episode)
 
       assert closed.closed == true
-      assert length(closed.trajectories) >= 1
+      assert [_ | _] = closed.trajectories
 
       [traj | _] = closed.trajectories
       assert is_binary(traj.id)

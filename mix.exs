@@ -35,7 +35,7 @@ defmodule Mnemosyne.MixProject do
       {:recode, "~> 0.8", only: [:dev], runtime: false},
       {:scholar, "~> 0.4"},
       {:splode, "~> 0.3"},
-      {:sycophant, github: "edlontech/sycophant", branch: "main"},
+      {:sycophant, github: "edlontech/sycophant", branch: "main", optional: true},
       {:telemetry, "~> 1.3"},
       {:tidewave, "~> 0.5", only: :dev, runtime: false},
       {:typedstruct, "~> 0.5"},

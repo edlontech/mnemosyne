@@ -12,19 +12,23 @@ defmodule Mnemosyne.Graph.Changeset do
     field :links, [{String.t(), String.t()}], default: []
   end
 
+  @doc "Creates an empty changeset."
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
+  @doc "Appends a node to the changeset's addition list."
   @spec add_node(t(), struct()) :: t()
   def add_node(%__MODULE__{} = cs, node) do
     %{cs | additions: [node | cs.additions]}
   end
 
+  @doc "Records a link between two node IDs in the changeset."
   @spec add_link(t(), String.t(), String.t()) :: t()
   def add_link(%__MODULE__{} = cs, id_a, id_b) do
     %{cs | links: [{id_a, id_b} | cs.links]}
   end
 
+  @doc "Merges two changesets by concatenating their additions and links."
   @spec merge(t(), t()) :: t()
   def merge(%__MODULE__{} = a, %__MODULE__{} = b) do
     %__MODULE__{

@@ -5,7 +5,21 @@ defmodule Mnemosyne.Embedding do
   Implementations must convert text into vector representations
   suitable for similarity search.
   """
+  use TypedStruct
 
-  @callback embed(text :: String.t()) :: {:ok, [float()]} | {:error, term()}
-  @callback embed_batch(texts :: [String.t()]) :: {:ok, [[float()]]} | {:error, term()}
+  defmodule Response do
+    @moduledoc "Struct returned by embedding generation calls."
+    use TypedStruct
+
+    typedstruct do
+      field :vectors, [[float()]], enforce: true
+      field :model, String.t()
+      field :usage, map(), default: %{}
+    end
+  end
+
+  @callback embed(text :: String.t(), opts :: keyword()) ::
+              {:ok, Response.t()} | {:error, term()}
+  @callback embed_batch(texts :: [String.t()], opts :: keyword()) ::
+              {:ok, Response.t()} | {:error, term()}
 end

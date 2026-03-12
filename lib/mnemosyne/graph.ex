@@ -19,9 +19,11 @@ defmodule Mnemosyne.Graph do
     field :by_subgoal, %{String.t() => MapSet.t()}, default: %{}
   end
 
+  @doc "Creates an empty graph."
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
+  @doc "Inserts a node into the graph, updating all secondary indexes."
   @spec put_node(t(), struct()) :: t()
   def put_node(%__MODULE__{} = graph, node) do
     id = NodeProtocol.id(node)
@@ -34,9 +36,11 @@ defmodule Mnemosyne.Graph do
     |> maybe_index_subgoal(node, id)
   end
 
+  @doc "Fetches a node by its ID, returning `nil` if not found."
   @spec get_node(t(), String.t()) :: struct() | nil
   def get_node(%__MODULE__{nodes: nodes}, id), do: Map.get(nodes, id)
 
+  @doc "Returns all nodes matching the given type atom."
   @spec nodes_by_type(t(), atom()) :: [struct()]
   def nodes_by_type(%__MODULE__{by_type: by_type, nodes: nodes}, type) do
     case Map.get(by_type, type) do
@@ -45,6 +49,7 @@ defmodule Mnemosyne.Graph do
     end
   end
 
+  @doc "Creates a bidirectional link between two nodes. No-op if either ID is missing."
   @spec link(t(), String.t(), String.t()) :: t()
   def link(%__MODULE__{nodes: nodes} = graph, id_a, id_b) do
     with {:ok, node_a} <- Map.fetch(nodes, id_a),
@@ -58,6 +63,7 @@ defmodule Mnemosyne.Graph do
     end
   end
 
+  @doc "Applies a changeset's additions and links to the graph."
   @spec apply_changeset(t(), Changeset.t()) :: t()
   def apply_changeset(%__MODULE__{} = graph, %Changeset{} = cs) do
     graph
