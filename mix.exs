@@ -33,6 +33,7 @@ defmodule Mnemosyne.MixProject do
       {:mimic, "~> 2.0", only: :test},
       {:mix_audit, ">= 0.0.0", only: [:dev, :test], runtime: false},
       {:recode, "~> 0.8", only: [:dev], runtime: false},
+      {:scholar, "~> 0.4"},
       {:splode, "~> 0.3"},
       {:sycophant, github: "edlontech/sycophant", branch: "main"},
       {:telemetry, "~> 1.3"},
