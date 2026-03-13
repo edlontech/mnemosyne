@@ -18,6 +18,21 @@ defmodule Mnemosyne.Session do
   alias Mnemosyne.Pipeline.Episode
   alias Mnemosyne.Pipeline.Structuring
 
+  @type state :: :idle | :collecting | :extracting | :ready | :failed
+
+  @type t :: %__MODULE__{
+          id: String.t() | nil,
+          registry: module() | nil,
+          episode: Episode.t() | nil,
+          changeset: Changeset.t() | nil,
+          config: Mnemosyne.Config.t() | nil,
+          llm: module() | nil,
+          embedding: module() | nil,
+          memory_store: GenServer.server() | nil,
+          task_supervisor: module() | nil,
+          extraction_task: reference() | nil
+        }
+
   defstruct [
     :id,
     :registry,
@@ -33,6 +48,7 @@ defmodule Mnemosyne.Session do
 
   # -- Client API --
 
+  @doc false
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     registry = Keyword.fetch!(opts, :registry)
@@ -41,17 +57,26 @@ defmodule Mnemosyne.Session do
     GenStateMachine.start_link(__MODULE__, Keyword.put(opts, :id, id), name: name)
   end
 
+  @doc """
+  Opens a new episode with the given goal, transitioning from `:idle` to `:collecting`.
+  """
   @spec start_episode(GenServer.server(), String.t()) :: :ok | {:error, SessionError.t()}
   def start_episode(server, goal) do
     GenStateMachine.call(server, {:start_episode, goal})
   end
 
+  @doc """
+  Appends an observation-action pair to the current episode.
+  """
   @spec append(GenServer.server(), String.t(), String.t()) ::
           :ok | {:error, Mnemosyne.Errors.error()}
   def append(server, observation, action) do
     GenStateMachine.call(server, {:append, observation, action}, :timer.seconds(60))
   end
 
+  @doc """
+  Closes the current episode and starts asynchronous extraction.
+  """
   @spec close(GenServer.server()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def close(server) do
     GenStateMachine.call(server, :close)
@@ -67,16 +92,25 @@ defmodule Mnemosyne.Session do
     GenStateMachine.call(server, :commit)
   end
 
+  @doc """
+  Discards the extraction result and returns to `:idle`.
+  """
   @spec discard(GenServer.server()) :: :ok | {:error, SessionError.t()}
   def discard(server) do
     GenStateMachine.call(server, :discard)
   end
 
-  @spec state(GenServer.server()) :: atom()
+  @doc """
+  Returns the current state atom (`:idle`, `:collecting`, `:extracting`, `:ready`, `:failed`).
+  """
+  @spec state(GenServer.server()) :: state()
   def state(server) do
     GenStateMachine.call(server, :get_state)
   end
 
+  @doc """
+  Returns the unique session ID.
+  """
   @spec id(GenServer.server()) :: String.t()
   def id(server) do
     GenStateMachine.call(server, :get_id)
@@ -130,6 +164,7 @@ defmodule Mnemosyne.Session do
 
   # -- Idle State --
 
+  @doc false
   def idle({:call, from}, {:start_episode, goal}, data) do
     episode = Episode.new(goal)
     emit_transition(data, :idle, :collecting)
@@ -169,6 +204,7 @@ defmodule Mnemosyne.Session do
 
   # -- Collecting State --
 
+  @doc false
   def collecting({:call, from}, {:append, observation, action}, data) do
     opts = [
       llm: data.llm,
@@ -230,6 +266,7 @@ defmodule Mnemosyne.Session do
 
   # -- Extracting State --
 
+  @doc false
   def extracting({:call, from}, :get_state, _data),
     do: {:keep_state_and_data, [{:reply, from, :extracting}]}
 
@@ -268,6 +305,7 @@ defmodule Mnemosyne.Session do
 
   # -- Failed State --
 
+  @doc false
   def failed({:call, from}, :commit, data) do
     task = spawn_extraction(data)
     emit_transition(data, :failed, :extracting)
@@ -295,6 +333,7 @@ defmodule Mnemosyne.Session do
 
   # -- Ready State --
 
+  @doc false
   def ready({:call, from}, :commit, data) do
     case MemoryStore.apply_changeset(data.memory_store, data.changeset) do
       :ok ->

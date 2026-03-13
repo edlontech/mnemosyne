@@ -1,9 +1,65 @@
 defmodule Mnemosyne do
   @moduledoc """
-  Agentic memory library built on a three-layer knowledge graph architecture.
+  Agentic memory library that models memory as a knowledge graph using
+  reinforcement-learning primitives (episodes, trajectories, rewards, value functions).
 
-  Provides a public API for session management (write path),
-  memory retrieval (read path), and graph management.
+  ## Architecture
+
+  Mnemosyne is organized in three layers:
+
+    1. **Data Primitives** - An in-memory knowledge graph with typed nodes
+       (`Episodic`, `Semantic`, `Procedural`, `Subgoal`, `Source`, `Tag`)
+       connected by directed links. Mutations happen through `Changeset` structs.
+
+    2. **Pipeline** - LLM-driven extraction that turns raw observation-action
+       sequences into structured knowledge. Episodes track steps, detect
+       trajectory boundaries via embedding similarity, and produce changesets
+       that grow the graph.
+
+    3. **Retrieval** - Value-function-scored retrieval over the graph, combining
+       multiple node types to produce contextually relevant memory results.
+
+  ## Write Path (Sessions)
+
+  Sessions are the write interface to the knowledge graph. A session
+  collects observation-action pairs, groups them into trajectories, and
+  uses LLM calls to extract semantic and procedural knowledge.
+
+      {:ok, session_id} = Mnemosyne.start_session("Learn Elixir patterns")
+      :ok = Mnemosyne.append(session_id, "Read about GenServer", "Implemented a cache")
+      :ok = Mnemosyne.append(session_id, "Cache worked well", "Added TTL support")
+      :ok = Mnemosyne.close_and_commit(session_id)
+
+  Sessions follow a state machine lifecycle:
+  `:idle` -> `:collecting` -> `:extracting` -> `:ready` -> (committed/discarded)
+
+  The `:extracting` state runs asynchronously under a `Task.Supervisor`, keeping
+  the session process responsive. If extraction fails, the session moves to
+  `:failed` and preserves the episode for retry.
+
+  ## Read Path (Recall)
+
+  Recall queries the knowledge graph using value functions to score and rank
+  nodes by relevance. Session context can augment queries with the current
+  episode's state for more targeted retrieval.
+
+      {:ok, memories} = Mnemosyne.recall("How to implement caching?")
+      {:ok, memories} = Mnemosyne.recall_in_context(session_id, "What did I try before?")
+
+  ## Graph Management
+
+  Direct graph operations for inspection and bulk mutations:
+
+      graph = Mnemosyne.get_graph()
+      :ok = Mnemosyne.apply_changeset(changeset)
+      :ok = Mnemosyne.delete_nodes(["node-1", "node-2"])
+
+  ## Supervision
+
+  Mnemosyne runs under its own supervision tree (`Mnemosyne.Supervisor`).
+  Multiple independent instances can coexist by passing a custom `:supervisor`
+  name in opts. Each supervisor owns its own Registry, MemoryStore,
+  TaskSupervisor, and SessionSupervisor.
   """
 
   alias Mnemosyne.Errors.Framework.NotFoundError
@@ -18,8 +74,27 @@ defmodule Mnemosyne do
   @doc """
   Starts a new memory session with the given goal.
 
-  The session is started under the SessionSupervisor and automatically
-  begins collecting observations. Returns `{:ok, session_id}`.
+  Creates a new `Session` process under the `SessionSupervisor` and immediately
+  opens an episode with the provided goal. The session begins in the `:collecting`
+  state, ready to receive observation-action pairs via `append/4`.
+
+  LLM, embedding, and config defaults are pulled from the `MemoryStore` unless
+  explicitly overridden in `opts`.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor to use. Defaults to `Mnemosyne.Supervisor`.
+    * `:config` - A `Mnemosyne.Config` struct overriding the stored defaults.
+    * `:llm` - LLM adapter module overriding the stored default.
+    * `:embedding` - Embedding adapter module overriding the stored default.
+
+  ## Examples
+
+      {:ok, session_id} = Mnemosyne.start_session("Explore caching strategies")
+
+      {:ok, session_id} = Mnemosyne.start_session("Debug auth flow",
+        config: %Mnemosyne.Config{llm: %{model: "gpt-4o", opts: %{}}, embedding: %{model: "e5-base-v2", opts: %{}}}
+      )
   """
   @spec start_session(String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def start_session(goal, opts \\ []) do
@@ -51,7 +126,21 @@ defmodule Mnemosyne do
     end
   end
 
-  @doc "Appends an observation-action pair to the session."
+  @doc """
+  Appends an observation-action pair to the current episode.
+
+  The observation describes what the agent perceived and the action describes
+  what the agent did in response. Each pair becomes a step in the current
+  trajectory. When the embedding similarity between consecutive observations
+  drops below the threshold (0.75), a new trajectory boundary is detected
+  automatically.
+
+  The session must be in the `:collecting` state.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
   @spec append(String.t(), String.t(), String.t(), keyword()) ::
           :ok | {:error, Mnemosyne.Errors.error()}
   def append(session_id, observation, action, opts \\ []) do
@@ -60,7 +149,18 @@ defmodule Mnemosyne do
     end
   end
 
-  @doc "Closes the current episode, triggering extraction."
+  @doc """
+  Closes the current episode, triggering asynchronous knowledge extraction.
+
+  Moves the session from `:collecting` to `:extracting`. The extraction
+  pipeline runs in a supervised task and processes each trajectory to extract
+  semantic facts, procedural instructions, and compute returns. Once
+  extraction completes, the session transitions to `:ready` (success)
+  or `:failed` (extraction error).
+
+  Use `commit/2` after extraction completes to persist the results, or
+  `close_and_commit/2` to do both in one call.
+  """
   @spec close(String.t(), keyword()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def close(session_id, opts \\ []) do
     with {:ok, pid} <- lookup_session(session_id, opts) do
@@ -68,7 +168,16 @@ defmodule Mnemosyne do
     end
   end
 
-  @doc "Commits the extracted changeset to the MemoryStore."
+  @doc """
+  Commits the extracted changeset to the MemoryStore.
+
+  Applies the knowledge graph changeset produced by the extraction pipeline
+  to the shared `MemoryStore`, making the new nodes and links available for
+  future recall queries. The session must be in the `:ready` state.
+
+  After committing, the session transitions back to `:idle` and can start
+  a new episode.
+  """
   @spec commit(String.t(), keyword()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def commit(session_id, opts \\ []) do
     with {:ok, pid} <- lookup_session(session_id, opts) do
@@ -76,7 +185,13 @@ defmodule Mnemosyne do
     end
   end
 
-  @doc "Discards the session result without committing."
+  @doc """
+  Discards the extraction result without committing to the knowledge graph.
+
+  Drops the changeset produced by extraction. Useful when the extracted
+  knowledge is deemed low-quality or irrelevant. The session returns to
+  `:idle` and can start a new episode.
+  """
   @spec discard(String.t(), keyword()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def discard(session_id, opts \\ []) do
     with {:ok, pid} <- lookup_session(session_id, opts) do
@@ -84,8 +199,14 @@ defmodule Mnemosyne do
     end
   end
 
-  @doc "Returns the current state of a session."
-  @spec session_state(String.t(), keyword()) :: atom() | {:error, NotFoundError.t()}
+  @doc """
+  Returns the current state of a session.
+
+  Possible states: `:idle`, `:collecting`, `:extracting`, `:ready`, `:failed`.
+
+  Returns `{:error, NotFoundError}` if the session ID is not registered.
+  """
+  @spec session_state(String.t(), keyword()) :: Session.state() | {:error, NotFoundError.t()}
   def session_state(session_id, opts \\ []) do
     with {:ok, pid} <- lookup_session(session_id, opts) do
       Session.state(pid)
@@ -93,9 +214,24 @@ defmodule Mnemosyne do
   end
 
   @doc """
-  Closes the episode and waits for extraction to complete, then commits.
+  Closes the episode, waits for extraction to complete, and commits the result.
 
-  Retries on transient failures up to `max_retries` (default 2).
+  Convenience function that combines `close/2`, polling for extraction completion,
+  and `commit/2` into a single blocking call. Handles transient extraction failures
+  by retrying up to `max_retries` times.
+
+  ## Options
+
+    * `:max_retries` - Number of retry attempts on transient extraction failures. Defaults to `2`.
+    * `:max_polls` - Maximum number of polling iterations while waiting for extraction. Defaults to `200`.
+    * `:poll_interval` - Milliseconds between polls. Defaults to `50`.
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+
+  ## Examples
+
+      :ok = Mnemosyne.close_and_commit(session_id)
+
+      :ok = Mnemosyne.close_and_commit(session_id, max_retries: 5, poll_interval: 100)
   """
   @spec close_and_commit(String.t(), keyword()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def close_and_commit(session_id, opts \\ []) do
@@ -108,14 +244,39 @@ defmodule Mnemosyne do
     end
   end
 
-  @doc "Retrieves relevant memories for the given query."
+  @doc """
+  Retrieves relevant memories from the knowledge graph for the given query.
+
+  Runs the retrieval pipeline, which computes embeddings for the query and
+  scores candidate nodes using value functions across all node types
+  (episodic, semantic, procedural, subgoal, tag, source). Results are
+  ranked and filtered by relevance.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+
+  ## Examples
+
+      {:ok, memories} = Mnemosyne.recall("How to handle GenServer timeouts?")
+  """
   @spec recall(String.t(), keyword()) :: {:ok, term()} | {:error, Mnemosyne.Errors.error()}
   def recall(query, opts \\ []) do
     store = store_name(opts)
     MemoryStore.recall(store, query, opts)
   end
 
-  @doc "Retrieves memories with session context augmenting the query."
+  @doc """
+  Retrieves memories using both the query and the session's current context.
+
+  Augments the query with the active episode's state (current subgoal,
+  recent observations) to produce more contextually relevant results.
+  If the session is not found, falls back to a plain `recall/2`.
+
+  ## Examples
+
+      {:ok, memories} = Mnemosyne.recall_in_context(session_id, "What patterns apply here?")
+  """
   @spec recall_in_context(String.t(), String.t(), keyword()) ::
           {:ok, term()} | {:error, Mnemosyne.Errors.error()}
   def recall_in_context(session_id, query, opts \\ []) do
@@ -130,14 +291,25 @@ defmodule Mnemosyne do
     end
   end
 
-  @doc "Returns the current knowledge graph."
+  @doc """
+  Returns the current knowledge graph held by the MemoryStore.
+
+  The graph contains all committed nodes and their links. Useful for
+  inspection, debugging, or building custom retrieval strategies.
+  """
   @spec get_graph(keyword()) :: Mnemosyne.Graph.t()
   def get_graph(opts \\ []) do
     store = store_name(opts)
     MemoryStore.get_graph(store)
   end
 
-  @doc "Applies a changeset to the knowledge graph."
+  @doc """
+  Applies a changeset to the knowledge graph.
+
+  Adds nodes and links from the changeset to the graph and persists the
+  updated graph to storage. This is the low-level mutation interface;
+  prefer the session-based write path for normal operation.
+  """
   @spec apply_changeset(Mnemosyne.Graph.Changeset.t(), keyword()) ::
           :ok | {:error, StorageError.t()}
   def apply_changeset(changeset, opts \\ []) do
@@ -145,7 +317,12 @@ defmodule Mnemosyne do
     MemoryStore.apply_changeset(store, changeset)
   end
 
-  @doc "Deletes nodes from the knowledge graph."
+  @doc """
+  Deletes nodes from the knowledge graph by their IDs.
+
+  Removes the specified nodes and any links referencing them, then persists
+  the updated graph to storage.
+  """
   @spec delete_nodes([String.t()], keyword()) :: :ok | {:error, StorageError.t()}
   def delete_nodes(node_ids, opts \\ []) do
     store = store_name(opts)
