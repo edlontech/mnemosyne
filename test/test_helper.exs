@@ -1,4 +1,4 @@
-ExUnit.start()
+ExUnit.start(exclude: [:integration], capture_log: true)
 
 Mimic.copy(Mnemosyne.MockLLM)
 Mimic.copy(Mnemosyne.MockEmbedding)

@@ -7,15 +7,17 @@ defmodule Mnemosyne.Application do
 
   @impl true
   def start(_type, _args) do
-    children =
-      [
-        # Starts a worker by calling: Mnemosyne.Worker.start_link(arg)
-        # {Mnemosyne.Worker, arg}
-      ] ++ dev_children()
+    config = Application.get_all_env(:mnemosyne)
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
-    opts = [strategy: :one_for_one, name: Mnemosyne.Supervisor]
+    children =
+      if config[:storage] do
+        [{Mnemosyne.Supervisor, config}]
+      else
+        []
+      end
+
+    children = children ++ dev_children()
+    opts = [strategy: :one_for_one, name: Mnemosyne.AppSupervisor]
     Supervisor.start_link(children, opts)
   end
 

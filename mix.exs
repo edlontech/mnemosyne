@@ -8,7 +8,8 @@ defmodule Mnemosyne.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      elixirc_paths: elixirc_paths(Mix.env())
+      elixirc_paths: elixirc_paths(Mix.env()),
+      aliases: aliases()
     ]
   end
 
@@ -17,6 +18,18 @@ defmodule Mnemosyne.MixProject do
     [
       extra_applications: [:logger],
       mod: {Mnemosyne.Application, []}
+    ]
+  end
+
+  def cli do
+    [
+      preferred_envs: [
+        coveralls: :test,
+        "coveralls.post": :test,
+        "coveralls.github": :test,
+        "coveralls.html": :test,
+        "test.integration": :test
+      ]
     ]
   end
 
@@ -29,6 +42,7 @@ defmodule Mnemosyne.MixProject do
       {:doctor, "~> 0.22", only: :dev},
       {:ex_check, "~> 0.16", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.18", only: [:dev, :test]},
+      {:gen_state_machine, "~> 3.0"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:mimic, "~> 2.0", only: :test},
       {:mix_audit, ">= 0.0.0", only: [:dev, :test], runtime: false},
@@ -41,6 +55,12 @@ defmodule Mnemosyne.MixProject do
       {:typedstruct, "~> 0.5"},
       {:zoi, "~> 0.11"},
       {:zoi_defstruct, "~> 0.2"}
+    ]
+  end
+
+  defp aliases do
+    [
+      "test.integration": ["test --only integration"]
     ]
   end
 

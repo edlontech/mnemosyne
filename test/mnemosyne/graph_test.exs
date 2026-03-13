@@ -158,4 +158,64 @@ defmodule Mnemosyne.GraphTest do
       assert MapSet.size(g.by_subgoal["shared goal"]) == 2
     end
   end
+
+  describe "delete_node/2" do
+    test "removes node from the graph" do
+      g =
+        Graph.new()
+        |> Graph.put_node(make_episodic("e1"))
+        |> Graph.delete_node("e1")
+
+      assert Graph.get_node(g, "e1") == nil
+      assert g.nodes == %{}
+    end
+
+    test "rebuilds type index after deletion" do
+      g =
+        Graph.new()
+        |> Graph.put_node(make_episodic("e1"))
+        |> Graph.put_node(make_episodic("e2"))
+        |> Graph.delete_node("e1")
+
+      assert Graph.nodes_by_type(g, :episodic) == [Graph.get_node(g, "e2")]
+      refute MapSet.member?(g.by_type[:episodic], "e1")
+    end
+
+    test "rebuilds tag index after deletion" do
+      g =
+        Graph.new()
+        |> Graph.put_node(make_tag("t1", "important"))
+        |> Graph.put_node(make_tag("t2", "important"))
+        |> Graph.delete_node("t1")
+
+      refute MapSet.member?(g.by_tag["important"], "t1")
+      assert MapSet.member?(g.by_tag["important"], "t2")
+    end
+
+    test "rebuilds subgoal index after deletion" do
+      g =
+        Graph.new()
+        |> Graph.put_node(make_subgoal("sg1", "fix bug"))
+        |> Graph.delete_node("sg1")
+
+      assert g.by_subgoal == %{}
+    end
+
+    test "is no-op for missing node ID" do
+      g = Graph.put_node(Graph.new(), make_episodic("e1"))
+      assert Graph.delete_node(g, "missing") == g
+    end
+
+    test "removes stale link references from remaining nodes" do
+      g =
+        Graph.new()
+        |> Graph.put_node(make_episodic("e1"))
+        |> Graph.put_node(make_episodic("e2"))
+        |> Graph.link("e1", "e2")
+        |> Graph.delete_node("e1")
+
+      e2 = Graph.get_node(g, "e2")
+      refute MapSet.member?(e2.links, "e1")
+    end
+  end
 end

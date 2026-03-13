@@ -63,6 +63,23 @@ defmodule Mnemosyne.Graph do
     end
   end
 
+  @doc "Removes a node from the graph, cleans up link references, and rebuilds indexes."
+  @spec delete_node(t(), String.t()) :: t()
+  def delete_node(%__MODULE__{} = graph, id) do
+    case Map.pop(graph.nodes, id) do
+      {nil, _} ->
+        graph
+
+      {_node, remaining} ->
+        cleaned =
+          Map.new(remaining, fn {nid, node} ->
+            {nid, %{node | links: MapSet.delete(node.links, id)}}
+          end)
+
+        rebuild_indexes(%{graph | nodes: cleaned})
+    end
+  end
+
   @doc "Applies a changeset's additions and links to the graph."
   @spec apply_changeset(t(), Changeset.t()) :: t()
   def apply_changeset(%__MODULE__{} = graph, %Changeset{} = cs) do
@@ -100,5 +117,17 @@ defmodule Mnemosyne.Graph do
 
   defp apply_links(graph, links) do
     Enum.reduce(links, graph, fn {id_a, id_b}, g -> link(g, id_a, id_b) end)
+  end
+
+  defp rebuild_indexes(%__MODULE__{nodes: nodes} = graph) do
+    Enum.reduce(nodes, %{graph | by_type: %{}, by_tag: %{}, by_subgoal: %{}}, fn {_id, node}, g ->
+      id = NodeProtocol.id(node)
+      type = NodeProtocol.node_type(node)
+
+      g
+      |> index_by_type(type, id)
+      |> maybe_index_tag(node, id)
+      |> maybe_index_subgoal(node, id)
+    end)
   end
 end
