@@ -288,9 +288,9 @@ defmodule Mnemosyne.Session do
     {:next_state, :ready, %{data | changeset: changeset, extraction_task: nil}}
   end
 
-  def extracting(:info, {ref, {:error, _reason}}, %{extraction_task: ref} = data) do
+  def extracting(:info, {ref, {:error, reason}}, %{extraction_task: ref} = data) do
     Process.demonitor(ref, [:flush])
-    Logger.error("extraction failed for session #{data.id}")
+    Logger.error("extraction failed for session #{data.id}: #{inspect(reason)}")
     emit_transition(data, :extracting, :failed)
     {:next_state, :failed, %{data | extraction_task: nil}}
   end

@@ -5,7 +5,12 @@ defmodule MnemosyneTest do
 
   alias Mnemosyne.Embedding
   alias Mnemosyne.Errors.Framework.PipelineError
+  alias Mnemosyne.Graph.Changeset
+  alias Mnemosyne.Graph.Node.Semantic
+  alias Mnemosyne.GraphBackends.InMemory
+  alias Mnemosyne.GraphBackends.Persistence.DETS
   alias Mnemosyne.LLM
+  alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
 
   @moduletag :tmp_dir
 
@@ -22,17 +27,35 @@ defmodule MnemosyneTest do
   end
 
   defp stub_extraction_success do
-    stub(Mnemosyne.MockLLM, :chat, fn messages, _opts ->
+    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+      {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
       system_content =
         messages
         |> Enum.find(%{content: ""}, &(&1.role == :system))
         |> Map.get(:content, "")
 
       content =
-        if String.contains?(system_content, "actionable instructions") do
-          "WHEN: condition\nDO: action\nEXPECT: outcome"
-        else
-          "0.5"
+        cond do
+          String.contains?(system_content, "factual knowledge") ->
+            %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
+
+          String.contains?(system_content, "actionable instructions") ->
+            %{
+              instructions: [
+                %{
+                  intent: "goal",
+                  condition: "condition",
+                  instruction: "action",
+                  expected_outcome: "outcome"
+                }
+              ]
+            }
+
+          true ->
+            %{}
         end
 
       {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
@@ -75,10 +98,10 @@ defmodule MnemosyneTest do
 
   defp start_supervisor(tmp_dir) do
     dets_path = Path.join(tmp_dir, "mnemosyne_test.dets")
-    persistence = {Mnemosyne.GraphBackends.Persistence.DETS, path: dets_path}
+    persistence = {DETS, path: dets_path}
 
     opts = [
-      backend: {Mnemosyne.GraphBackends.InMemory, persistence: persistence},
+      backend: {InMemory, persistence: persistence},
       config: build_config(),
       llm: Mnemosyne.MockLLM,
       embedding: Mnemosyne.MockEmbedding
@@ -125,47 +148,77 @@ defmodule MnemosyneTest do
       stub_recall_success()
       start_supervisor(tmp_dir)
 
-      node = %Mnemosyne.Graph.Node.Semantic{
+      node = %Semantic{
         id: "s1",
         proposition: "Elixir is functional",
         confidence: 0.9
       }
 
-      changeset = Mnemosyne.Graph.Changeset.add_node(Mnemosyne.Graph.Changeset.new(), node)
+      changeset = Changeset.add_node(Changeset.new(), node)
       :ok = Mnemosyne.apply_changeset(changeset)
 
-      assert {:ok, %Mnemosyne.Pipeline.Reasoning.ReasonedMemory{}} =
+      assert {:ok, %ReasonedMemory{}} =
                Mnemosyne.recall("what is elixir?")
     end
   end
 
   describe "close_and_commit retries" do
     test "retries on transient failure then succeeds", %{tmp_dir: tmp_dir} do
-      call_count = :counters.new(1, [:atomics])
+      chat_count = :counters.new(1, [:atomics])
+      structured_count = :counters.new(1, [:atomics])
 
       stub(Mnemosyne.MockLLM, :chat, fn messages, _opts ->
-        count = :counters.get(call_count, 1)
-        :counters.add(call_count, 1, 1)
+        count = :counters.get(chat_count, 1)
+        :counters.add(chat_count, 1, 1)
 
         system_content =
           messages
           |> Enum.find(%{content: ""}, &(&1.role == :system))
           |> Map.get(:content, "")
 
-        is_extraction =
-          String.contains?(system_content, "actionable instructions") or
-            String.contains?(system_content, "semantic knowledge") or
-            String.contains?(system_content, "return")
+        if String.contains?(system_content, "return") and count < 2 do
+          {:error, :transient_failure}
+        else
+          {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+        end
+      end)
 
-        cond do
-          is_extraction and count < 6 ->
-            {:error, :transient_failure}
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        count = :counters.get(structured_count, 1)
+        :counters.add(structured_count, 1, 1)
 
-          String.contains?(system_content, "actionable instructions") ->
-            {:ok, %LLM.Response{content: "WHEN: c\nDO: a\nEXPECT: o", model: "test", usage: %{}}}
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
 
-          true ->
-            {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+        if count < 4 do
+          {:error, :transient_failure}
+        else
+          cond do
+            String.contains?(system_content, "factual knowledge") ->
+              {:ok,
+               %LLM.Response{
+                 content: %{facts: [%{proposition: "a fact", concepts: ["c1", "c2"]}]},
+                 model: "test",
+                 usage: %{}
+               }}
+
+            String.contains?(system_content, "actionable instructions") ->
+              {:ok,
+               %LLM.Response{
+                 content: %{
+                   instructions: [
+                     %{intent: "goal", condition: "c", instruction: "a", expected_outcome: "o"}
+                   ]
+                 },
+                 model: "test",
+                 usage: %{}
+               }}
+
+            true ->
+              {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
+          end
         end
       end)
 
@@ -196,6 +249,10 @@ defmodule MnemosyneTest do
         {:error, :permanent_failure}
       end)
 
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:error, :permanent_failure}
+      end)
+
       stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
         vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
         {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
@@ -211,13 +268,13 @@ defmodule MnemosyneTest do
       stub_llm_for_episode()
       start_supervisor(tmp_dir)
 
-      node = %Mnemosyne.Graph.Node.Semantic{
+      node = %Semantic{
         id: "ctx-1",
         proposition: "Elixir uses pattern matching",
         confidence: 0.9
       }
 
-      changeset = Mnemosyne.Graph.Changeset.add_node(Mnemosyne.Graph.Changeset.new(), node)
+      changeset = Changeset.add_node(Changeset.new(), node)
       :ok = Mnemosyne.apply_changeset(changeset)
 
       {:ok, session_id} = Mnemosyne.start_session("learn elixir")
@@ -239,7 +296,7 @@ defmodule MnemosyneTest do
         {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
       end)
 
-      assert {:ok, %Mnemosyne.Pipeline.Reasoning.ReasonedMemory{}} =
+      assert {:ok, %ReasonedMemory{}} =
                Mnemosyne.recall_in_context(session_id, "what is pattern matching?")
 
       [{:query, augmented_query}] = :ets.lookup(queries_seen, :query)
@@ -265,6 +322,11 @@ defmodule MnemosyneTest do
         {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
       end)
 
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        Process.sleep(:timer.seconds(30))
+        {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
+      end)
+
       assert {:error, %PipelineError{reason: :extraction_timeout}} =
                Mnemosyne.close_and_commit(session_id,
                  max_retries: 0,
@@ -278,13 +340,13 @@ defmodule MnemosyneTest do
     test "apply_changeset adds nodes to graph", %{tmp_dir: tmp_dir} do
       start_supervisor(tmp_dir)
 
-      node = %Mnemosyne.Graph.Node.Semantic{
+      node = %Semantic{
         id: "mgmt-1",
         proposition: "Test fact",
         confidence: 0.9
       }
 
-      changeset = Mnemosyne.Graph.Changeset.add_node(Mnemosyne.Graph.Changeset.new(), node)
+      changeset = Changeset.add_node(Changeset.new(), node)
       assert :ok = Mnemosyne.apply_changeset(changeset)
 
       graph = Mnemosyne.get_graph()
@@ -294,13 +356,13 @@ defmodule MnemosyneTest do
     test "delete_nodes removes nodes from graph", %{tmp_dir: tmp_dir} do
       start_supervisor(tmp_dir)
 
-      node = %Mnemosyne.Graph.Node.Semantic{
+      node = %Semantic{
         id: "del-1",
         proposition: "To delete",
         confidence: 0.9
       }
 
-      changeset = Mnemosyne.Graph.Changeset.add_node(Mnemosyne.Graph.Changeset.new(), node)
+      changeset = Changeset.add_node(Changeset.new(), node)
       :ok = Mnemosyne.apply_changeset(changeset)
 
       assert :ok = Mnemosyne.delete_nodes(["del-1"])

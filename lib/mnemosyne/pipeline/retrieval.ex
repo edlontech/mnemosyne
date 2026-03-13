@@ -105,8 +105,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
 
   defp types_for_mode(:episodic), do: [:episodic, :subgoal]
   defp types_for_mode(:semantic), do: [:semantic, :tag]
-  defp types_for_mode(:procedural), do: [:procedural, :subgoal]
-  defp types_for_mode(:mixed), do: [:episodic, :semantic, :procedural, :subgoal, :tag]
+  defp types_for_mode(:procedural), do: [:procedural, :intent]
+  defp types_for_mode(:mixed), do: [:episodic, :semantic, :procedural, :subgoal, :tag, :intent]
 
   defp hop_0(backend, query_vector, tag_vectors, target_types, value_fns) do
     {mod, bs} = backend

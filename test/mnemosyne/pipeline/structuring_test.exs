@@ -64,10 +64,6 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
   end
 
   defp stub_extraction_llm do
-    semantic_response = "Adding indexes improves query speed\nThe users table was the bottleneck"
-    procedural_response = "WHEN: Query exceeds 1s\nDO: Add an index\nEXPECT: Sub-100ms response"
-    return_response = "0.85"
-
     Mnemosyne.MockLLM
     |> stub(:chat, fn messages, _opts ->
       system_content =
@@ -75,12 +71,48 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         |> Enum.find(%{content: ""}, &(&1.role == :system))
         |> Map.get(:content)
 
+      content = if system_content =~ "return value", do: "0.85", else: "default"
+
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    end)
+
+    Mnemosyne.MockLLM
+    |> stub(:chat_structured, fn messages, _schema, _opts ->
+      system_content =
+        messages
+        |> Enum.find(%{content: ""}, &(&1.role == :system))
+        |> Map.get(:content)
+
       content =
         cond do
-          system_content =~ "factual knowledge" -> semantic_response
-          system_content =~ "actionable instructions" -> procedural_response
-          system_content =~ "return value" -> return_response
-          true -> "default"
+          system_content =~ "factual knowledge" ->
+            %{
+              facts: [
+                %{
+                  proposition: "Adding indexes improves query speed",
+                  concepts: ["indexes", "query speed"]
+                },
+                %{
+                  proposition: "The users table was the bottleneck",
+                  concepts: ["users table", "bottleneck"]
+                }
+              ]
+            }
+
+          system_content =~ "actionable instructions" ->
+            %{
+              instructions: [
+                %{
+                  intent: "Optimize slow database queries",
+                  condition: "Query exceeds 1s",
+                  instruction: "Add an index",
+                  expected_outcome: "Sub-100ms response"
+                }
+              ]
+            }
+
+          true ->
+            %{}
         end
 
       {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
@@ -110,6 +142,10 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       assert :episodic in types
       assert :source in types
       assert :subgoal in types
+      assert :semantic in types
+      assert :tag in types
+      assert :intent in types
+      assert :procedural in types
     end
 
     test "creates episodic nodes for each step" do
@@ -148,7 +184,13 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       episode = build_closed_episode()
 
       Mnemosyne.MockLLM
-      |> stub(:chat, fn messages, opts ->
+      |> stub(:chat, fn _messages, opts ->
+        assert Keyword.get(opts, :model) == "test:model"
+        {:ok, %LLM.Response{content: "0.85", model: "mock:test", usage: %{}}}
+      end)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn messages, _schema, opts ->
         assert Keyword.get(opts, :model) == "test:model"
 
         system_content =
@@ -159,16 +201,33 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         content =
           cond do
             system_content =~ "factual knowledge" ->
-              "Adding indexes improves query speed\nThe users table was the bottleneck"
+              %{
+                facts: [
+                  %{
+                    proposition: "Adding indexes improves query speed",
+                    concepts: ["indexes", "query speed"]
+                  },
+                  %{
+                    proposition: "The users table was the bottleneck",
+                    concepts: ["users table", "bottleneck"]
+                  }
+                ]
+              }
 
             system_content =~ "actionable instructions" ->
-              "WHEN: Query exceeds 1s\nDO: Add an index\nEXPECT: Sub-100ms response"
-
-            system_content =~ "return value" ->
-              "0.85"
+              %{
+                instructions: [
+                  %{
+                    intent: "Optimize slow database queries",
+                    condition: "Query exceeds 1s",
+                    instruction: "Add an index",
+                    expected_outcome: "Sub-100ms response"
+                  }
+                ]
+              }
 
             true ->
-              "default"
+              %{}
           end
 
         {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
@@ -184,11 +243,66 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       assert [_ | _] = cs.links
     end
 
+    test "creates tag nodes as concept indices linked to semantic nodes" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      tag_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Tag{}, &1))
+      semantic_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+
+      assert tag_nodes != []
+      assert semantic_nodes != []
+
+      semantic_ids = MapSet.new(semantic_nodes, & &1.id)
+
+      Enum.each(tag_nodes, fn tag ->
+        assert tag.embedding != nil
+        tag_links = Enum.filter(cs.links, fn {from, _to} -> from == tag.id end)
+        assert tag_links != []
+
+        Enum.each(tag_links, fn {_from, to} ->
+          assert MapSet.member?(semantic_ids, to)
+        end)
+      end)
+    end
+
+    test "creates intent nodes linked to procedural nodes" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      intent_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Intent{}, &1))
+
+      procedural_nodes =
+        Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Procedural{}, &1))
+
+      assert intent_nodes != []
+      assert procedural_nodes != []
+
+      procedural_ids = MapSet.new(procedural_nodes, & &1.id)
+
+      Enum.each(intent_nodes, fn intent ->
+        assert intent.embedding != nil
+        intent_links = Enum.filter(cs.links, fn {from, _to} -> from == intent.id end)
+        assert intent_links != []
+
+        Enum.each(intent_links, fn {_from, to} ->
+          assert MapSet.member?(procedural_ids, to)
+        end)
+      end)
+    end
+
     test "propagates LLM errors during extraction" do
       episode = build_closed_episode()
 
       Mnemosyne.MockLLM
       |> stub(:chat, fn _messages, _opts -> {:error, :extraction_failed} end)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts -> {:error, :extraction_failed} end)
 
       stub_default_embedding()
 
@@ -203,5 +317,6 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
   defp struct_type(%Mnemosyne.Graph.Node.Source{}), do: :source
   defp struct_type(%Mnemosyne.Graph.Node.Subgoal{}), do: :subgoal
   defp struct_type(%Mnemosyne.Graph.Node.Tag{}), do: :tag
+  defp struct_type(%Mnemosyne.Graph.Node.Intent{}), do: :intent
   defp struct_type(_), do: :unknown
 end

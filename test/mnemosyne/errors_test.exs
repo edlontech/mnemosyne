@@ -2,34 +2,35 @@ defmodule Mnemosyne.ErrorsTest do
   use ExUnit.Case, async: true
 
   alias Mnemosyne.Errors
+  alias Mnemosyne.Errors.Unknown.Unknown
 
   describe "Splode error creation" do
     test "creates an unknown error with a string message" do
-      error = Errors.Unknown.Unknown.exception(error: "something went wrong")
+      error = Unknown.exception(error: "something went wrong")
 
-      assert %Errors.Unknown.Unknown{} = error
+      assert %Unknown{} = error
       assert Exception.message(error) == "something went wrong"
     end
 
     test "creates an unknown error with a non-string value" do
-      error = Errors.Unknown.Unknown.exception(error: {:unexpected, 42})
+      error = Unknown.exception(error: {:unexpected, 42})
 
-      assert %Errors.Unknown.Unknown{} = error
+      assert %Unknown{} = error
       assert Exception.message(error) == inspect({:unexpected, 42})
     end
   end
 
   describe "to_class/1" do
     test "aggregates a single error into its error class" do
-      error = Errors.Unknown.Unknown.exception(error: "boom")
+      error = Unknown.exception(error: "boom")
       class = Errors.to_class(error)
 
       assert %{class: :unknown, errors: _} = class
     end
 
     test "aggregates multiple errors" do
-      e1 = Errors.Unknown.Unknown.exception(error: "first")
-      e2 = Errors.Unknown.Unknown.exception(error: "second")
+      e1 = Unknown.exception(error: "first")
+      e2 = Unknown.exception(error: "second")
       class = Errors.to_class([e1, e2])
 
       assert %{class: :unknown, errors: errors} = class
@@ -39,7 +40,7 @@ defmodule Mnemosyne.ErrorsTest do
 
   describe "splode_error?/1" do
     test "returns true for a Splode error" do
-      error = Errors.Unknown.Unknown.exception(error: "test")
+      error = Unknown.exception(error: "test")
       assert Errors.splode_error?(error)
     end
 
@@ -55,13 +56,13 @@ defmodule Mnemosyne.ErrorsTest do
   describe "unknown error handling" do
     test "to_error wraps a plain string into the unknown error" do
       error = Errors.to_error("raw failure")
-      assert %Errors.Unknown.Unknown{} = error
+      assert %Unknown{} = error
       assert Exception.message(error) == "raw failure"
     end
 
     test "to_error wraps an arbitrary term" do
       error = Errors.to_error({:db, :timeout})
-      assert %Errors.Unknown.Unknown{} = error
+      assert %Unknown{} = error
       assert Exception.message(error) =~ "timeout"
     end
   end

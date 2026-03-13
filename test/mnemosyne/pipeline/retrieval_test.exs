@@ -6,6 +6,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
   alias Mnemosyne.Embedding
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Node.Episodic
+  alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Node.Procedural
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Source
@@ -30,7 +31,8 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     procedural: ValueFunctions.ProceduralEqual,
     subgoal: ValueFunctions.SubgoalMatch,
     tag: ValueFunctions.TagExact,
-    source: ValueFunctions.SourceLinked
+    source: ValueFunctions.SourceLinked,
+    intent: ValueFunctions.IntentRelevance
   }
 
   setup :set_mimic_from_context
@@ -89,6 +91,13 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       label: "deployment",
       embedding: @test_vector
     })
+    |> Graph.put_node(%Intent{
+      id: "int_1",
+      description: "Deploy application safely",
+      embedding: @test_vector,
+      links: MapSet.new(["proc_1"])
+    })
+    |> Graph.link("tag_1", "sem_1")
     |> Graph.link("ep_1", "sg_1")
     |> Graph.link("ep_1", "src_1")
     |> Graph.link("ep_2", "sg_1")
@@ -300,6 +309,40 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
 
       opts = retrieval_opts(graph, config: config)
       assert {:ok, %Retrieval.Result{}} = Retrieval.retrieve("test", opts)
+    end
+
+    test "procedural mode discovers prescriptions through intent nodes" do
+      graph = build_test_graph()
+      stub_retrieval_llm("procedural", "deploy safely")
+      stub_default_embedding()
+
+      {:ok, result} =
+        Retrieval.retrieve("How do I deploy safely?", retrieval_opts(graph, max_hops: 2))
+
+      all_ids =
+        result.candidates
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.map(fn {node, _score} -> node.id end)
+
+      assert "int_1" in all_ids or "proc_1" in all_ids
+    end
+
+    test "semantic mode discovers propositions through concept tags" do
+      graph = build_test_graph()
+      stub_retrieval_llm("semantic", "deployment")
+      stub_default_embedding()
+
+      {:ok, result} =
+        Retrieval.retrieve("What about deployment?", retrieval_opts(graph, max_hops: 2))
+
+      all_ids =
+        result.candidates
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.map(fn {node, _score} -> node.id end)
+
+      assert "tag_1" in all_ids or "sem_1" in all_ids
     end
 
     test "candidates include scores as floats" do

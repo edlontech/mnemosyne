@@ -53,12 +53,42 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
         |> Enum.find(%{content: ""}, &(&1.role == :system))
         |> Map.get(:content)
 
+      content = if system_content =~ "return value", do: "0.85", else: "0.8"
+
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    end)
+
+    Mnemosyne.MockLLM
+    |> stub(:chat_structured, fn messages, _schema, _opts ->
+      system_content =
+        messages
+        |> Enum.find(%{content: ""}, &(&1.role == :system))
+        |> Map.get(:content)
+
       content =
         cond do
-          system_content =~ "factual knowledge" -> "fact one\nfact two"
-          system_content =~ "actionable instructions" -> "WHEN: always\nDO: thing\nEXPECT: result"
-          system_content =~ "return value" -> "0.85"
-          true -> "0.8"
+          system_content =~ "factual knowledge" ->
+            %{
+              facts: [
+                %{proposition: "fact one", concepts: ["c1", "c2"]},
+                %{proposition: "fact two", concepts: ["c3"]}
+              ]
+            }
+
+          system_content =~ "actionable instructions" ->
+            %{
+              instructions: [
+                %{
+                  intent: "goal",
+                  condition: "always",
+                  instruction: "thing",
+                  expected_outcome: "result"
+                }
+              ]
+            }
+
+          true ->
+            %{}
         end
 
       {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}

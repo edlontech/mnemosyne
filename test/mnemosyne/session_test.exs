@@ -85,17 +85,35 @@ defmodule Mnemosyne.SessionTest do
   end
 
   defp stub_extraction_success do
-    stub(Mnemosyne.MockLLM, :chat, fn messages, _opts ->
+    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+      {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
       system_content =
         messages
         |> Enum.find(%{content: ""}, &(&1.role == :system))
         |> Map.get(:content, "")
 
       content =
-        if String.contains?(system_content, "actionable instructions") do
-          "WHEN: condition\nDO: action\nEXPECT: outcome"
-        else
-          "0.5"
+        cond do
+          String.contains?(system_content, "factual knowledge") ->
+            %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
+
+          String.contains?(system_content, "actionable instructions") ->
+            %{
+              instructions: [
+                %{
+                  intent: "goal",
+                  condition: "condition",
+                  instruction: "action",
+                  expected_outcome: "outcome"
+                }
+              ]
+            }
+
+          true ->
+            %{}
         end
 
       {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
@@ -205,6 +223,10 @@ defmodule Mnemosyne.SessionTest do
         {:error, :extraction_failed}
       end)
 
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:error, :extraction_failed}
+      end)
+
       assert :ok = Session.close(pid)
 
       Process.sleep(200)
@@ -222,6 +244,11 @@ defmodule Mnemosyne.SessionTest do
       stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
         Process.sleep(500)
         {:ok, %LLM.Response{content: "test", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        Process.sleep(500)
+        {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
       end)
 
       :ok = Session.close(pid)
@@ -259,6 +286,10 @@ defmodule Mnemosyne.SessionTest do
       :ok = Session.append(pid, "saw something", "did something")
 
       stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        {:error, :extraction_failed}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
         {:error, :extraction_failed}
       end)
 
@@ -359,6 +390,11 @@ defmodule Mnemosyne.SessionTest do
       stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
         Process.sleep(500)
         {:ok, %LLM.Response{content: "test", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        Process.sleep(500)
+        {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
       end)
 
       :ok = Session.close(pid)

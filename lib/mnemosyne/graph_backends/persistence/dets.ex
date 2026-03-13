@@ -11,6 +11,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
 
   @default_path "mnemosyne.dets"
 
+  @doc "Opens the DETS file at the configured path, returning a handle map."
   @spec init(keyword()) :: {:ok, map()} | {:error, term()}
   def init(opts) do
     path = opts |> Keyword.get(:path, @default_path) |> String.to_charlist()
@@ -21,6 +22,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
     end
   end
 
+  @doc "Reads all nodes from DETS and rebuilds a `Graph` struct."
   @spec load(map()) :: {:ok, Graph.t()} | {:error, term()}
   def load(%{ref: ref}) do
     graph =
@@ -35,6 +37,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
     e -> {:error, e}
   end
 
+  @doc "Persists changeset additions and links to DETS."
   @spec save(Mnemosyne.Graph.Changeset.t(), map()) :: :ok | {:error, term()}
   def save(changeset, %{ref: ref}) do
     with :ok <- insert_nodes(changeset.additions, ref),
@@ -43,6 +46,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
     end
   end
 
+  @doc "Removes nodes by ID from DETS."
   @spec delete([String.t()], map()) :: :ok | {:error, term()}
   def delete(node_ids, %{ref: ref}) do
     with :ok <- do_delete_nodes(node_ids, ref) do

@@ -105,33 +105,54 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
 
       messages = GetSemantic.build_messages(%{trajectory: trajectory, goal: "Optimize DB"})
 
-      assert [%{role: :system}, %{role: :user, content: user}] = messages
+      assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
+      assert system =~ "factual knowledge"
+      assert system =~ "JSON"
       assert user =~ "Reward: 0.9"
       assert user =~ "Optimize DB"
     end
 
-    test "parse_response splits lines into facts" do
-      response = """
-      Adding an index improves query performance
-      The users table had a sequential scan bottleneck
-      """
+    test "schema returns a Zoi schema" do
+      schema = GetSemantic.schema()
+      assert is_function(schema) or is_map(schema) or is_tuple(schema)
+    end
+
+    test "parse_response extracts structured facts with concepts" do
+      response = %{
+        facts: [
+          %{
+            proposition: "Adding an index improves query performance",
+            concepts: ["index", "query performance", "database optimization"]
+          },
+          %{
+            proposition: "The users table had a sequential scan bottleneck",
+            concepts: ["users table", "sequential scan", "bottleneck"]
+          }
+        ]
+      }
 
       assert {:ok, facts} = GetSemantic.parse_response(response)
+      assert [first, second] = facts
 
-      assert [
-               "Adding an index improves query performance",
-               "The users table had a sequential scan bottleneck"
-             ] = facts
+      assert %{
+               proposition: "Adding an index improves query performance",
+               concepts: ["index", "query performance", "database optimization"]
+             } = first
+
+      assert %{
+               proposition: "The users table had a sequential scan bottleneck",
+               concepts: ["users table", "sequential scan", "bottleneck"]
+             } = second
     end
 
-    test "parse_response skips blank lines" do
-      assert {:ok, ["Fact one", "Fact two"]} =
-               GetSemantic.parse_response("Fact one\n\n\nFact two\n")
-    end
-
-    test "parse_response rejects empty response" do
+    test "parse_response rejects empty facts list" do
       assert {:error, %PromptError{reason: :no_facts_extracted}} =
-               GetSemantic.parse_response("   \n  \n  ")
+               GetSemantic.parse_response(%{facts: []})
+    end
+
+    test "parse_response rejects non-matching input" do
+      assert {:error, %PromptError{reason: :no_facts_extracted}} =
+               GetSemantic.parse_response(%{})
     end
   end
 
@@ -143,54 +164,62 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
 
       messages = GetProcedural.build_messages(%{trajectory: trajectory, goal: "Fix timeouts"})
 
-      assert [%{role: :system}, %{role: :user, content: user}] = messages
+      assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
+      assert system =~ "actionable instructions"
+      assert system =~ "JSON"
       assert user =~ "Fix timeouts"
       assert user =~ "Timeout error"
     end
 
-    test "parse_response extracts structured instructions" do
-      response = """
-      WHEN: Database queries exceed 5 seconds
-      DO: Add an index on the queried column
-      EXPECT: Query time drops below 100ms
+    test "schema returns a Zoi schema" do
+      schema = GetProcedural.schema()
+      assert is_function(schema) or is_map(schema) or is_tuple(schema)
+    end
 
-      WHEN: Connection pool is exhausted
-      DO: Increase pool size or add queuing
-      EXPECT: Requests stop timing out
-      """
+    test "parse_response extracts structured instructions with intents" do
+      response = %{
+        instructions: [
+          %{
+            intent: "Optimize database query performance",
+            condition: "Database queries exceed 5 seconds",
+            instruction: "Add an index on the queried column",
+            expected_outcome: "Query time drops below 100ms"
+          },
+          %{
+            intent: "Handle connection pool exhaustion",
+            condition: "Connection pool is exhausted",
+            instruction: "Increase pool size or add queuing",
+            expected_outcome: "Requests stop timing out"
+          }
+        ]
+      }
 
       assert {:ok, instructions} = GetProcedural.parse_response(response)
       assert [first, second] = instructions
 
       assert %{
+               intent: "Optimize database query performance",
                condition: "Database queries exceed 5 seconds",
                instruction: "Add an index on the queried column",
                expected_outcome: "Query time drops below 100ms"
              } = first
 
       assert %{
+               intent: "Handle connection pool exhaustion",
                condition: "Connection pool is exhausted",
                instruction: "Increase pool size or add queuing",
                expected_outcome: "Requests stop timing out"
              } = second
     end
 
-    test "parse_response skips malformed blocks" do
-      response = """
-      WHEN: Valid condition
-      DO: Valid instruction
-      EXPECT: Valid outcome
-
-      This is not a valid block at all
-      """
-
-      assert {:ok, [instruction]} = GetProcedural.parse_response(response)
-      assert instruction.condition == "Valid condition"
+    test "parse_response rejects empty instructions list" do
+      assert {:error, %PromptError{reason: :no_instructions_extracted}} =
+               GetProcedural.parse_response(%{instructions: []})
     end
 
-    test "parse_response rejects response with no valid instructions" do
+    test "parse_response rejects non-matching input" do
       assert {:error, %PromptError{reason: :no_instructions_extracted}} =
-               GetProcedural.parse_response("Just some random text")
+               GetProcedural.parse_response(%{})
     end
   end
 

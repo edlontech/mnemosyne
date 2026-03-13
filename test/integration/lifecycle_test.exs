@@ -55,7 +55,8 @@ defmodule Mnemosyne.Integration.LifecycleTest do
       Mnemosyne.Graph.Node.Procedural,
       Mnemosyne.Graph.Node.Subgoal,
       Mnemosyne.Graph.Node.Source,
-      Mnemosyne.Graph.Node.Tag
+      Mnemosyne.Graph.Node.Tag,
+      Mnemosyne.Graph.Node.Intent
     ]
 
     for type <- node_types do

@@ -2,11 +2,35 @@ defmodule Mnemosyne.Pipeline.Prompts.GetProcedural do
   @moduledoc """
   Prompt for extracting prescriptive knowledge (instructions for future)
   from a trajectory segment.
+
+  Returns structured output via `chat_structured/3` using a Zoi schema.
   """
 
   @behaviour Mnemosyne.Prompt
 
   alias Mnemosyne.Errors.Invalid.PromptError
+
+  @doc "Returns the Zoi schema for structured LLM output validation."
+  @spec schema :: Zoi.Types.Map.t()
+  def schema do
+    Zoi.map(
+      %{
+        instructions:
+          Zoi.list(
+            Zoi.map(
+              %{
+                intent: Zoi.string(),
+                condition: Zoi.string(),
+                instruction: Zoi.string(),
+                expected_outcome: Zoi.string()
+              },
+              coerce: true
+            )
+          )
+      },
+      coerce: true
+    )
+  end
 
   @impl true
   def build_messages(%{trajectory: trajectory, goal: goal}) do
@@ -25,11 +49,14 @@ defmodule Mnemosyne.Pipeline.Prompts.GetProcedural do
         Given a trajectory segment, extract prescriptive knowledge — conditional instructions
         the agent should follow in similar future situations.
 
-        Respond in the following format, one instruction per block, separated by blank lines:
+        For each instruction, also identify the high-level intent (user goal) that this
+        instruction addresses. Intents serve as routing indices for retrieval.
 
-        WHEN: <condition>
-        DO: <instruction>
-        EXPECT: <expected outcome>\
+        Return your response as a JSON object with an "instructions" array. Each instruction has:
+        - "intent": the high-level goal this addresses
+        - "condition": when to apply this instruction
+        - "instruction": what to do
+        - "expected_outcome": the expected result\
         """
       },
       %{
@@ -47,50 +74,19 @@ defmodule Mnemosyne.Pipeline.Prompts.GetProcedural do
   end
 
   @impl true
-  def parse_response(response) do
-    instructions =
-      response
-      |> String.split(~r/\n\s*\n/)
-      |> Enum.map(&parse_instruction_block/1)
-      |> Enum.reject(&is_nil/1)
-
-    case instructions do
-      [] ->
-        {:error,
-         PromptError.exception(prompt: :get_procedural, reason: :no_instructions_extracted)}
-
-      instructions ->
-        {:ok, instructions}
-    end
+  def parse_response(%{instructions: [_ | _] = instructions}) do
+    {:ok,
+     Enum.map(instructions, fn instr ->
+       %{
+         intent: instr[:intent],
+         condition: instr[:condition],
+         instruction: instr[:instruction],
+         expected_outcome: instr[:expected_outcome]
+       }
+     end)}
   end
 
-  defp parse_instruction_block(block) do
-    lines =
-      block
-      |> String.split("\n")
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-
-    with {:ok, condition} <- extract_field(lines, "WHEN:"),
-         {:ok, instruction} <- extract_field(lines, "DO:"),
-         {:ok, expected_outcome} <- extract_field(lines, "EXPECT:") do
-      %{condition: condition, instruction: instruction, expected_outcome: expected_outcome}
-    else
-      _ -> nil
-    end
-  end
-
-  defp extract_field(lines, prefix) do
-    lines
-    |> Enum.find_value(fn line ->
-      case String.split(line, prefix, parts: 2) do
-        [_, value] -> {:ok, String.trim(value)}
-        _ -> nil
-      end
-    end)
-    |> case do
-      {:ok, _} = result -> result
-      nil -> :error
-    end
+  def parse_response(_) do
+    {:error, PromptError.exception(prompt: :get_procedural, reason: :no_instructions_extracted)}
   end
 end

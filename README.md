@@ -28,7 +28,7 @@ Trajectory boundaries are detected automatically using embedding similarity (cos
 
 ### 2. The Knowledge Graph
 
-All extracted knowledge lives in a graph managed by a pluggable **GraphBackend**, with six node types:
+All extracted knowledge lives in a graph managed by a pluggable **GraphBackend**, with seven node types:
 
 | Node Type | Purpose |
 |-----------|---------|
@@ -37,7 +37,8 @@ All extracted knowledge lives in a graph managed by a pluggable **GraphBackend**
 | **Procedural** | Instructions with conditions and expected outcomes |
 | **Subgoal** | Decomposed objectives linking related knowledge |
 | **Source** | Provenance links back to original episode steps |
-| **Tag** | Categorical labels for organizing nodes |
+| **Intent** | Goal abstractions linking related procedural nodes |
+| **Tag** | Concept indices linking related semantic nodes |
 
 Nodes are linked bidirectionally and indexed by type, tag, and subgoal for efficient traversal. Mutations are batched through **changesets** that are applied atomically.
 

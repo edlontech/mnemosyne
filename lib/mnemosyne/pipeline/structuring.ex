@@ -14,10 +14,12 @@ defmodule Mnemosyne.Pipeline.Structuring do
   alias Mnemosyne.Errors.Invalid.EpisodeError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
+  alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Node.Procedural
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Source
   alias Mnemosyne.Graph.Node.Subgoal
+  alias Mnemosyne.Graph.Node.Tag
   alias Mnemosyne.Pipeline.Episode
   alias Mnemosyne.Pipeline.Prompts.GetProcedural, as: ProceduralPrompt
   alias Mnemosyne.Pipeline.Prompts.GetReturn
@@ -83,9 +85,9 @@ defmodule Mnemosyne.Pipeline.Structuring do
           reraise e, __STACKTRACE__
       end
 
-    with {:ok, semantic_cs} <- semantic_result,
-         {:ok, procedural_cs} <- procedural_result,
-         {:ok, return_value} <- return_result do
+    with {:ok, semantic_cs} <- tag_result(semantic_result, :semantic),
+         {:ok, procedural_cs} <- tag_result(procedural_result, :procedural),
+         {:ok, return_value} <- tag_result(return_result, :return) do
       base_cs = build_base_changeset(episode, trajectory, return_value)
 
       {:ok,
@@ -136,53 +138,89 @@ defmodule Mnemosyne.Pipeline.Structuring do
     messages = SemanticPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :get_semantic, llm_opts)),
+           llm.chat_structured(
+             messages,
+             SemanticPrompt.schema(),
+             Config.llm_opts(config, :get_semantic, llm_opts)
+           ),
          {:ok, facts} <- SemanticPrompt.parse_response(content),
-         {:ok, %Embedding.Response{vectors: embeddings}} <-
-           embedding.embed_batch(facts, Config.embedding_opts(config)) do
-      cs =
-        Enum.zip(facts, embeddings)
-        |> Enum.reduce(Changeset.new(), fn {fact, emb}, acc ->
-          node = %Semantic{
-            id: generate_id("sem"),
-            proposition: fact,
-            confidence: 1.0,
-            embedding: emb
-          }
+         {:ok, %Embedding.Response{vectors: prop_embeddings}} <-
+           embedding.embed_batch(Enum.map(facts, & &1.proposition), Config.embedding_opts(config)) do
+      all_concepts = facts |> Enum.flat_map(& &1.concepts) |> Enum.uniq()
+      concept_map = build_concept_map(all_concepts, embedding, config)
 
-          Changeset.add_node(acc, node)
-        end)
+      cs =
+        facts
+        |> Enum.zip(prop_embeddings)
+        |> Enum.reduce(Changeset.new(), &add_semantic_node(&1, &2, concept_map))
+
+      cs = Enum.reduce(Map.values(concept_map), cs, &Changeset.add_node(&2, &1))
 
       {:ok, cs}
     end
+  end
+
+  defp add_semantic_node({fact, emb}, cs, concept_map) do
+    sem_node = %Semantic{
+      id: generate_id("sem"),
+      proposition: fact.proposition,
+      confidence: 1.0,
+      embedding: emb
+    }
+
+    cs = Changeset.add_node(cs, sem_node)
+
+    Enum.reduce(fact.concepts, cs, fn concept_label, acc ->
+      case Map.fetch(concept_map, concept_label) do
+        {:ok, tag} -> Changeset.add_link(acc, tag.id, sem_node.id)
+        :error -> acc
+      end
+    end)
   end
 
   defp extract_procedural(trajectory, goal, llm, embedding, llm_opts, config) do
     messages = ProceduralPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :get_procedural, llm_opts)),
+           llm.chat_structured(
+             messages,
+             ProceduralPrompt.schema(),
+             Config.llm_opts(config, :get_procedural, llm_opts)
+           ),
          {:ok, instructions} <- ProceduralPrompt.parse_response(content),
-         {:ok, %Embedding.Response{vectors: embeddings}} <-
+         {:ok, %Embedding.Response{vectors: proc_embeddings}} <-
            embedding.embed_batch(
              Enum.map(instructions, & &1.instruction),
              Config.embedding_opts(config)
            ) do
-      cs =
-        Enum.zip(instructions, embeddings)
-        |> Enum.reduce(Changeset.new(), fn {instr, emb}, acc ->
-          node = %Procedural{
-            id: generate_id("proc"),
-            instruction: instr.instruction,
-            condition: instr.condition,
-            expected_outcome: instr.expected_outcome,
-            embedding: emb
-          }
+      all_intents = instructions |> Enum.map(& &1.intent) |> Enum.uniq()
+      intent_map = build_intent_map(all_intents, embedding, config)
 
-          Changeset.add_node(acc, node)
-        end)
+      cs =
+        instructions
+        |> Enum.zip(proc_embeddings)
+        |> Enum.reduce(Changeset.new(), &add_procedural_node(&1, &2, intent_map))
+
+      cs = Enum.reduce(Map.values(intent_map), cs, &Changeset.add_node(&2, &1))
 
       {:ok, cs}
+    end
+  end
+
+  defp add_procedural_node({instr, emb}, cs, intent_map) do
+    proc_node = %Procedural{
+      id: generate_id("proc"),
+      instruction: instr.instruction,
+      condition: instr.condition,
+      expected_outcome: instr.expected_outcome,
+      embedding: emb
+    }
+
+    cs = Changeset.add_node(cs, proc_node)
+
+    case Map.fetch(intent_map, instr.intent) do
+      {:ok, intent} -> Changeset.add_link(cs, intent.id, proc_node.id)
+      :error -> cs
     end
   end
 
@@ -203,6 +241,45 @@ defmodule Mnemosyne.Pipeline.Structuring do
     |> case do
       {:ok, css} -> {:ok, Enum.reverse(css)}
       err -> err
+    end
+  end
+
+  defp tag_result({:ok, _} = ok, _step), do: ok
+
+  defp tag_result({:error, reason} = err, step) do
+    Logger.error("#{step} extraction failed: #{inspect(reason)}")
+    err
+  end
+
+  defp build_concept_map([], _embedding, _config), do: %{}
+
+  defp build_concept_map(concepts, embedding, config) do
+    case embedding.embed_batch(concepts, Config.embedding_opts(config)) do
+      {:ok, %Embedding.Response{vectors: embeddings}} ->
+        Enum.zip(concepts, embeddings)
+        |> Map.new(fn {label, emb} ->
+          id = generate_id("tag")
+          {label, %Tag{id: id, label: label, embedding: emb}}
+        end)
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp build_intent_map([], _embedding, _config), do: %{}
+
+  defp build_intent_map(intents, embedding, config) do
+    case embedding.embed_batch(intents, Config.embedding_opts(config)) do
+      {:ok, %Embedding.Response{vectors: embeddings}} ->
+        Enum.zip(intents, embeddings)
+        |> Map.new(fn {desc, emb} ->
+          id = generate_id("int")
+          {desc, %Intent{id: id, description: desc, embedding: emb}}
+        end)
+
+      _ ->
+        %{}
     end
   end
 
