@@ -11,7 +11,6 @@ defmodule Mnemosyne.Pipeline.Retrieval do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
-  alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.Pipeline.Prompts.GetMode
@@ -42,7 +41,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   Options:
     - `:llm` (required) - LLM module implementing the LLM behaviour
     - `:embedding` (required) - Embedding module implementing the Embedding behaviour
-    - `:graph` (required) - The knowledge graph to search
+    - `:backend` (required) - Tuple of `{module, state}` implementing GraphBackend
     - `:value_functions` (required) - Map of node type atoms to ValueFunction modules
     - `:llm_opts` - Additional LLM options (default: [])
     - `:config` - Config struct for per-step model overrides
@@ -53,7 +52,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     Mnemosyne.Telemetry.span([:retrieval, :retrieve], %{}, fn ->
       llm = Keyword.fetch!(opts, :llm)
       embedding = Keyword.fetch!(opts, :embedding)
-      graph = Keyword.fetch!(opts, :graph)
+      backend = Keyword.fetch!(opts, :backend)
       value_fns = Keyword.fetch!(opts, :value_functions)
       llm_opts = Keyword.get(opts, :llm_opts, [])
       config = Keyword.get(opts, :config)
@@ -70,9 +69,9 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         target_types = types_for_mode(mode)
 
         candidates =
-          hop_0(graph, query_vector, tag_vectors, target_types, value_fns)
-          |> multi_hop(graph, query_vector, value_fns, max_hops)
-          |> maybe_expand_provenance(graph, mode)
+          hop_0(backend, query_vector, tag_vectors, target_types, value_fns)
+          |> multi_hop(backend, query_vector, value_fns, max_hops)
+          |> maybe_expand_provenance(backend, mode)
           |> partition_by_type()
 
         total_candidates =
@@ -109,62 +108,28 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   defp types_for_mode(:procedural), do: [:procedural, :subgoal]
   defp types_for_mode(:mixed), do: [:episodic, :semantic, :procedural, :subgoal, :tag]
 
-  defp hop_0(graph, query_vector, tag_vectors, target_types, value_fns) do
-    target_types
-    |> Enum.flat_map(&score_type(graph, &1, query_vector, tag_vectors, value_fns))
-    |> Enum.uniq_by(fn {node, _score} -> NodeProtocol.id(node) end)
-  end
+  defp hop_0(backend, query_vector, tag_vectors, target_types, value_fns) do
+    {mod, bs} = backend
 
-  defp score_type(graph, type, query_vector, tag_vectors, value_fns) do
-    nodes = Graph.nodes_by_type(graph, type)
-    value_fn = Map.get(value_fns, type)
-
-    candidates = Enum.map(nodes, &score_node(&1, query_vector, tag_vectors, value_fn))
-
-    threshold = if value_fn, do: value_fn.threshold(), else: 0.0
-    k = if value_fn, do: value_fn.top_k(), else: 20
+    {:ok, candidates, _bs} =
+      mod.find_candidates(target_types, query_vector, tag_vectors, value_fns, [], bs)
 
     candidates
-    |> Enum.filter(fn {_node, score} -> score >= threshold end)
-    |> Enum.sort_by(&elem(&1, 1), :desc)
-    |> Enum.take(k)
   end
 
-  defp score_node(node, query_vector, tag_vectors, value_fn) do
-    emb = NodeProtocol.embedding(node)
-    relevance = compute_relevance(emb, query_vector, tag_vectors)
-    score = if value_fn, do: value_fn.score(relevance, node), else: relevance
-    {node, score}
-  end
+  defp multi_hop(candidates, _backend, _query_vector, _value_fns, 0), do: candidates
 
-  defp compute_relevance(nil, _query_vector, _tag_vectors), do: 0.0
-
-  defp compute_relevance(emb, query_vector, tag_vectors) do
-    query_sim = Similarity.cosine_similarity(query_vector, emb)
-
-    tag_sim =
-      tag_vectors
-      |> Enum.map(&Similarity.cosine_similarity(&1, emb))
-      |> Enum.max(fn -> 0.0 end)
-
-    max(query_sim, tag_sim) |> max(0.0)
-  end
-
-  defp multi_hop(candidates, _graph, _query_vector, _value_fns, 0), do: candidates
-
-  defp multi_hop(candidates, graph, query_vector, value_fns, hops_remaining) do
+  defp multi_hop(candidates, backend, query_vector, value_fns, hops_remaining) do
+    {mod, bs} = backend
     candidate_ids = MapSet.new(candidates, fn {node, _} -> NodeProtocol.id(node) end)
 
-    neighbors =
+    neighbor_ids =
       candidates
-      |> Enum.flat_map(fn {node, _score} ->
-        node
-        |> NodeProtocol.links()
-        |> Enum.reject(&MapSet.member?(candidate_ids, &1))
-        |> Enum.map(&Graph.get_node(graph, &1))
-        |> Enum.reject(&is_nil/1)
-      end)
-      |> Enum.uniq_by(&NodeProtocol.id/1)
+      |> Enum.flat_map(fn {node, _} -> NodeProtocol.links(node) |> MapSet.to_list() end)
+      |> Enum.reject(&MapSet.member?(candidate_ids, &1))
+      |> Enum.uniq()
+
+    {:ok, neighbors, _bs} = mod.get_linked_nodes(neighbor_ids, bs)
 
     scored_neighbors =
       Enum.map(neighbors, fn node ->
@@ -182,29 +147,42 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       |> Enum.sort_by(&elem(&1, 1), :desc)
       |> Enum.take(@max_candidates_per_hop)
 
-    multi_hop(merged, graph, query_vector, value_fns, hops_remaining - 1)
+    multi_hop(merged, backend, query_vector, value_fns, hops_remaining - 1)
   end
 
-  defp maybe_expand_provenance(candidates, graph, :episodic) do
+  defp maybe_expand_provenance(candidates, backend, :episodic) do
+    {mod, bs} = backend
     candidate_ids = MapSet.new(candidates, fn {node, _} -> NodeProtocol.id(node) end)
 
-    source_nodes =
+    episodic_link_ids =
       candidates
       |> Enum.filter(fn {node, _} -> NodeProtocol.node_type(node) == :episodic end)
-      |> Enum.flat_map(fn {node, score} ->
-        node
-        |> NodeProtocol.links()
-        |> Enum.map(&Graph.get_node(graph, &1))
-        |> Enum.reject(&is_nil/1)
-        |> Enum.filter(&(NodeProtocol.node_type(&1) == :source))
-        |> Enum.reject(&MapSet.member?(candidate_ids, NodeProtocol.id(&1)))
-        |> Enum.map(&{&1, score * @provenance_decay})
+      |> Enum.flat_map(fn {node, _score} -> NodeProtocol.links(node) |> MapSet.to_list() end)
+      |> Enum.reject(&MapSet.member?(candidate_ids, &1))
+      |> Enum.uniq()
+
+    {:ok, linked_nodes, _bs} = mod.get_linked_nodes(episodic_link_ids, bs)
+
+    source_nodes =
+      linked_nodes
+      |> Enum.filter(&(NodeProtocol.node_type(&1) == :source))
+      |> Enum.map(fn source ->
+        parent_score =
+          candidates
+          |> Enum.filter(fn {node, _} ->
+            NodeProtocol.node_type(node) == :episodic and
+              MapSet.member?(NodeProtocol.links(node), NodeProtocol.id(source))
+          end)
+          |> Enum.map(fn {_, score} -> score end)
+          |> Enum.max(fn -> 0.0 end)
+
+        {source, parent_score * @provenance_decay}
       end)
 
     candidates ++ source_nodes
   end
 
-  defp maybe_expand_provenance(candidates, _graph, _mode), do: candidates
+  defp maybe_expand_provenance(candidates, _backend, _mode), do: candidates
 
   defp partition_by_type(candidates) do
     Enum.group_by(

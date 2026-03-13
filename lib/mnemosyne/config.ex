@@ -34,6 +34,17 @@ defmodule Mnemosyne.Config do
                       description: "Default embedding model configuration for vector generation"
                     )
 
+  @backend_schema Zoi.object(
+                    %{
+                      module: Zoi.atom(description: "GraphBackend implementation module"),
+                      opts:
+                        Zoi.default(Zoi.map(), %{},
+                          description: "Options passed to backend init/1"
+                        )
+                    },
+                    description: "Graph backend configuration"
+                  )
+
   @override_schema Zoi.map(
                      Zoi.atom(),
                      Zoi.object(%{
@@ -53,13 +64,15 @@ defmodule Mnemosyne.Config do
   @config_schema Zoi.object(%{
                    llm: @llm_schema,
                    embedding: @embedding_schema,
-                   overrides: @override_schema
+                   overrides: @override_schema,
+                   backend: Zoi.optional(@backend_schema)
                  })
 
   defstruct(
     llm: @llm_schema,
     embedding: @embedding_schema,
-    overrides: @override_schema
+    overrides: @override_schema,
+    backend: Zoi.optional(@backend_schema)
   )
 
   @moduledoc """

@@ -6,10 +6,10 @@ defmodule Mnemosyne.SessionTest do
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
   alias Mnemosyne.Errors.Framework.SessionError
+  alias Mnemosyne.GraphBackends.Persistence.DETS, as: PersistenceDETS
   alias Mnemosyne.LLM
   alias Mnemosyne.MemoryStore
   alias Mnemosyne.Session
-  alias Mnemosyne.Storage.DETS
 
   @moduletag :tmp_dir
 
@@ -34,9 +34,11 @@ defmodule Mnemosyne.SessionTest do
     start_supervised!({Registry, keys: :unique, name: registry})
     start_supervised!({Task.Supervisor, name: task_sup})
 
+    persistence = {PersistenceDETS, path: dets_path}
+
     store_opts = [
       name: store_name,
-      storage: {DETS, path: dets_path},
+      backend: {Mnemosyne.GraphBackends.InMemory, persistence: persistence},
       config: build_config(),
       llm: Mnemosyne.MockLLM,
       embedding: Mnemosyne.MockEmbedding,

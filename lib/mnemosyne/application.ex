@@ -10,7 +10,7 @@ defmodule Mnemosyne.Application do
     config = Application.get_all_env(:mnemosyne)
 
     children =
-      if config[:storage] do
+      if config[:backend] do
         [{Mnemosyne.Supervisor, config}]
       else
         []

@@ -12,7 +12,6 @@ defmodule Mnemosyne.MemoryStoreTest do
   alias Mnemosyne.LLM
   alias Mnemosyne.MemoryStore
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
-  alias Mnemosyne.Storage.DETS
 
   @moduletag :tmp_dir
 
@@ -32,6 +31,7 @@ defmodule Mnemosyne.MemoryStoreTest do
 
   defp start_store(tmp_dir, opts \\ []) do
     dets_path = Path.join(tmp_dir, "test_store.dets")
+    persistence = {Mnemosyne.GraphBackends.Persistence.DETS, path: dets_path}
     task_sup = :"task_sup_#{System.unique_integer([:positive])}"
     name = Keyword.get_lazy(opts, :name, &unique_name/0)
     start_supervised!({Task.Supervisor, name: task_sup})
@@ -40,7 +40,7 @@ defmodule Mnemosyne.MemoryStoreTest do
       Keyword.merge(
         [
           name: name,
-          storage: {DETS, path: dets_path},
+          backend: {Mnemosyne.GraphBackends.InMemory, persistence: persistence},
           config: build_config(),
           llm: Mnemosyne.MockLLM,
           embedding: Mnemosyne.MockEmbedding,
@@ -54,10 +54,10 @@ defmodule Mnemosyne.MemoryStoreTest do
 
   defp pre_populate_dets(tmp_dir) do
     dets_path = Path.join(tmp_dir, "test_store.dets")
-    {:ok, state} = DETS.init(path: dets_path)
+    {:ok, state} = Mnemosyne.GraphBackends.Persistence.DETS.init(path: dets_path)
     node = %Semantic{id: "pre-1", proposition: "Preloaded fact", confidence: 0.8}
     changeset = Changeset.add_node(Changeset.new(), node)
-    :ok = DETS.persist_changeset(changeset, state)
+    :ok = Mnemosyne.GraphBackends.Persistence.DETS.save(changeset, state)
     :dets.close(state.ref)
   end
 

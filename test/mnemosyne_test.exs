@@ -75,9 +75,10 @@ defmodule MnemosyneTest do
 
   defp start_supervisor(tmp_dir) do
     dets_path = Path.join(tmp_dir, "mnemosyne_test.dets")
+    persistence = {Mnemosyne.GraphBackends.Persistence.DETS, path: dets_path}
 
     opts = [
-      storage: {Mnemosyne.Storage.DETS, path: dets_path},
+      backend: {Mnemosyne.GraphBackends.InMemory, persistence: persistence},
       config: build_config(),
       llm: Mnemosyne.MockLLM,
       embedding: Mnemosyne.MockEmbedding

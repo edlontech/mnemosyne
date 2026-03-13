@@ -11,6 +11,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
   alias Mnemosyne.Graph.Node.Source
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
+  alias Mnemosyne.GraphBackends.InMemory
   alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Retrieval
   alias Mnemosyne.ValueFunctions
@@ -124,8 +125,10 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
   end
 
   defp retrieval_opts(graph, extra \\ []) do
+    backend_state = %InMemory{graph: graph}
+
     @default_opts ++
-      [graph: graph, value_functions: @value_functions] ++ extra
+      [backend: {InMemory, backend_state}, value_functions: @value_functions] ++ extra
   end
 
   describe "retrieve/2" do

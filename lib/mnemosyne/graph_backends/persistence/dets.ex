@@ -1,30 +1,28 @@
-defmodule Mnemosyne.Storage.DETS do
+defmodule Mnemosyne.GraphBackends.Persistence.DETS do
   @moduledoc """
-  DETS-backed storage for the knowledge graph.
+  DETS-backed persistence for the InMemory graph backend.
 
-  Stores nodes as flat `{node_id, node_struct}` records in a single DETS table.
-  Secondary indexes are rebuilt on load via `Graph.put_node/2`.
+  Stores nodes as `{node_id, node_struct}` records. Secondary indexes
+  are rebuilt on load via `Graph.put_node/2`.
   """
-  @behaviour Mnemosyne.Storage
 
-  alias Mnemosyne.Errors.Framework.StorageError
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Node, as: NodeProtocol
 
   @default_path "mnemosyne.dets"
 
-  @impl true
+  @spec init(keyword()) :: {:ok, map()} | {:error, term()}
   def init(opts) do
     path = opts |> Keyword.get(:path, @default_path) |> String.to_charlist()
 
     case :dets.open_file(path, type: :set, auto_save: 60_000) do
       {:ok, ref} -> {:ok, %{ref: ref, path: path}}
-      {:error, reason} -> {:error, StorageError.exception(operation: :init, reason: reason)}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  @impl true
-  def load_graph(%{ref: ref}) do
+  @spec load(map()) :: {:ok, Graph.t()} | {:error, term()}
+  def load(%{ref: ref}) do
     graph =
       :dets.foldl(
         fn {_id, node}, acc -> Graph.put_node(acc, node) end,
@@ -34,29 +32,21 @@ defmodule Mnemosyne.Storage.DETS do
 
     {:ok, graph}
   rescue
-    e -> {:error, StorageError.exception(operation: :load_graph, reason: e)}
+    e -> {:error, e}
   end
 
-  @impl true
-  def persist_changeset(changeset, %{ref: ref}) do
+  @spec save(Mnemosyne.Graph.Changeset.t(), map()) :: :ok | {:error, term()}
+  def save(changeset, %{ref: ref}) do
     with :ok <- insert_nodes(changeset.additions, ref),
-         :ok <- persist_links(changeset.links, ref),
-         :ok <- :dets.sync(ref) do
-      :ok
-    else
-      {:error, reason} ->
-        {:error, StorageError.exception(operation: :persist_changeset, reason: reason)}
+         :ok <- persist_links(changeset.links, ref) do
+      :dets.sync(ref)
     end
   end
 
-  @impl true
-  def delete_nodes(node_ids, %{ref: ref}) do
-    with :ok <- do_delete_nodes(node_ids, ref),
-         :ok <- :dets.sync(ref) do
-      :ok
-    else
-      {:error, reason} ->
-        {:error, StorageError.exception(operation: :delete_nodes, reason: reason)}
+  @spec delete([String.t()], map()) :: :ok | {:error, term()}
+  def delete(node_ids, %{ref: ref}) do
+    with :ok <- do_delete_nodes(node_ids, ref) do
+      :dets.sync(ref)
     end
   end
 

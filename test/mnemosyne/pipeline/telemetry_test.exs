@@ -193,7 +193,8 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
       opts =
         @default_opts ++
           [
-            graph: graph,
+            backend:
+              {Mnemosyne.GraphBackends.InMemory, %Mnemosyne.GraphBackends.InMemory{graph: graph}},
             value_functions: %{
               semantic: ValueFunctions.SemanticRelevant,
               tag: ValueFunctions.TagExact

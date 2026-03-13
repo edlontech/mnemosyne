@@ -23,7 +23,7 @@ defmodule Mnemosyne.Supervisor do
 
     memory_store_opts = [
       name: store_name,
-      storage: Keyword.fetch!(opts, :storage),
+      backend: Keyword.fetch!(opts, :backend),
       config: Keyword.fetch!(opts, :config),
       llm: Keyword.fetch!(opts, :llm),
       embedding: Keyword.fetch!(opts, :embedding),

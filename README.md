@@ -28,7 +28,7 @@ Trajectory boundaries are detected automatically using embedding similarity (cos
 
 ### 2. The Knowledge Graph
 
-All extracted knowledge lives in an in-memory graph with six node types:
+All extracted knowledge lives in a graph managed by a pluggable **GraphBackend**, with six node types:
 
 | Node Type | Purpose |
 |-----------|---------|
@@ -60,8 +60,9 @@ graph TD
     API --> Retrieval[Retrieval\nPipeline]
 
     Session --> Episode[Episode Pipeline]
-    Store --> Graph[Knowledge Graph]
+    Store --> Backend[GraphBackend]
     Retrieval --> VF[Value Functions\nper node type]
+    Retrieval -->|find_candidates\nget_linked_nodes| Backend
 
     Episode --> Structuring
 
@@ -71,8 +72,8 @@ graph TD
         Returns[Return\nComputation]
     end
 
-    Structuring -->|Changeset| Graph
-    VF --> Graph
+    Structuring -->|Changeset| Backend
+    VF --> Backend
 ```
 
 The **Session** is a `GenStateMachine` that manages the episode lifecycle:
@@ -112,17 +113,37 @@ stateDiagram-v2
 
 ## Configuration
 
-Mnemosyne uses pluggable adapters for LLM and embedding backends. The built-in adapters wrap [Sycophant](https://github.com/edlontech/sycophant) (LLM) and support [Bumblebee](https://github.com/elixir-nx/bumblebee) for local embeddings.
+Mnemosyne uses pluggable adapters for LLM, embedding, and graph storage backends.
 
 ```elixir
 config = %Mnemosyne.Config{
-  llm_adapter: Mnemosyne.Adapters.SycophantLLM,
-  embedding_adapter: Mnemosyne.Adapters.SycophantEmbedding,
-  llm_model: "gpt-4o-mini",
-  embedding_model: "text-embedding-3-small",
-  embedding_dimensions: 1536
+  llm: %{model: "gpt-4o-mini", opts: %{}},
+  embedding: %{model: "text-embedding-3-small", opts: %{}},
+  backend: %{
+    module: Mnemosyne.GraphBackends.InMemory,
+    opts: %{}
+  }
 }
 ```
+
+### Graph Backends
+
+The `GraphBackend` behaviour abstracts both persistence and querying behind a single interface. The built-in `InMemory` backend stores nodes in an Erlang map with optional DETS persistence:
+
+```elixir
+# In-memory only (no persistence, useful for tests)
+backend: {Mnemosyne.GraphBackends.InMemory, []}
+
+# With DETS persistence
+backend: {Mnemosyne.GraphBackends.InMemory,
+  persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: "memory.dets"}}
+```
+
+Custom backends can push queries to external databases (e.g. Postgres with pgvector) by implementing `find_candidates/6`, `get_node/2`, and `get_linked_nodes/2`.
+
+### LLM and Embedding Adapters
+
+The built-in adapters wrap [Sycophant](https://github.com/edlontech/sycophant) for LLM calls and support [Bumblebee](https://github.com/elixir-nx/bumblebee) for local embeddings.
 
 Per-pipeline-step model overrides are supported via `config.overrides[step_atom]`, so you can use a cheaper model for subgoal inference and a stronger one for knowledge extraction.
 

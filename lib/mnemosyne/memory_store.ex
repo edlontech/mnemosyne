@@ -1,8 +1,7 @@
 defmodule Mnemosyne.MemoryStore do
   @moduledoc """
-  GenServer owning the knowledge graph and storage state.
+  GenServer owning the graph backend state.
 
-  Loads the graph from storage on init via `handle_continue`.
   Retrieval and reasoning operations are spawned under a TaskSupervisor
   to avoid blocking the GenServer during LLM calls.
   """
@@ -31,14 +30,19 @@ defmodule Mnemosyne.MemoryStore do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  @doc "Applies a changeset to the graph and persists it to storage."
+  @doc "Applies a changeset to the graph via the backend."
   @spec apply_changeset(GenServer.server(), Graph.Changeset.t()) ::
-          :ok | {:error, Mnemosyne.Errors.Framework.StorageError.t()}
+          :ok | {:error, term()}
   def apply_changeset(server, changeset) do
     GenServer.call(server, {:apply_changeset, changeset})
   end
 
-  @doc "Returns the current graph."
+  @doc """
+  Returns the current in-memory graph.
+
+  Only works with backends that expose a `:graph` field in their state
+  (e.g. `InMemory`). Returns an empty graph for other backends.
+  """
   @spec get_graph(GenServer.server()) :: Graph.t()
   def get_graph(server) do
     GenServer.call(server, :get_graph)
@@ -58,9 +62,9 @@ defmodule Mnemosyne.MemoryStore do
     GenServer.call(server, {:recall_in_context, session_id, query, opts}, :timer.seconds(120))
   end
 
-  @doc "Removes nodes from the graph and storage."
+  @doc "Removes nodes from the graph via the backend."
   @spec delete_nodes(GenServer.server(), [String.t()]) ::
-          :ok | {:error, Mnemosyne.Errors.Framework.StorageError.t()}
+          :ok | {:error, term()}
   def delete_nodes(server, node_ids) do
     GenServer.call(server, {:delete_nodes, node_ids})
   end
@@ -79,13 +83,12 @@ defmodule Mnemosyne.MemoryStore do
 
   @impl true
   def init(opts) do
-    {storage_mod, storage_opts} = Keyword.fetch!(opts, :storage)
+    {backend_mod, backend_opts} = Keyword.fetch!(opts, :backend)
 
-    case storage_mod.init(storage_opts) do
-      {:ok, storage_state} ->
+    case backend_mod.init(backend_opts) do
+      {:ok, backend_state} ->
         state = %{
-          graph: Graph.new(),
-          storage: {storage_mod, storage_state},
+          backend: {backend_mod, backend_state},
           config: Keyword.fetch!(opts, :config),
           llm: Keyword.fetch!(opts, :llm),
           embedding: Keyword.fetch!(opts, :embedding),
@@ -94,7 +97,7 @@ defmodule Mnemosyne.MemoryStore do
           pending_recalls: %{}
         }
 
-        {:ok, state, {:continue, :load_graph}}
+        {:ok, state}
 
       {:error, reason} ->
         {:stop, reason}
@@ -102,39 +105,12 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   @impl true
-  def handle_continue(:load_graph, state) do
-    {storage_mod, storage_state} = state.storage
-
-    result =
-      Mnemosyne.Telemetry.span([:storage, :load], %{backend: storage_mod}, fn ->
-        case storage_mod.load_graph(storage_state) do
-          {:ok, graph} -> {{:ok, graph}, %{}}
-          {:error, _} = error -> {error, %{}}
-        end
-      end)
-
-    case result do
-      {:ok, graph} -> {:noreply, %{state | graph: graph}}
-      {:error, _} -> {:noreply, state}
-    end
-  end
-
-  @impl true
   def handle_call({:apply_changeset, changeset}, _from, state) do
-    {storage_mod, storage_state} = state.storage
+    {backend_mod, backend_state} = state.backend
 
-    result =
-      Mnemosyne.Telemetry.span([:storage, :persist], %{backend: storage_mod}, fn ->
-        case storage_mod.persist_changeset(changeset, storage_state) do
-          :ok -> {:ok, %{}}
-          {:error, _} = error -> {error, %{}}
-        end
-      end)
-
-    case result do
-      :ok ->
-        graph = Graph.apply_changeset(state.graph, changeset)
-        {:reply, :ok, %{state | graph: graph}}
+    case backend_mod.apply_changeset(changeset, backend_state) do
+      {:ok, new_bs} ->
+        {:reply, :ok, %{state | backend: {backend_mod, new_bs}}}
 
       {:error, _} = error ->
         {:reply, error, state}
@@ -143,7 +119,8 @@ defmodule Mnemosyne.MemoryStore do
 
   @impl true
   def handle_call(:get_graph, _from, state) do
-    {:reply, state.graph, state}
+    {_backend_mod, backend_state} = state.backend
+    {:reply, Map.get(backend_state, :graph, Graph.new()), state}
   end
 
   @impl true
@@ -169,12 +146,11 @@ defmodule Mnemosyne.MemoryStore do
 
   @impl true
   def handle_call({:delete_nodes, node_ids}, _from, state) do
-    {storage_mod, storage_state} = state.storage
+    {backend_mod, backend_state} = state.backend
 
-    case storage_mod.delete_nodes(node_ids, storage_state) do
-      :ok ->
-        graph = Enum.reduce(node_ids, state.graph, &Graph.delete_node(&2, &1))
-        {:reply, :ok, %{state | graph: graph}}
+    case backend_mod.delete_nodes(node_ids, backend_state) do
+      {:ok, new_bs} ->
+        {:reply, :ok, %{state | backend: {backend_mod, new_bs}}}
 
       {:error, _} = error ->
         {:reply, error, state}
@@ -212,18 +188,18 @@ defmodule Mnemosyne.MemoryStore do
   # -- Private --
 
   defp spawn_recall_task(state, query, opts) do
-    graph = state.graph
     config = state.config
     llm = state.llm
     embedding = state.embedding
     value_fns = state.value_functions
     max_hops = Keyword.get(opts, :max_hops, 2)
+    backend = state.backend
 
     Task.Supervisor.async_nolink(state.task_supervisor, fn ->
       retrieval_opts = [
         llm: llm,
         embedding: embedding,
-        graph: graph,
+        backend: backend,
         value_functions: value_fns,
         config: config,
         max_hops: max_hops

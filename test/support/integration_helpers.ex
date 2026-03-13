@@ -76,7 +76,9 @@ defmodule Mnemosyne.IntegrationCase do
     dets_path = Path.join(tmp_dir, "integration_test.dets")
 
     opts = [
-      storage: {Mnemosyne.Storage.DETS, path: dets_path},
+      backend:
+        {Mnemosyne.GraphBackends.InMemory,
+         persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: dets_path}},
       config: config,
       llm: Mnemosyne.Adapters.SycophantLLM,
       embedding: Mnemosyne.Adapters.BumblebeeEmbedding
