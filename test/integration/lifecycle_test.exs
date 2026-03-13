@@ -4,6 +4,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
   @moduletag [:integration, :tmp_dir]
 
   alias Mnemosyne.IntegrationHelpers
+  alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
 
   setup_all do
     IntegrationHelpers.setup_serving()
@@ -58,6 +59,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
       |> Enum.uniq()
 
     assert length(node_types) > 0
+    assert Mnemosyne.Graph.Node.Episodic in node_types
 
     known_types = [
       Mnemosyne.Graph.Node.Episodic,
@@ -72,8 +74,10 @@ defmodule Mnemosyne.Integration.LifecycleTest do
       assert type in known_types, "Unexpected node type: #{inspect(type)}"
     end
 
-    assert {:ok, result} = Mnemosyne.recall("how do supervisors work in Elixir?")
-    assert result != nil
+    assert {:ok, %ReasonedMemory{} = result} =
+             Mnemosyne.recall("how do supervisors work in Elixir?")
+
+    assert result.episodic != nil or result.semantic != nil or result.procedural != nil
   end
 
   @tag timeout: 120_000
@@ -94,6 +98,9 @@ defmodule Mnemosyne.Integration.LifecycleTest do
                max_retries: 2
              )
 
+    graph = Mnemosyne.get_graph()
+    assert map_size(graph.nodes) > 0
+
     {:ok, read_session} = Mnemosyne.start_session("Exploring BEAM internals")
 
     :ok =
@@ -103,9 +110,9 @@ defmodule Mnemosyne.Integration.LifecycleTest do
         "Read about how the BEAM VM manages scheduling and ran observer to see scheduler utilization across cores."
       )
 
-    assert {:ok, result} =
+    assert {:ok, %ReasonedMemory{} = result} =
              Mnemosyne.recall_in_context(read_session, "how does process memory work?")
 
-    assert result != nil
+    assert result.episodic != nil or result.semantic != nil or result.procedural != nil
   end
 end
