@@ -1,22 +1,9 @@
 defmodule Mnemosyne.Integration.LifecycleTest do
-  use ExUnit.Case, async: false
+  use Mnemosyne.IntegrationCase, async: false
 
-  @moduletag :integration
   @moduletag :tmp_dir
 
-  alias Mnemosyne.IntegrationHelpers
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
-
-  setup_all do
-    IntegrationHelpers.setup_serving()
-    api_key = IntegrationHelpers.ensure_openrouter_key!()
-    %{api_key: api_key}
-  end
-
-  setup %{tmp_dir: tmp_dir, api_key: api_key} do
-    IntegrationHelpers.start_supervisor(tmp_dir, api_key)
-    :ok
-  end
 
   @tag timeout: 120_000
   test "full memory write-read cycle with real LLM and embeddings" do
