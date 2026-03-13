@@ -10,8 +10,12 @@ defmodule Mnemosyne.IntegrationHelpers do
 
   def ensure_openrouter_key! do
     case System.get_env("OPENROUTER_API_KEY") do
-      nil -> raise ExUnit.AssertionError, message: "OPENROUTER_API_KEY not set, skipping"
-      key -> key
+      nil ->
+        raise ExUnit.AssertionError,
+          message: "OPENROUTER_API_KEY not set, required for integration tests"
+
+      key ->
+        key
     end
   end
 
@@ -43,7 +47,7 @@ defmodule Mnemosyne.IntegrationHelpers do
 
   def start_supervisor(tmp_dir, api_key) do
     {:ok, config} = build_config(api_key)
-    dets_path = Path.join(tmp_dir, "integration_test.dets") |> String.to_charlist()
+    dets_path = Path.join(tmp_dir, "integration_test.dets")
 
     opts = [
       storage: {Mnemosyne.Storage.DETS, path: dets_path},
@@ -52,7 +56,6 @@ defmodule Mnemosyne.IntegrationHelpers do
       embedding: Mnemosyne.Adapters.BumblebeeEmbedding
     ]
 
-    import ExUnit.Callbacks
-    start_supervised!({Mnemosyne.Supervisor, opts})
+    ExUnit.Callbacks.start_supervised!({Mnemosyne.Supervisor, opts})
   end
 end
