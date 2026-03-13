@@ -37,11 +37,14 @@ defmodule Mnemosyne.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.8", only: :dev, runtime: false},
+      {:bumblebee, "~> 0.6", optional: true},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:doctor, "~> 0.22", only: :dev},
       {:ex_check, "~> 0.16", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.18", only: [:dev, :test]},
+      {:exla, "~> 0.10", only: [:dev, :test]},
+      {:emlx, "~> 0.2", only: [:dev, :test]},
       {:gen_state_machine, "~> 3.0"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:mimic, "~> 2.0", only: :test},
