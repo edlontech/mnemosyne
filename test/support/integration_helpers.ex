@@ -2,7 +2,7 @@ defmodule Mnemosyne.IntegrationHelpers do
   @moduledoc false
 
   @serving_name Mnemosyne.IntegrationServing
-  @llm_model "google/gemini-2.0-flash-001"
+  @llm_model "openrouter:google/gemini-2.0-flash-001"
   @embedding_model "Qwen/Qwen3-Embedding-0.6B"
 
   def serving_name, do: @serving_name
