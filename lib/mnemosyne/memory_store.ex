@@ -10,6 +10,7 @@ defmodule Mnemosyne.MemoryStore do
 
   require Logger
 
+  alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Graph
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
@@ -31,7 +32,8 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   @doc "Applies a changeset to the graph and persists it to storage."
-  @spec apply_changeset(GenServer.server(), Graph.Changeset.t()) :: :ok | {:error, term()}
+  @spec apply_changeset(GenServer.server(), Graph.Changeset.t()) ::
+          :ok | {:error, Mnemosyne.Errors.Framework.StorageError.t()}
   def apply_changeset(server, changeset) do
     GenServer.call(server, {:apply_changeset, changeset})
   end
@@ -44,20 +46,21 @@ defmodule Mnemosyne.MemoryStore do
 
   @doc "Runs async retrieval + reasoning and returns the result."
   @spec recall(GenServer.server(), String.t(), keyword()) ::
-          {:ok, Reasoning.ReasonedMemory.t()} | {:error, term()}
+          {:ok, Reasoning.ReasonedMemory.t()} | {:error, Mnemosyne.Errors.error()}
   def recall(server, query, opts \\ []) do
     GenServer.call(server, {:recall, query, opts}, :timer.seconds(120))
   end
 
   @doc "Fetches session context, augments the query, then runs recall."
   @spec recall_in_context(GenServer.server(), term(), String.t(), keyword()) ::
-          {:ok, Reasoning.ReasonedMemory.t()} | {:error, term()}
+          {:ok, Reasoning.ReasonedMemory.t()} | {:error, Mnemosyne.Errors.error()}
   def recall_in_context(server, session_id, query, opts \\ []) do
     GenServer.call(server, {:recall_in_context, session_id, query, opts}, :timer.seconds(120))
   end
 
   @doc "Removes nodes from the graph and storage."
-  @spec delete_nodes(GenServer.server(), [String.t()]) :: :ok | {:error, term()}
+  @spec delete_nodes(GenServer.server(), [String.t()]) ::
+          :ok | {:error, Mnemosyne.Errors.Framework.StorageError.t()}
   def delete_nodes(server, node_ids) do
     GenServer.call(server, {:delete_nodes, node_ids})
   end
@@ -198,7 +201,7 @@ defmodule Mnemosyne.MemoryStore do
         {:noreply, state}
 
       {from, pending} ->
-        GenServer.reply(from, {:error, {:task_crashed, reason}})
+        GenServer.reply(from, {:error, PipelineError.exception(reason: {:task_crashed, reason})})
         {:noreply, %{state | pending_recalls: pending}}
     end
   end

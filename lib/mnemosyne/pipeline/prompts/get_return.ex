@@ -6,6 +6,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
 
   @behaviour Mnemosyne.Prompt
 
+  alias Mnemosyne.Errors.Invalid.PromptError
+
   @impl true
   def build_messages(%{trajectory: trajectory, goal: goal}) do
     formatted_steps =
@@ -58,7 +60,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
     |> case do
       {value, _} when value >= 0.0 and value <= 1.0 -> {:ok, value}
       {value, _} -> {:ok, clamp(value)}
-      :error -> {:error, :invalid_float}
+      :error -> {:error, PromptError.exception(prompt: :get_return, reason: :invalid_float)}
     end
   end
 

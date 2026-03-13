@@ -6,6 +6,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
 
   @behaviour Mnemosyne.Prompt
 
+  alias Mnemosyne.Errors.Invalid.PromptError
+
   @impl true
   def build_messages(%{trajectory: trajectory, goal: goal}) do
     formatted_steps =
@@ -50,7 +52,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
       |> Enum.reject(&(&1 == ""))
 
     case facts do
-      [] -> {:error, :no_facts_extracted}
+      [] -> {:error, PromptError.exception(prompt: :get_semantic, reason: :no_facts_extracted)}
       facts -> {:ok, facts}
     end
   end

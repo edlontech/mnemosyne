@@ -6,6 +6,9 @@ defmodule Mnemosyne do
   memory retrieval (read path), and graph management.
   """
 
+  alias Mnemosyne.Errors.Framework.NotFoundError
+  alias Mnemosyne.Errors.Framework.PipelineError
+  alias Mnemosyne.Errors.Framework.StorageError
   alias Mnemosyne.MemoryStore
   alias Mnemosyne.Session
   alias Mnemosyne.Supervisor, as: MneSupervisor
@@ -49,7 +52,8 @@ defmodule Mnemosyne do
   end
 
   @doc "Appends an observation-action pair to the session."
-  @spec append(String.t(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec append(String.t(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, Mnemosyne.Errors.error()}
   def append(session_id, observation, action, opts \\ []) do
     with {:ok, pid} <- lookup_session(session_id, opts) do
       Session.append(pid, observation, action)
@@ -57,7 +61,7 @@ defmodule Mnemosyne do
   end
 
   @doc "Closes the current episode, triggering extraction."
-  @spec close(String.t(), keyword()) :: :ok | {:error, term()}
+  @spec close(String.t(), keyword()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def close(session_id, opts \\ []) do
     with {:ok, pid} <- lookup_session(session_id, opts) do
       Session.close(pid)
@@ -65,7 +69,7 @@ defmodule Mnemosyne do
   end
 
   @doc "Commits the extracted changeset to the MemoryStore."
-  @spec commit(String.t(), keyword()) :: :ok | {:error, term()}
+  @spec commit(String.t(), keyword()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def commit(session_id, opts \\ []) do
     with {:ok, pid} <- lookup_session(session_id, opts) do
       Session.commit(pid)
@@ -73,7 +77,7 @@ defmodule Mnemosyne do
   end
 
   @doc "Discards the session result without committing."
-  @spec discard(String.t(), keyword()) :: :ok | {:error, term()}
+  @spec discard(String.t(), keyword()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def discard(session_id, opts \\ []) do
     with {:ok, pid} <- lookup_session(session_id, opts) do
       Session.discard(pid)
@@ -81,7 +85,7 @@ defmodule Mnemosyne do
   end
 
   @doc "Returns the current state of a session."
-  @spec session_state(String.t(), keyword()) :: atom() | {:error, :not_found}
+  @spec session_state(String.t(), keyword()) :: atom() | {:error, NotFoundError.t()}
   def session_state(session_id, opts \\ []) do
     with {:ok, pid} <- lookup_session(session_id, opts) do
       Session.state(pid)
@@ -93,7 +97,7 @@ defmodule Mnemosyne do
 
   Retries on transient failures up to `max_retries` (default 2).
   """
-  @spec close_and_commit(String.t(), keyword()) :: :ok | {:error, term()}
+  @spec close_and_commit(String.t(), keyword()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def close_and_commit(session_id, opts \\ []) do
     max_retries = Keyword.get(opts, :max_retries, 2)
     poll_opts = Keyword.take(opts, [:max_polls, :poll_interval])
@@ -105,14 +109,15 @@ defmodule Mnemosyne do
   end
 
   @doc "Retrieves relevant memories for the given query."
-  @spec recall(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  @spec recall(String.t(), keyword()) :: {:ok, term()} | {:error, Mnemosyne.Errors.error()}
   def recall(query, opts \\ []) do
     store = store_name(opts)
     MemoryStore.recall(store, query, opts)
   end
 
   @doc "Retrieves memories with session context augmenting the query."
-  @spec recall_in_context(String.t(), String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  @spec recall_in_context(String.t(), String.t(), keyword()) ::
+          {:ok, term()} | {:error, Mnemosyne.Errors.error()}
   def recall_in_context(session_id, query, opts \\ []) do
     store = store_name(opts)
 
@@ -120,7 +125,7 @@ defmodule Mnemosyne do
       {:ok, pid} ->
         MemoryStore.recall_in_context(store, pid, query, opts)
 
-      {:error, :not_found} ->
+      {:error, %NotFoundError{}} ->
         MemoryStore.recall(store, query, opts)
     end
   end
@@ -133,14 +138,15 @@ defmodule Mnemosyne do
   end
 
   @doc "Applies a changeset to the knowledge graph."
-  @spec apply_changeset(Mnemosyne.Graph.Changeset.t(), keyword()) :: :ok | {:error, term()}
+  @spec apply_changeset(Mnemosyne.Graph.Changeset.t(), keyword()) ::
+          :ok | {:error, StorageError.t()}
   def apply_changeset(changeset, opts \\ []) do
     store = store_name(opts)
     MemoryStore.apply_changeset(store, changeset)
   end
 
   @doc "Deletes nodes from the knowledge graph."
-  @spec delete_nodes([String.t()], keyword()) :: :ok | {:error, term()}
+  @spec delete_nodes([String.t()], keyword()) :: :ok | {:error, StorageError.t()}
   def delete_nodes(node_ids, opts \\ []) do
     store = store_name(opts)
     MemoryStore.delete_nodes(store, node_ids)
@@ -154,7 +160,7 @@ defmodule Mnemosyne do
 
     case Registry.lookup(registry, session_id) do
       [{pid, nil}] -> {:ok, pid}
-      [] -> {:error, :not_found}
+      [] -> {:error, NotFoundError.exception(resource: :session, id: session_id)}
     end
   end
 
@@ -175,10 +181,10 @@ defmodule Mnemosyne do
         end
 
       :failed ->
-        {:error, :extraction_failed}
+        {:error, PipelineError.exception(reason: :extraction_failed)}
 
       :timeout ->
-        {:error, :extraction_timeout}
+        {:error, PipelineError.exception(reason: :extraction_timeout)}
     end
   end
 

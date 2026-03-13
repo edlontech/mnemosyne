@@ -12,6 +12,7 @@ defmodule Mnemosyne.Pipeline.Episode do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
+  alias Mnemosyne.Errors.Invalid.EpisodeError
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.Pipeline.Prompts.GetReward
   alias Mnemosyne.Pipeline.Prompts.GetState
@@ -61,9 +62,9 @@ defmodule Mnemosyne.Pipeline.Episode do
 
   @doc "Appends an observation-action step, inferring subgoal, reward, and state via LLM."
   @spec append(t(), String.t(), String.t(), keyword()) ::
-          {:ok, t()} | {:error, term()}
+          {:ok, t()} | {:error, Mnemosyne.Errors.error()}
   def append(%__MODULE__{closed: true}, _observation, _action, _opts),
-    do: {:error, :episode_closed}
+    do: {:error, EpisodeError.exception(reason: :episode_closed)}
 
   def append(%__MODULE__{} = episode, observation, action, opts) do
     Telemetry.span([:episode, :append], %{episode_id: episode.id}, fn ->
@@ -110,8 +111,9 @@ defmodule Mnemosyne.Pipeline.Episode do
   end
 
   @doc "Closes the episode, grouping steps into trajectory segments."
-  @spec close(t()) :: {:ok, t()} | {:error, term()}
-  def close(%__MODULE__{closed: true}), do: {:error, :already_closed}
+  @spec close(t()) :: {:ok, t()} | {:error, EpisodeError.t()}
+  def close(%__MODULE__{closed: true}),
+    do: {:error, EpisodeError.exception(reason: :already_closed)}
 
   def close(%__MODULE__{} = episode) do
     trajectories = build_trajectories(episode)

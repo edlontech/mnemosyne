@@ -6,6 +6,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetProcedural do
 
   @behaviour Mnemosyne.Prompt
 
+  alias Mnemosyne.Errors.Invalid.PromptError
+
   @impl true
   def build_messages(%{trajectory: trajectory, goal: goal}) do
     formatted_steps =
@@ -53,8 +55,12 @@ defmodule Mnemosyne.Pipeline.Prompts.GetProcedural do
       |> Enum.reject(&is_nil/1)
 
     case instructions do
-      [] -> {:error, :no_instructions_extracted}
-      instructions -> {:ok, instructions}
+      [] ->
+        {:error,
+         PromptError.exception(prompt: :get_procedural, reason: :no_instructions_extracted)}
+
+      instructions ->
+        {:ok, instructions}
     end
   end
 

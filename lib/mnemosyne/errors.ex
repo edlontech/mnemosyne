@@ -12,6 +12,17 @@ defmodule Mnemosyne.Errors do
       unknown: Mnemosyne.Errors.Unknown
     ],
     unknown_error: Mnemosyne.Errors.Unknown.Unknown
+
+  @type error ::
+          Mnemosyne.Errors.Invalid.ConfigError.t()
+          | Mnemosyne.Errors.Invalid.EpisodeError.t()
+          | Mnemosyne.Errors.Invalid.PromptError.t()
+          | Mnemosyne.Errors.Framework.SessionError.t()
+          | Mnemosyne.Errors.Framework.PipelineError.t()
+          | Mnemosyne.Errors.Framework.StorageError.t()
+          | Mnemosyne.Errors.Framework.AdapterError.t()
+          | Mnemosyne.Errors.Framework.NotFoundError.t()
+          | Mnemosyne.Errors.Unknown.Unknown.t()
 end
 
 defmodule Mnemosyne.Errors.Invalid do
@@ -41,6 +52,8 @@ defmodule Mnemosyne.Errors.Unknown.Unknown do
   to a known Splode error type.
   """
   use Splode.Error, fields: [:error, :value], class: :unknown
+
+  @type t :: %__MODULE__{}
 
   @spec message(map()) :: String.t()
   def message(%{error: error}) do

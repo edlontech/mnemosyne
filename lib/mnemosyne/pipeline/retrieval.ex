@@ -48,7 +48,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     - `:config` - Config struct for per-step model overrides
     - `:max_hops` - Maximum traversal hops (default: 2)
   """
-  @spec retrieve(String.t(), keyword()) :: {:ok, Result.t()} | {:error, term()}
+  @spec retrieve(String.t(), keyword()) :: {:ok, Result.t()} | {:error, Mnemosyne.Errors.error()}
   def retrieve(query, opts) do
     Mnemosyne.Telemetry.span([:retrieval, :retrieve], %{}, fn ->
       llm = Keyword.fetch!(opts, :llm)

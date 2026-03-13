@@ -4,6 +4,7 @@ defmodule MnemosyneTest do
   import Mimic
 
   alias Mnemosyne.Embedding
+  alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.LLM
 
   @moduletag :tmp_dir
@@ -199,7 +200,7 @@ defmodule MnemosyneTest do
         {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
       end)
 
-      assert {:error, :extraction_failed} =
+      assert {:error, %PipelineError{reason: :extraction_failed}} =
                Mnemosyne.close_and_commit(session_id, max_retries: 1)
     end
   end
@@ -248,9 +249,10 @@ defmodule MnemosyneTest do
   end
 
   describe "close_and_commit timeout" do
-    test "returns {:error, :extraction_timeout} when extraction never settles", %{
-      tmp_dir: tmp_dir
-    } do
+    test "returns {:error, %PipelineError{reason: :extraction_timeout}} when extraction never settles",
+         %{
+           tmp_dir: tmp_dir
+         } do
       stub_llm_for_episode()
       start_supervisor(tmp_dir)
 
@@ -262,7 +264,7 @@ defmodule MnemosyneTest do
         {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
       end)
 
-      assert {:error, :extraction_timeout} =
+      assert {:error, %PipelineError{reason: :extraction_timeout}} =
                Mnemosyne.close_and_commit(session_id,
                  max_retries: 0,
                  max_polls: 3,

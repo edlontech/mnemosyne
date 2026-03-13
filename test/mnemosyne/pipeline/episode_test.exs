@@ -4,6 +4,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
+  alias Mnemosyne.Errors.Invalid.EpisodeError
   alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Episode
 
@@ -80,7 +81,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       episode = Episode.new("Test goal")
       {:ok, episode} = Episode.close(episode)
 
-      assert {:error, :episode_closed} =
+      assert {:error, %EpisodeError{reason: :episode_closed}} =
                Episode.append(episode, "obs", "act", @default_opts)
     end
 
@@ -135,7 +136,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       episode = Episode.new("Test goal")
       {:ok, closed} = Episode.close(episode)
 
-      assert {:error, :already_closed} = Episode.close(closed)
+      assert {:error, %EpisodeError{reason: :already_closed}} = Episode.close(closed)
     end
   end
 end

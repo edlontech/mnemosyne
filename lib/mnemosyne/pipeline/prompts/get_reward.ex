@@ -6,6 +6,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReward do
 
   @behaviour Mnemosyne.Prompt
 
+  alias Mnemosyne.Errors.Invalid.PromptError
+
   @impl true
   def build_messages(%{observation: observation, action: action, subgoal: subgoal}) do
     [
@@ -45,7 +47,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReward do
     |> case do
       {value, _} when value >= 0.0 and value <= 1.0 -> {:ok, value}
       {value, _} -> {:ok, clamp(value)}
-      :error -> {:error, :invalid_float}
+      :error -> {:error, PromptError.exception(prompt: :get_reward, reason: :invalid_float)}
     end
   end
 

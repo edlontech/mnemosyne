@@ -11,6 +11,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
+  alias Mnemosyne.Errors.Invalid.EpisodeError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
   alias Mnemosyne.Graph.Node.Procedural
@@ -23,8 +24,10 @@ defmodule Mnemosyne.Pipeline.Structuring do
   alias Mnemosyne.Pipeline.Prompts.GetSemantic, as: SemanticPrompt
 
   @doc "Extracts knowledge nodes from a closed episode into a changeset."
-  @spec extract(Episode.t(), keyword()) :: {:ok, Changeset.t()} | {:error, term()}
-  def extract(%Episode{closed: false}, _opts), do: {:error, :episode_not_closed}
+  @spec extract(Episode.t(), keyword()) ::
+          {:ok, Changeset.t()} | {:error, Mnemosyne.Errors.error()}
+  def extract(%Episode{closed: false}, _opts),
+    do: {:error, EpisodeError.exception(reason: :episode_not_closed)}
 
   def extract(%Episode{} = episode, opts) do
     Mnemosyne.Telemetry.span([:structuring, :extract], %{episode_id: episode.id}, fn ->

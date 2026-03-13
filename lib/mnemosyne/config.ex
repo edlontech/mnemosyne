@@ -7,6 +7,8 @@ defmodule Mnemosyne.Config do
   """
   use ZoiDefstruct
 
+  alias Mnemosyne.Errors.Invalid.ConfigError
+
   defstruct(
     llm:
       Zoi.object(%{
@@ -71,10 +73,10 @@ defmodule Mnemosyne.Config do
   end
 
   @doc "Loads and validates config from the `:mnemosyne` application environment."
-  @spec from_env() :: {:ok, t()} | {:error, term()}
+  @spec from_env() :: {:ok, t()} | {:error, ConfigError.t()}
   def from_env do
     case Application.get_env(:mnemosyne, :config) do
-      nil -> {:error, :no_config}
+      nil -> {:error, ConfigError.exception(reason: :no_config)}
       raw -> Zoi.parse(t(), raw)
     end
   end

@@ -6,6 +6,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSubgoal do
 
   @behaviour Mnemosyne.Prompt
 
+  alias Mnemosyne.Errors.Invalid.PromptError
+
   @impl true
   def build_messages(%{observation: observation, action: action, goal: goal}) do
     [
@@ -37,7 +39,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSubgoal do
   @impl true
   def parse_response(response) do
     case String.trim(response) do
-      "" -> {:error, :empty_response}
+      "" -> {:error, PromptError.exception(prompt: :get_subgoal, reason: :empty_response)}
       subgoal -> {:ok, subgoal}
     end
   end

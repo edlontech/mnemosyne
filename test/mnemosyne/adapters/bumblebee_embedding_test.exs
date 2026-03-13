@@ -3,6 +3,7 @@ defmodule Mnemosyne.Adapters.BumblebeeEmbeddingTest do
 
   alias Mnemosyne.Adapters.BumblebeeEmbedding
   alias Mnemosyne.Embedding.Response
+  alias Mnemosyne.Errors.Framework.AdapterError
 
   describe "embed/2" do
     test "returns response with vector from serving" do
@@ -30,7 +31,8 @@ defmodule Mnemosyne.Adapters.BumblebeeEmbeddingTest do
     test "returns error when serving raises" do
       serving = build_failing_serving()
 
-      assert {:error, %RuntimeError{}} =
+      assert {:error,
+              %AdapterError{adapter: :bumblebee, operation: :embed, reason: %RuntimeError{}}} =
                BumblebeeEmbedding.embed("hello", serving: serving)
     end
   end

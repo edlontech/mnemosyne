@@ -6,6 +6,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetPlan do
 
   @behaviour Mnemosyne.Prompt
 
+  alias Mnemosyne.Errors.Invalid.PromptError
+
   @impl true
   def build_messages(%{query: query, mode: mode}) do
     [
@@ -41,7 +43,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetPlan do
       |> Enum.reject(&(&1 == ""))
 
     case tags do
-      [] -> {:error, :no_tags_generated}
+      [] -> {:error, PromptError.exception(prompt: :get_plan, reason: :no_tags_generated)}
       tags -> {:ok, tags}
     end
   end

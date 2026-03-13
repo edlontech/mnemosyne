@@ -7,6 +7,7 @@ defmodule Mnemosyne.Storage.DETS do
   """
   @behaviour Mnemosyne.Storage
 
+  alias Mnemosyne.Errors.Framework.StorageError
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Node, as: NodeProtocol
 
@@ -18,7 +19,7 @@ defmodule Mnemosyne.Storage.DETS do
 
     case :dets.open_file(path, type: :set, auto_save: 60_000) do
       {:ok, ref} -> {:ok, %{ref: ref, path: path}}
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> {:error, StorageError.exception(operation: :init, reason: reason)}
     end
   end
 
@@ -33,7 +34,7 @@ defmodule Mnemosyne.Storage.DETS do
 
     {:ok, graph}
   rescue
-    e -> {:error, e}
+    e -> {:error, StorageError.exception(operation: :load_graph, reason: e)}
   end
 
   @impl true
@@ -43,7 +44,8 @@ defmodule Mnemosyne.Storage.DETS do
          :ok <- :dets.sync(ref) do
       :ok
     else
-      {:error, reason} -> {:error, reason}
+      {:error, reason} ->
+        {:error, StorageError.exception(operation: :persist_changeset, reason: reason)}
     end
   end
 
@@ -53,7 +55,8 @@ defmodule Mnemosyne.Storage.DETS do
          :ok <- :dets.sync(ref) do
       :ok
     else
-      {:error, reason} -> {:error, reason}
+      {:error, reason} ->
+        {:error, StorageError.exception(operation: :delete_nodes, reason: reason)}
     end
   end
 

@@ -39,7 +39,8 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     - `:llm_opts` - Additional LLM options (default: [])
     - `:config` - Config struct for per-step model overrides
   """
-  @spec reason(Retrieval.Result.t(), keyword()) :: {:ok, ReasonedMemory.t()} | {:error, term()}
+  @spec reason(Retrieval.Result.t(), keyword()) ::
+          {:ok, ReasonedMemory.t()} | {:error, Mnemosyne.Errors.error()}
   def reason(%Retrieval.Result{candidates: candidates}, opts) do
     Mnemosyne.Telemetry.span([:reasoning, :reason], %{}, fn ->
       do_reason(candidates, opts)

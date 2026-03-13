@@ -3,6 +3,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
   use Mimic
 
   alias Mnemosyne.Embedding
+  alias Mnemosyne.Errors.Invalid.EpisodeError
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.LLM
@@ -130,7 +131,9 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
 
       episode = Episode.new("Test goal")
       {:ok, closed} = Episode.close(episode)
-      {:error, :episode_closed} = Episode.append(closed, "obs", "act", @default_opts)
+
+      {:error, %EpisodeError{reason: :episode_closed}} =
+        Episode.append(closed, "obs", "act", @default_opts)
 
       refute_received {:telemetry, [:mnemosyne, :episode, :append, :start], _, _}
     end
@@ -164,7 +167,9 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
       attach_telemetry([:mnemosyne, :structuring, :extract, :start])
 
       episode = Episode.new("Test goal")
-      {:error, :episode_not_closed} = Structuring.extract(episode, @default_opts)
+
+      {:error, %EpisodeError{reason: :episode_not_closed}} =
+        Structuring.extract(episode, @default_opts)
 
       refute_received {:telemetry, [:mnemosyne, :structuring, :extract, :start], _, _}
     end

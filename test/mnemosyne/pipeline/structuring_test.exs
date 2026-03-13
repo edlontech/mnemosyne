@@ -4,6 +4,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
+  alias Mnemosyne.Errors.Invalid.EpisodeError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Episode
@@ -92,7 +93,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
     test "rejects open episodes" do
       episode = Episode.new("test")
 
-      assert {:error, :episode_not_closed} =
+      assert {:error, %EpisodeError{reason: :episode_not_closed}} =
                Structuring.extract(episode, @default_opts)
     end
 
@@ -191,7 +192,8 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
       stub_default_embedding()
 
-      assert {:error, :extraction_failed} = Structuring.extract(episode, @default_opts)
+      assert {:error, :extraction_failed} =
+               Structuring.extract(episode, @default_opts)
     end
   end
 

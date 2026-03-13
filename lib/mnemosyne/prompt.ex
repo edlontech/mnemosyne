@@ -7,5 +7,6 @@ defmodule Mnemosyne.Prompt do
   """
 
   @callback build_messages(variables :: map()) :: [%{role: atom(), content: String.t()}]
-  @callback parse_response(response :: String.t()) :: {:ok, term()} | {:error, term()}
+  @callback parse_response(response :: String.t()) ::
+              {:ok, term()} | {:error, Mnemosyne.Errors.Invalid.PromptError.t()}
 end

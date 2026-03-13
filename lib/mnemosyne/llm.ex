@@ -21,7 +21,7 @@ defmodule Mnemosyne.LLM do
   end
 
   @callback chat(messages :: [message()], opts :: keyword()) ::
-              {:ok, Response.t()} | {:error, term()}
+              {:ok, Response.t()} | {:error, Mnemosyne.Errors.Framework.AdapterError.t()}
   @callback chat_structured(messages :: [message()], schema :: term(), opts :: keyword()) ::
-              {:ok, Response.t()} | {:error, term()}
+              {:ok, Response.t()} | {:error, Mnemosyne.Errors.Framework.AdapterError.t()}
 end

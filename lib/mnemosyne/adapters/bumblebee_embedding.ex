@@ -15,6 +15,7 @@ if Code.ensure_loaded?(Bumblebee) do
     @behaviour Mnemosyne.Embedding
 
     alias Mnemosyne.Embedding.Response
+    alias Mnemosyne.Errors.Framework.AdapterError
 
     @impl true
     def embed(text, opts) do
@@ -58,7 +59,7 @@ if Code.ensure_loaded?(Bumblebee) do
 
       {:ok, %Response{vectors: vectors, model: model, usage: %{}}}
     rescue
-      e -> {:error, e}
+      e -> {:error, AdapterError.exception(adapter: :bumblebee, operation: :embed, reason: e)}
     end
 
     defp run_serving(serving, texts) when is_struct(serving, Nx.Serving) do

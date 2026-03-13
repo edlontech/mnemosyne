@@ -19,7 +19,7 @@ defmodule Mnemosyne.Embedding do
   end
 
   @callback embed(text :: String.t(), opts :: keyword()) ::
-              {:ok, Response.t()} | {:error, term()}
+              {:ok, Response.t()} | {:error, Mnemosyne.Errors.Framework.AdapterError.t()}
   @callback embed_batch(texts :: [String.t()], opts :: keyword()) ::
-              {:ok, Response.t()} | {:error, term()}
+              {:ok, Response.t()} | {:error, Mnemosyne.Errors.Framework.AdapterError.t()}
 end

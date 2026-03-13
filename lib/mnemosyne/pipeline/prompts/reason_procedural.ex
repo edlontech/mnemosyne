@@ -6,6 +6,8 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonProcedural do
 
   @behaviour Mnemosyne.Prompt
 
+  alias Mnemosyne.Errors.Invalid.PromptError
+
   @impl true
   def build_messages(%{query: query, nodes: nodes}) do
     formatted_nodes =
@@ -44,7 +46,7 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonProcedural do
   @impl true
   def parse_response(response) do
     case String.trim(response) do
-      "" -> {:error, :empty_response}
+      "" -> {:error, PromptError.exception(prompt: :reason_procedural, reason: :empty_response)}
       summary -> {:ok, summary}
     end
   end

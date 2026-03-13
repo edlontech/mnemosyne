@@ -5,6 +5,7 @@ defmodule Mnemosyne.SessionTest do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
+  alias Mnemosyne.Errors.Framework.SessionError
   alias Mnemosyne.LLM
   alias Mnemosyne.MemoryStore
   alias Mnemosyne.Session
@@ -137,7 +138,9 @@ defmodule Mnemosyne.SessionTest do
       pid = start_session(infra)
 
       :ok = Session.start_episode(pid, "goal")
-      assert {:error, :not_idle} = Session.start_episode(pid, "another goal")
+
+      assert {:error, %SessionError{reason: :not_idle}} =
+               Session.start_episode(pid, "another goal")
     end
   end
 
@@ -156,7 +159,7 @@ defmodule Mnemosyne.SessionTest do
       infra = start_infra(tmp_dir)
       pid = start_session(infra)
 
-      assert {:error, :not_collecting} = Session.append(pid, "obs", "act")
+      assert {:error, %SessionError{reason: :not_collecting}} = Session.append(pid, "obs", "act")
     end
 
     test "returns error when LLM fails", %{tmp_dir: tmp_dir} do
@@ -220,8 +223,11 @@ defmodule Mnemosyne.SessionTest do
       end)
 
       :ok = Session.close(pid)
-      assert {:error, :extraction_in_progress} = Session.append(pid, "obs", "act")
-      assert {:error, :extraction_in_progress} = Session.close(pid)
+
+      assert {:error, %SessionError{reason: :extraction_in_progress}} =
+               Session.append(pid, "obs", "act")
+
+      assert {:error, %SessionError{reason: :extraction_in_progress}} = Session.close(pid)
     end
   end
 
@@ -391,7 +397,8 @@ defmodule Mnemosyne.SessionTest do
       infra = start_infra(tmp_dir)
       pid = start_session(infra)
 
-      assert {:error, :invalid_operation} = GenStateMachine.call(pid, :something_weird)
+      assert {:error, %SessionError{reason: :invalid_operation}} =
+               GenStateMachine.call(pid, :something_weird)
     end
 
     test "collecting returns invalid_operation for unknown calls", %{tmp_dir: tmp_dir} do
@@ -399,7 +406,9 @@ defmodule Mnemosyne.SessionTest do
       pid = start_session(infra)
 
       :ok = Session.start_episode(pid, "goal")
-      assert {:error, :invalid_operation} = GenStateMachine.call(pid, :something_weird)
+
+      assert {:error, %SessionError{reason: :invalid_operation}} =
+               GenStateMachine.call(pid, :something_weird)
     end
   end
 end

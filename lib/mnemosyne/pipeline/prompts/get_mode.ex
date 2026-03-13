@@ -6,6 +6,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetMode do
 
   @behaviour Mnemosyne.Prompt
 
+  alias Mnemosyne.Errors.Invalid.PromptError
+
   @mode_map %{
     "episodic" => :episodic,
     "semantic" => :semantic,
@@ -42,7 +44,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetMode do
     key = response |> String.trim() |> String.downcase()
 
     case Map.get(@mode_map, key) do
-      nil -> {:error, :invalid_mode}
+      nil -> {:error, PromptError.exception(prompt: :get_mode, reason: :invalid_mode)}
       mode -> {:ok, mode}
     end
   end

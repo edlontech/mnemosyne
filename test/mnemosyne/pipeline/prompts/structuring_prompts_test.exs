@@ -1,6 +1,7 @@
 defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   use ExUnit.Case, async: true
 
+  alias Mnemosyne.Errors.Invalid.PromptError
   alias Mnemosyne.Pipeline.Prompts.GetProcedural
   alias Mnemosyne.Pipeline.Prompts.GetReturn
   alias Mnemosyne.Pipeline.Prompts.GetReward
@@ -30,7 +31,7 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
     end
 
     test "parse_response rejects empty response" do
-      assert {:error, :empty_response} = GetSubgoal.parse_response("   ")
+      assert {:error, %PromptError{reason: :empty_response}} = GetSubgoal.parse_response("   ")
     end
   end
 
@@ -66,7 +67,7 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
     end
 
     test "parse_response rejects non-numeric" do
-      assert {:error, :invalid_float} = GetReward.parse_response("high")
+      assert {:error, %PromptError{reason: :invalid_float}} = GetReward.parse_response("high")
     end
   end
 
@@ -92,7 +93,7 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
     end
 
     test "parse_response rejects empty response" do
-      assert {:error, :empty_response} = GetState.parse_response("")
+      assert {:error, %PromptError{reason: :empty_response}} = GetState.parse_response("")
     end
   end
 
@@ -129,7 +130,8 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
     end
 
     test "parse_response rejects empty response" do
-      assert {:error, :no_facts_extracted} = GetSemantic.parse_response("   \n  \n  ")
+      assert {:error, %PromptError{reason: :no_facts_extracted}} =
+               GetSemantic.parse_response("   \n  \n  ")
     end
   end
 
@@ -187,7 +189,7 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
     end
 
     test "parse_response rejects response with no valid instructions" do
-      assert {:error, :no_instructions_extracted} =
+      assert {:error, %PromptError{reason: :no_instructions_extracted}} =
                GetProcedural.parse_response("Just some random text")
     end
   end
@@ -224,7 +226,8 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
     end
 
     test "parse_response rejects non-numeric" do
-      assert {:error, :invalid_float} = GetReturn.parse_response("excellent")
+      assert {:error, %PromptError{reason: :invalid_float}} =
+               GetReturn.parse_response("excellent")
     end
   end
 end

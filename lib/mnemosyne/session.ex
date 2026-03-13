@@ -12,6 +12,7 @@ defmodule Mnemosyne.Session do
 
   require Logger
 
+  alias Mnemosyne.Errors.Framework.SessionError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.MemoryStore
   alias Mnemosyne.Pipeline.Episode
@@ -40,17 +41,18 @@ defmodule Mnemosyne.Session do
     GenStateMachine.start_link(__MODULE__, Keyword.put(opts, :id, id), name: name)
   end
 
-  @spec start_episode(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  @spec start_episode(GenServer.server(), String.t()) :: :ok | {:error, SessionError.t()}
   def start_episode(server, goal) do
     GenStateMachine.call(server, {:start_episode, goal})
   end
 
-  @spec append(GenServer.server(), String.t(), String.t()) :: :ok | {:error, term()}
+  @spec append(GenServer.server(), String.t(), String.t()) ::
+          :ok | {:error, Mnemosyne.Errors.error()}
   def append(server, observation, action) do
     GenStateMachine.call(server, {:append, observation, action}, :timer.seconds(60))
   end
 
-  @spec close(GenServer.server()) :: :ok | {:error, term()}
+  @spec close(GenServer.server()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def close(server) do
     GenStateMachine.call(server, :close)
   end
@@ -60,12 +62,12 @@ defmodule Mnemosyne.Session do
   to the MemoryStore and transitions to `:idle`. In `:failed` state, retries
   the extraction by re-spawning the extraction task.
   """
-  @spec commit(GenServer.server()) :: :ok | {:error, term()}
+  @spec commit(GenServer.server()) :: :ok | {:error, Mnemosyne.Errors.error()}
   def commit(server) do
     GenStateMachine.call(server, :commit)
   end
 
-  @spec discard(GenServer.server()) :: :ok | {:error, term()}
+  @spec discard(GenServer.server()) :: :ok | {:error, SessionError.t()}
   def discard(server) do
     GenStateMachine.call(server, :discard)
   end
@@ -141,19 +143,29 @@ defmodule Mnemosyne.Session do
     do: {:keep_state_and_data, [{:reply, from, {:ok, nil}}]}
 
   def idle({:call, from}, :commit, _data),
-    do: {:keep_state_and_data, [{:reply, from, {:error, :not_ready}}]}
+    do:
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :not_ready)}}]}
 
   def idle({:call, from}, :discard, _data),
-    do: {:keep_state_and_data, [{:reply, from, {:error, :not_discardable}}]}
+    do:
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :not_discardable)}}]}
 
   def idle({:call, from}, {:append, _, _}, _data),
-    do: {:keep_state_and_data, [{:reply, from, {:error, :not_collecting}}]}
+    do:
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :not_collecting)}}]}
 
   def idle({:call, from}, :close, _data),
-    do: {:keep_state_and_data, [{:reply, from, {:error, :not_collecting}}]}
+    do:
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :not_collecting)}}]}
 
   def idle({:call, from}, _request, _data),
-    do: {:keep_state_and_data, [{:reply, from, {:error, :invalid_operation}}]}
+    do:
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :invalid_operation)}}]}
 
   # -- Collecting State --
 
@@ -187,7 +199,9 @@ defmodule Mnemosyne.Session do
   end
 
   def collecting({:call, from}, {:start_episode, _}, _data),
-    do: {:keep_state_and_data, [{:reply, from, {:error, :not_idle}}]}
+    do:
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :not_idle)}}]}
 
   def collecting({:call, from}, :get_state, _data),
     do: {:keep_state_and_data, [{:reply, from, :collecting}]}
@@ -196,17 +210,23 @@ defmodule Mnemosyne.Session do
     do: {:keep_state_and_data, [{:reply, from, data.id}]}
 
   def collecting({:call, from}, :commit, _data),
-    do: {:keep_state_and_data, [{:reply, from, {:error, :not_ready}}]}
+    do:
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :not_ready)}}]}
 
   def collecting({:call, from}, :discard, _data),
-    do: {:keep_state_and_data, [{:reply, from, {:error, :not_discardable}}]}
+    do:
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :not_discardable)}}]}
 
   def collecting({:call, from}, :get_context, data) do
     {:keep_state_and_data, [{:reply, from, build_context(data)}]}
   end
 
   def collecting({:call, from}, _request, _data),
-    do: {:keep_state_and_data, [{:reply, from, {:error, :invalid_operation}}]}
+    do:
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :invalid_operation)}}]}
 
   # -- Extracting State --
 
@@ -221,7 +241,8 @@ defmodule Mnemosyne.Session do
   end
 
   def extracting({:call, from}, _request, _data) do
-    {:keep_state_and_data, [{:reply, from, {:error, :extraction_in_progress}}]}
+    {:keep_state_and_data,
+     [{:reply, from, {:error, SessionError.exception(reason: :extraction_in_progress)}}]}
   end
 
   def extracting(:info, {ref, {:ok, %Changeset{} = changeset}}, %{extraction_task: ref} = data) do
@@ -268,7 +289,8 @@ defmodule Mnemosyne.Session do
   end
 
   def failed({:call, from}, _request, _data) do
-    {:keep_state_and_data, [{:reply, from, {:error, :session_failed}}]}
+    {:keep_state_and_data,
+     [{:reply, from, {:error, SessionError.exception(reason: :session_failed)}}]}
   end
 
   # -- Ready State --
@@ -299,7 +321,7 @@ defmodule Mnemosyne.Session do
   end
 
   def ready({:call, from}, _request, _data) do
-    {:keep_state_and_data, [{:reply, from, {:error, :not_idle}}]}
+    {:keep_state_and_data, [{:reply, from, {:error, SessionError.exception(reason: :not_idle)}}]}
   end
 
   # -- Private --

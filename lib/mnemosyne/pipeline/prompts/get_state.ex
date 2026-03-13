@@ -6,6 +6,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
 
   @behaviour Mnemosyne.Prompt
 
+  alias Mnemosyne.Errors.Invalid.PromptError
+
   @impl true
   def build_messages(%{trajectory: trajectory, goal: goal}) do
     formatted_steps =
@@ -43,7 +45,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
   @impl true
   def parse_response(response) do
     case String.trim(response) do
-      "" -> {:error, :empty_response}
+      "" -> {:error, PromptError.exception(prompt: :get_state, reason: :empty_response)}
       state -> {:ok, state}
     end
   end

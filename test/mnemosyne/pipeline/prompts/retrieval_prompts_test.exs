@@ -1,6 +1,7 @@
 defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
   use ExUnit.Case, async: true
 
+  alias Mnemosyne.Errors.Invalid.PromptError
   alias Mnemosyne.Pipeline.Prompts.GetMode
   alias Mnemosyne.Pipeline.Prompts.GetPlan
   alias Mnemosyne.Pipeline.Prompts.ReasonEpisodic
@@ -32,8 +33,8 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
     end
 
     test "parse_response rejects invalid modes" do
-      assert {:error, :invalid_mode} = GetMode.parse_response("narrative")
-      assert {:error, :invalid_mode} = GetMode.parse_response("")
+      assert {:error, %PromptError{reason: :invalid_mode}} = GetMode.parse_response("narrative")
+      assert {:error, %PromptError{reason: :invalid_mode}} = GetMode.parse_response("")
     end
   end
 
@@ -63,7 +64,8 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
     end
 
     test "parse_response rejects empty response" do
-      assert {:error, :no_tags_generated} = GetPlan.parse_response("   \n  \n  ")
+      assert {:error, %PromptError{reason: :no_tags_generated}} =
+               GetPlan.parse_response("   \n  \n  ")
     end
   end
 
@@ -100,7 +102,8 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
     end
 
     test "parse_response rejects empty response" do
-      assert {:error, :empty_response} = ReasonEpisodic.parse_response("   ")
+      assert {:error, %PromptError{reason: :empty_response}} =
+               ReasonEpisodic.parse_response("   ")
     end
   end
 
@@ -127,7 +130,7 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
     end
 
     test "parse_response rejects empty response" do
-      assert {:error, :empty_response} = ReasonSemantic.parse_response("")
+      assert {:error, %PromptError{reason: :empty_response}} = ReasonSemantic.parse_response("")
     end
   end
 
@@ -164,7 +167,8 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
     end
 
     test "parse_response rejects empty response" do
-      assert {:error, :empty_response} = ReasonProcedural.parse_response("   ")
+      assert {:error, %PromptError{reason: :empty_response}} =
+               ReasonProcedural.parse_response("   ")
     end
   end
 end
