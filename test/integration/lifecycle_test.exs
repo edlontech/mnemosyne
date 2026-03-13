@@ -1,7 +1,8 @@
 defmodule Mnemosyne.Integration.LifecycleTest do
   use ExUnit.Case, async: false
 
-  @moduletag [:integration, :tmp_dir]
+  @moduletag :integration
+  @moduletag :tmp_dir
 
   alias Mnemosyne.IntegrationHelpers
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
