@@ -18,12 +18,35 @@ if Code.ensure_loaded?(Bumblebee) do
 
     @impl true
     def embed(text, opts) do
-      do_embed([text], opts)
+      {_serving, rest} = Keyword.pop!(opts, :serving)
+      model = Keyword.get(rest, :model)
+
+      Mnemosyne.Telemetry.span(
+        [:embedding, :embed],
+        %{model: model, text_length: String.length(text)},
+        fn ->
+          result = do_embed([text], opts)
+          {result, %{}}
+        end
+      )
     end
 
     @impl true
     def embed_batch(texts, opts) do
-      do_embed(texts, opts)
+      {_serving, rest} = Keyword.pop!(opts, :serving)
+      model = Keyword.get(rest, :model)
+
+      Mnemosyne.Telemetry.span([:embedding, :embed_batch], %{model: model}, fn ->
+        result = do_embed(texts, opts)
+
+        extra =
+          case result do
+            {:ok, _} -> %{batch_size: length(texts)}
+            _ -> %{}
+          end
+
+        {result, extra}
+      end)
     end
 
     defp do_embed(texts, opts) do

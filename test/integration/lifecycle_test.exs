@@ -46,7 +46,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
       |> Enum.map(& &1.__struct__)
       |> Enum.uniq()
 
-    assert length(node_types) > 0
+    assert node_types != []
     assert Mnemosyne.Graph.Node.Episodic in node_types
 
     known_types = [

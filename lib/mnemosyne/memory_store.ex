@@ -8,6 +8,8 @@ defmodule Mnemosyne.MemoryStore do
   """
   use GenServer
 
+  require Logger
+
   alias Mnemosyne.Graph
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
@@ -100,12 +102,17 @@ defmodule Mnemosyne.MemoryStore do
   def handle_continue(:load_graph, state) do
     {storage_mod, storage_state} = state.storage
 
-    case storage_mod.load_graph(storage_state) do
-      {:ok, graph} ->
-        {:noreply, %{state | graph: graph}}
+    result =
+      Mnemosyne.Telemetry.span([:storage, :load], %{backend: storage_mod}, fn ->
+        case storage_mod.load_graph(storage_state) do
+          {:ok, graph} -> {{:ok, graph}, %{}}
+          {:error, _} = error -> {error, %{}}
+        end
+      end)
 
-      {:error, _reason} ->
-        {:noreply, state}
+    case result do
+      {:ok, graph} -> {:noreply, %{state | graph: graph}}
+      {:error, _} -> {:noreply, state}
     end
   end
 
@@ -113,7 +120,15 @@ defmodule Mnemosyne.MemoryStore do
   def handle_call({:apply_changeset, changeset}, _from, state) do
     {storage_mod, storage_state} = state.storage
 
-    case storage_mod.persist_changeset(changeset, storage_state) do
+    result =
+      Mnemosyne.Telemetry.span([:storage, :persist], %{backend: storage_mod}, fn ->
+        case storage_mod.persist_changeset(changeset, storage_state) do
+          :ok -> {:ok, %{}}
+          {:error, _} = error -> {error, %{}}
+        end
+      end)
+
+    case result do
       :ok ->
         graph = Graph.apply_changeset(state.graph, changeset)
         {:reply, :ok, %{state | graph: graph}}

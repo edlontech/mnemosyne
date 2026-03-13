@@ -7,6 +7,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
   assembles a Graph.Changeset with all nodes and links.
   """
 
+  require Logger
+
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
   alias Mnemosyne.Graph.Changeset
@@ -25,20 +27,36 @@ defmodule Mnemosyne.Pipeline.Structuring do
   def extract(%Episode{closed: false}, _opts), do: {:error, :episode_not_closed}
 
   def extract(%Episode{} = episode, opts) do
-    llm = Keyword.fetch!(opts, :llm)
-    embedding = Keyword.fetch!(opts, :embedding)
-    llm_opts = Keyword.get(opts, :llm_opts, [])
-    config = Keyword.get(opts, :config)
+    Mnemosyne.Telemetry.span([:structuring, :extract], %{episode_id: episode.id}, fn ->
+      llm = Keyword.fetch!(opts, :llm)
+      embedding = Keyword.fetch!(opts, :embedding)
+      llm_opts = Keyword.get(opts, :llm_opts, [])
+      config = Keyword.get(opts, :config)
 
-    changesets =
-      episode.trajectories
-      |> Enum.map(&extract_trajectory(episode, &1, llm, embedding, llm_opts, config))
-      |> collect_results()
+      changesets =
+        episode.trajectories
+        |> Enum.map(fn trajectory ->
+          Logger.debug("extracting trajectory #{trajectory.id}")
 
-    case changesets do
-      {:ok, css} -> {:ok, Enum.reduce(css, Changeset.new(), &Changeset.merge(&2, &1))}
-      {:error, _} = err -> err
-    end
+          extract_trajectory(episode, trajectory, llm, embedding, llm_opts, config)
+        end)
+        |> collect_results()
+
+      case changesets do
+        {:ok, css} ->
+          cs = Enum.reduce(css, Changeset.new(), &Changeset.merge(&2, &1))
+
+          {{:ok, cs},
+           %{
+             trajectory_count: length(episode.trajectories),
+             nodes_created: length(cs.additions),
+             links_created: length(cs.links)
+           }}
+
+        {:error, _} = err ->
+          {err, %{}}
+      end
+    end)
   end
 
   defp extract_trajectory(episode, trajectory, llm, embedding, llm_opts, config) do
@@ -53,7 +71,14 @@ defmodule Mnemosyne.Pipeline.Structuring do
     ]
 
     [semantic_result, procedural_result, return_result] =
-      Task.await_many(extraction_tasks, :timer.seconds(60))
+      try do
+        Task.await_many(extraction_tasks, :timer.seconds(60))
+      rescue
+        e ->
+          Logger.warning("extraction tasks timed out after 60s for trajectory #{trajectory.id}")
+
+          reraise e, __STACKTRACE__
+      end
 
     with {:ok, semantic_cs} <- semantic_result,
          {:ok, procedural_cs} <- procedural_result,

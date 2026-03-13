@@ -10,6 +10,8 @@ defmodule Mnemosyne.Session do
   """
   use GenStateMachine, callback_mode: :state_functions
 
+  require Logger
+
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.MemoryStore
   alias Mnemosyne.Pipeline.Episode
@@ -128,6 +130,7 @@ defmodule Mnemosyne.Session do
 
   def idle({:call, from}, {:start_episode, goal}, data) do
     episode = Episode.new(goal)
+    emit_transition(data, :idle, :collecting)
     {:next_state, :collecting, %{data | episode: episode}, [{:reply, from, :ok}]}
   end
 
@@ -175,6 +178,7 @@ defmodule Mnemosyne.Session do
       {:ok, closed_episode} ->
         new_data = %{data | episode: closed_episode}
         task = spawn_extraction(new_data)
+        emit_transition(data, :collecting, :extracting)
         {:next_state, :extracting, %{new_data | extraction_task: task.ref}, [{:reply, from, :ok}]}
 
       {:error, _} = error ->
@@ -222,15 +226,20 @@ defmodule Mnemosyne.Session do
 
   def extracting(:info, {ref, {:ok, %Changeset{} = changeset}}, %{extraction_task: ref} = data) do
     Process.demonitor(ref, [:flush])
+    emit_transition(data, :extracting, :ready)
     {:next_state, :ready, %{data | changeset: changeset, extraction_task: nil}}
   end
 
   def extracting(:info, {ref, {:error, _reason}}, %{extraction_task: ref} = data) do
     Process.demonitor(ref, [:flush])
+    Logger.error("extraction failed for session #{data.id}")
+    emit_transition(data, :extracting, :failed)
     {:next_state, :failed, %{data | extraction_task: nil}}
   end
 
   def extracting(:info, {:DOWN, ref, :process, _pid, _reason}, %{extraction_task: ref} = data) do
+    Logger.error("extraction failed for session #{data.id}")
+    emit_transition(data, :extracting, :failed)
     {:next_state, :failed, %{data | extraction_task: nil}}
   end
 
@@ -240,10 +249,12 @@ defmodule Mnemosyne.Session do
 
   def failed({:call, from}, :commit, data) do
     task = spawn_extraction(data)
+    emit_transition(data, :failed, :extracting)
     {:next_state, :extracting, %{data | extraction_task: task.ref}, [{:reply, from, :ok}]}
   end
 
   def failed({:call, from}, :discard, data) do
+    emit_transition(data, :failed, :idle)
     {:next_state, :idle, %{data | episode: nil, changeset: nil}, [{:reply, from, :ok}]}
   end
 
@@ -265,6 +276,7 @@ defmodule Mnemosyne.Session do
   def ready({:call, from}, :commit, data) do
     case MemoryStore.apply_changeset(data.memory_store, data.changeset) do
       :ok ->
+        emit_transition(data, :ready, :idle)
         {:next_state, :idle, %{data | episode: nil, changeset: nil}, [{:reply, from, :ok}]}
 
       {:error, _} = error ->
@@ -273,6 +285,7 @@ defmodule Mnemosyne.Session do
   end
 
   def ready({:call, from}, :discard, data) do
+    emit_transition(data, :ready, :idle)
     {:next_state, :idle, %{data | episode: nil, changeset: nil}, [{:reply, from, :ok}]}
   end
 
@@ -319,5 +332,15 @@ defmodule Mnemosyne.Session do
 
   defp generate_id do
     "session_#{:crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)}"
+  end
+
+  defp emit_transition(data, from_state, to_state) do
+    Logger.debug("session #{data.id} transitioning #{from_state} -> #{to_state}")
+
+    :telemetry.execute(
+      [:mnemosyne, :session, :transition, :stop],
+      %{duration: 0},
+      %{session_id: data.id, from_state: from_state, to_state: to_state}
+    )
   end
 end

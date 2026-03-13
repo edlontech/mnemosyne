@@ -14,23 +14,49 @@ if Code.ensure_loaded?(Sycophant) do
     @impl true
     def chat(messages, opts) do
       {model, sycophant_opts} = Keyword.pop!(opts, :model)
-      syc_messages = Enum.map(messages, &to_sycophant_message/1)
+      step = Keyword.get(sycophant_opts, :step)
 
-      case Sycophant.generate_text(model, syc_messages, sycophant_opts) do
-        {:ok, response} -> {:ok, to_response(response, :text)}
-        {:error, _} = err -> err
-      end
+      Mnemosyne.Telemetry.span([:llm, :chat], %{model: model, step: step}, fn ->
+        syc_messages = Enum.map(messages, &to_sycophant_message/1)
+
+        case Sycophant.generate_text(model, syc_messages, sycophant_opts) do
+          {:ok, response} ->
+            resp = to_response(response, :text)
+            usage = extract_usage(response.usage)
+
+            {{:ok, resp},
+             %{tokens_input: usage[:input_tokens], tokens_output: usage[:output_tokens]}}
+
+          {:error, _} = err ->
+            {err, %{}}
+        end
+      end)
     end
 
     @impl true
     def chat_structured(messages, schema, opts) do
       {model, sycophant_opts} = Keyword.pop!(opts, :model)
-      syc_messages = Enum.map(messages, &to_sycophant_message/1)
+      step = Keyword.get(sycophant_opts, :step)
 
-      case Sycophant.generate_object(model, syc_messages, schema, sycophant_opts) do
-        {:ok, response} -> {:ok, to_response(response, :object)}
-        {:error, _} = err -> err
-      end
+      Mnemosyne.Telemetry.span(
+        [:llm, :chat_structured],
+        %{model: model, step: step, schema: schema},
+        fn ->
+          syc_messages = Enum.map(messages, &to_sycophant_message/1)
+
+          case Sycophant.generate_object(model, syc_messages, schema, sycophant_opts) do
+            {:ok, response} ->
+              resp = to_response(response, :object)
+              usage = extract_usage(response.usage)
+
+              {{:ok, resp},
+               %{tokens_input: usage[:input_tokens], tokens_output: usage[:output_tokens]}}
+
+            {:error, _} = err ->
+              {err, %{}}
+          end
+        end
+      )
     end
 
     defp to_sycophant_message(%{role: :system, content: content}), do: Message.system(content)

@@ -7,6 +7,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   and performs multi-hop traversal to expand and re-rank results.
   """
 
+  require Logger
+
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
   alias Mnemosyne.Graph
@@ -48,30 +50,40 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   """
   @spec retrieve(String.t(), keyword()) :: {:ok, Result.t()} | {:error, term()}
   def retrieve(query, opts) do
-    llm = Keyword.fetch!(opts, :llm)
-    embedding = Keyword.fetch!(opts, :embedding)
-    graph = Keyword.fetch!(opts, :graph)
-    value_fns = Keyword.fetch!(opts, :value_functions)
-    llm_opts = Keyword.get(opts, :llm_opts, [])
-    config = Keyword.get(opts, :config)
-    max_hops = Keyword.get(opts, :max_hops, @default_max_hops)
+    Mnemosyne.Telemetry.span([:retrieval, :retrieve], %{}, fn ->
+      llm = Keyword.fetch!(opts, :llm)
+      embedding = Keyword.fetch!(opts, :embedding)
+      graph = Keyword.fetch!(opts, :graph)
+      value_fns = Keyword.fetch!(opts, :value_functions)
+      llm_opts = Keyword.get(opts, :llm_opts, [])
+      config = Keyword.get(opts, :config)
+      max_hops = Keyword.get(opts, :max_hops, @default_max_hops)
 
-    with {:ok, mode} <- classify_mode(query, llm, llm_opts, config),
-         {:ok, tags} <- generate_plan(query, mode, llm, llm_opts, config),
-         {:ok, %Embedding.Response{vectors: tag_vectors}} <-
-           embedding.embed_batch(tags, Config.embedding_opts(config)),
-         {:ok, %Embedding.Response{vectors: [query_vector]}} <-
-           embedding.embed(query, Config.embedding_opts(config)) do
-      target_types = types_for_mode(mode)
+      with {:ok, mode} <- classify_mode(query, llm, llm_opts, config),
+           {:ok, tags} <- generate_plan(query, mode, llm, llm_opts, config),
+           {:ok, %Embedding.Response{vectors: tag_vectors}} <-
+             embedding.embed_batch(tags, Config.embedding_opts(config)),
+           {:ok, %Embedding.Response{vectors: [query_vector]}} <-
+             embedding.embed(query, Config.embedding_opts(config)) do
+        Logger.debug("retrieval mode classified as #{mode}")
 
-      candidates =
-        hop_0(graph, query_vector, tag_vectors, target_types, value_fns)
-        |> multi_hop(graph, query_vector, value_fns, max_hops)
-        |> maybe_expand_provenance(graph, mode)
-        |> partition_by_type()
+        target_types = types_for_mode(mode)
 
-      {:ok, %Result{mode: mode, tags: tags, candidates: candidates}}
-    end
+        candidates =
+          hop_0(graph, query_vector, tag_vectors, target_types, value_fns)
+          |> multi_hop(graph, query_vector, value_fns, max_hops)
+          |> maybe_expand_provenance(graph, mode)
+          |> partition_by_type()
+
+        total_candidates =
+          candidates |> Map.values() |> List.flatten() |> length()
+
+        {{:ok, %Result{mode: mode, tags: tags, candidates: candidates}},
+         %{candidates_found: total_candidates}}
+      else
+        error -> {error, %{}}
+      end
+    end)
   end
 
   defp classify_mode(query, llm, llm_opts, config) do

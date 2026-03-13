@@ -8,6 +8,8 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   `ReasonedMemory` struct.
   """
 
+  require Logger
+
   alias Mnemosyne.Config
   alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Prompts.ReasonEpisodic
@@ -39,10 +41,21 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   """
   @spec reason(Retrieval.Result.t(), keyword()) :: {:ok, ReasonedMemory.t()} | {:error, term()}
   def reason(%Retrieval.Result{candidates: candidates}, opts) do
+    Mnemosyne.Telemetry.span([:reasoning, :reason], %{}, fn ->
+      do_reason(candidates, opts)
+    end)
+  end
+
+  defp do_reason(candidates, opts) do
     llm = Keyword.fetch!(opts, :llm)
     query = Keyword.fetch!(opts, :query)
     llm_opts = Keyword.get(opts, :llm_opts, [])
     config = Keyword.get(opts, :config)
+
+    candidate_types =
+      candidates
+      |> Enum.reject(fn {_type, nodes} -> nodes == [] end)
+      |> Enum.map(fn {type, _} -> type end)
 
     tasks =
       Enum.reject(
@@ -54,20 +67,30 @@ defmodule Mnemosyne.Pipeline.Reasoning do
         &is_nil/1
       )
 
-    results = Task.await_many(tasks, :timer.seconds(60))
+    results = await_with_timeout(tasks, "reasoning")
 
     case collect_results(results) do
       {:ok, summaries} ->
-        memory =
-          Enum.reduce(summaries, %ReasonedMemory{}, fn {type, summary}, acc ->
-            Map.put(acc, type, summary)
-          end)
-
-        {:ok, memory}
+        memory = build_memory(summaries)
+        {{:ok, memory}, %{candidate_types: candidate_types}}
 
       {:error, _} = err ->
-        err
+        {err, %{}}
     end
+  end
+
+  defp build_memory(summaries) do
+    Enum.reduce(summaries, %ReasonedMemory{}, fn {type, summary}, acc ->
+      Map.put(acc, type, summary)
+    end)
+  end
+
+  defp await_with_timeout(tasks, label) do
+    Task.await_many(tasks, :timer.seconds(60))
+  rescue
+    e ->
+      Logger.warning("#{label} tasks timed out after 60s")
+      reraise e, __STACKTRACE__
   end
 
   defp maybe_reason(type, candidates, query, llm, llm_opts, config) do

@@ -8,12 +8,15 @@ defmodule Mnemosyne.Pipeline.Episode do
   """
   use TypedStruct
 
+  require Logger
+
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.Pipeline.Prompts.GetReward
   alias Mnemosyne.Pipeline.Prompts.GetState
   alias Mnemosyne.Pipeline.Prompts.GetSubgoal
+  alias Mnemosyne.Telemetry
 
   @trajectory_similarity_threshold 0.75
 
@@ -63,33 +66,47 @@ defmodule Mnemosyne.Pipeline.Episode do
     do: {:error, :episode_closed}
 
   def append(%__MODULE__{} = episode, observation, action, opts) do
-    llm = Keyword.fetch!(opts, :llm)
-    embedding = Keyword.fetch!(opts, :embedding)
-    llm_opts = Keyword.get(opts, :llm_opts, [])
-    config = Keyword.get(opts, :config)
+    Telemetry.span([:episode, :append], %{episode_id: episode.id}, fn ->
+      llm = Keyword.fetch!(opts, :llm)
+      embedding = Keyword.fetch!(opts, :embedding)
+      llm_opts = Keyword.get(opts, :llm_opts, [])
+      config = Keyword.get(opts, :config)
 
-    with {:ok, subgoal} <- infer_subgoal(llm, observation, action, episode.goal, config, llm_opts),
-         {:ok, %Embedding.Response{vectors: [subgoal_embedding | _]}} <-
-           embedding.embed(subgoal, Config.embedding_opts(config)),
-         {:ok, reward} <- evaluate_reward(llm, observation, action, subgoal, config, llm_opts),
-         {:ok, state} <- summarize_state(llm, episode, config, llm_opts) do
-      step = %{
-        index: length(episode.steps),
-        observation: observation,
-        action: action,
-        subgoal: subgoal,
-        state: state,
-        reward: reward,
-        embedding: subgoal_embedding,
-        trajectory_id: episode.current_trajectory_id
-      }
+      with {:ok, subgoal} <-
+             infer_subgoal(llm, observation, action, episode.goal, config, llm_opts),
+           {:ok, %Embedding.Response{vectors: [subgoal_embedding | _]}} <-
+             embedding.embed(subgoal, Config.embedding_opts(config)),
+           {:ok, reward} <- evaluate_reward(llm, observation, action, subgoal, config, llm_opts),
+           {:ok, state} <- summarize_state(llm, episode, config, llm_opts) do
+        step = %{
+          index: length(episode.steps),
+          observation: observation,
+          action: action,
+          subgoal: subgoal,
+          state: state,
+          reward: reward,
+          embedding: subgoal_embedding,
+          trajectory_id: episode.current_trajectory_id
+        }
 
-      episode = maybe_segment_trajectory(episode, subgoal_embedding)
-      step = %{step | trajectory_id: episode.current_trajectory_id}
+        prev_trajectory_id = episode.current_trajectory_id
+        episode = maybe_segment_trajectory(episode, subgoal_embedding)
+        step = %{step | trajectory_id: episode.current_trajectory_id}
 
-      {:ok,
-       %{episode | steps: episode.steps ++ [step], current_subgoal_embedding: subgoal_embedding}}
-    end
+        updated =
+          %{
+            episode
+            | steps: episode.steps ++ [step],
+              current_subgoal_embedding: subgoal_embedding
+          }
+
+        new_trajectory = updated.current_trajectory_id != prev_trajectory_id
+
+        {{:ok, updated}, %{step_count: length(updated.steps), new_trajectory: new_trajectory}}
+      else
+        error -> {error, %{}}
+      end
+    end)
   end
 
   @doc "Closes the episode, grouping steps into trajectory segments."
@@ -136,6 +153,10 @@ defmodule Mnemosyne.Pipeline.Episode do
     similarity = Similarity.cosine_similarity(episode.current_subgoal_embedding, new_embedding)
 
     if similarity < @trajectory_similarity_threshold do
+      Logger.debug(
+        "trajectory boundary detected (similarity=#{similarity} threshold=#{@trajectory_similarity_threshold})"
+      )
+
       %{episode | current_trajectory_id: generate_id("traj")}
     else
       episode

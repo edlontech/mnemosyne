@@ -14,7 +14,7 @@ defmodule Mnemosyne.Integration.EmbeddingAdaptersTest do
 
       assert [vector] = response.vectors
       assert is_list(vector)
-      assert length(vector) > 0
+      assert vector != []
       assert Enum.all?(vector, &is_float/1)
     end
 

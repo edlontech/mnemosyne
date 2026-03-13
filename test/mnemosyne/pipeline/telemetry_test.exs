@@ -1,0 +1,253 @@
+defmodule Mnemosyne.Pipeline.TelemetryTest do
+  use ExUnit.Case, async: false
+  use Mimic
+
+  alias Mnemosyne.Embedding
+  alias Mnemosyne.Graph
+  alias Mnemosyne.Graph.Node.Semantic
+  alias Mnemosyne.LLM
+  alias Mnemosyne.Pipeline.Episode
+  alias Mnemosyne.Pipeline.Reasoning
+  alias Mnemosyne.Pipeline.Retrieval
+  alias Mnemosyne.Pipeline.Structuring
+  alias Mnemosyne.ValueFunctions
+
+  setup :set_mimic_global
+
+  @default_opts [llm: Mnemosyne.MockLLM, embedding: Mnemosyne.MockEmbedding]
+  @test_vector List.duplicate(0.1, 128)
+
+  defp attach_telemetry(event_name, test_pid \\ self()) do
+    handler_id = "test-#{inspect(event_name)}-#{System.unique_integer()}"
+
+    :telemetry.attach(
+      handler_id,
+      event_name,
+      fn event, measurements, metadata, _ ->
+        send(test_pid, {:telemetry, event, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  defp stub_append_cycle do
+    Mnemosyne.MockLLM
+    |> stub(:chat, fn _messages, _opts ->
+      {:ok, %LLM.Response{content: "0.8", model: "mock:test", usage: %{}}}
+    end)
+
+    Mnemosyne.MockEmbedding
+    |> stub(:embed, fn _text, _opts ->
+      {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+    end)
+  end
+
+  defp stub_extraction_llm do
+    Mnemosyne.MockLLM
+    |> stub(:chat, fn messages, _opts ->
+      system_content =
+        messages
+        |> Enum.find(%{content: ""}, &(&1.role == :system))
+        |> Map.get(:content)
+
+      content =
+        cond do
+          system_content =~ "factual knowledge" -> "fact one\nfact two"
+          system_content =~ "actionable instructions" -> "WHEN: always\nDO: thing\nEXPECT: result"
+          system_content =~ "return value" -> "0.85"
+          true -> "0.8"
+        end
+
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    end)
+
+    Mnemosyne.MockEmbedding
+    |> stub(:embed, fn _text, _opts ->
+      {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+    end)
+    |> stub(:embed_batch, fn texts, _opts ->
+      vectors = Enum.map(texts, fn _ -> @test_vector end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
+    end)
+  end
+
+  defp stub_retrieval_llm do
+    Mnemosyne.MockLLM
+    |> stub(:chat, fn messages, _opts ->
+      system_content =
+        messages
+        |> Enum.find(%{content: ""}, &(&1.role == :system))
+        |> Map.get(:content)
+
+      content =
+        cond do
+          system_content =~ "classifying memory retrieval" -> "semantic"
+          system_content =~ "planning memory retrieval" -> "BEAM VM"
+          true -> "default"
+        end
+
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    end)
+  end
+
+  defp stub_default_embedding do
+    Mnemosyne.MockEmbedding
+    |> stub(:embed, fn _text, _opts ->
+      {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+    end)
+    |> stub(:embed_batch, fn texts, _opts ->
+      vectors = Enum.map(texts, fn _ -> @test_vector end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
+    end)
+  end
+
+  describe "Episode.append/4 telemetry" do
+    test "emits start and stop events" do
+      stub_append_cycle()
+      attach_telemetry([:mnemosyne, :episode, :append, :start])
+      attach_telemetry([:mnemosyne, :episode, :append, :stop])
+
+      episode = Episode.new("Test goal")
+      {:ok, _updated} = Episode.append(episode, "obs", "act", @default_opts)
+
+      assert_received {:telemetry, [:mnemosyne, :episode, :append, :start], start_measurements,
+                       %{episode_id: _}}
+
+      assert is_integer(start_measurements.monotonic_time)
+
+      assert_received {:telemetry, [:mnemosyne, :episode, :append, :stop], stop_measurements,
+                       %{episode_id: _}}
+
+      assert is_integer(stop_measurements.duration)
+      assert is_integer(stop_measurements.step_count)
+      assert is_boolean(stop_measurements.new_trajectory)
+    end
+
+    test "does not emit telemetry for closed episode" do
+      attach_telemetry([:mnemosyne, :episode, :append, :start])
+
+      episode = Episode.new("Test goal")
+      {:ok, closed} = Episode.close(episode)
+      {:error, :episode_closed} = Episode.append(closed, "obs", "act", @default_opts)
+
+      refute_received {:telemetry, [:mnemosyne, :episode, :append, :start], _, _}
+    end
+  end
+
+  describe "Structuring.extract/2 telemetry" do
+    test "emits start and stop events" do
+      stub_extraction_llm()
+      attach_telemetry([:mnemosyne, :structuring, :extract, :start])
+      attach_telemetry([:mnemosyne, :structuring, :extract, :stop])
+
+      episode = Episode.new("Test goal")
+      {:ok, episode} = Episode.append(episode, "obs", "act", @default_opts)
+      {:ok, closed} = Episode.close(episode)
+
+      stub_extraction_llm()
+      {:ok, _cs} = Structuring.extract(closed, @default_opts)
+
+      assert_received {:telemetry, [:mnemosyne, :structuring, :extract, :start], _,
+                       %{episode_id: _}}
+
+      assert_received {:telemetry, [:mnemosyne, :structuring, :extract, :stop], stop_measurements,
+                       %{episode_id: _}}
+
+      assert is_integer(stop_measurements.trajectory_count)
+      assert is_integer(stop_measurements.nodes_created)
+      assert is_integer(stop_measurements.links_created)
+    end
+
+    test "does not emit telemetry for unclosed episode" do
+      attach_telemetry([:mnemosyne, :structuring, :extract, :start])
+
+      episode = Episode.new("Test goal")
+      {:error, :episode_not_closed} = Structuring.extract(episode, @default_opts)
+
+      refute_received {:telemetry, [:mnemosyne, :structuring, :extract, :start], _, _}
+    end
+  end
+
+  describe "Retrieval.retrieve/2 telemetry" do
+    test "emits start and stop events" do
+      stub_retrieval_llm()
+      stub_default_embedding()
+      attach_telemetry([:mnemosyne, :retrieval, :retrieve, :start])
+      attach_telemetry([:mnemosyne, :retrieval, :retrieve, :stop])
+
+      graph =
+        Graph.put_node(Graph.new(), %Semantic{
+          id: "sem_1",
+          proposition: "Elixir runs on BEAM",
+          confidence: 0.95,
+          embedding: @test_vector
+        })
+
+      opts =
+        @default_opts ++
+          [
+            graph: graph,
+            value_functions: %{
+              semantic: ValueFunctions.SemanticRelevant,
+              tag: ValueFunctions.TagExact
+            }
+          ]
+
+      {:ok, _result} = Retrieval.retrieve("Tell me about Elixir", opts)
+
+      assert_received {:telemetry, [:mnemosyne, :retrieval, :retrieve, :start], _, %{}}
+
+      assert_received {:telemetry, [:mnemosyne, :retrieval, :retrieve, :stop], stop_measurements,
+                       %{}}
+
+      assert is_integer(stop_measurements.candidates_found)
+    end
+  end
+
+  describe "Reasoning.reason/2 telemetry" do
+    test "emits start and stop events" do
+      Mnemosyne.MockLLM
+      |> stub(:chat, fn _messages, _opts ->
+        {:ok, %LLM.Response{content: "Summary text.", model: "mock:test", usage: %{}}}
+      end)
+
+      attach_telemetry([:mnemosyne, :reasoning, :reason, :start])
+      attach_telemetry([:mnemosyne, :reasoning, :reason, :stop])
+
+      result = %Retrieval.Result{
+        mode: :semantic,
+        tags: ["test"],
+        candidates: %{
+          semantic: [
+            {%Semantic{id: "sem_1", proposition: "fact", confidence: 0.9}, 0.85}
+          ]
+        }
+      }
+
+      {:ok, _memory} = Reasoning.reason(result, llm: Mnemosyne.MockLLM, query: "test query")
+
+      assert_received {:telemetry, [:mnemosyne, :reasoning, :reason, :start], _, %{}}
+
+      assert_received {:telemetry, [:mnemosyne, :reasoning, :reason, :stop], stop_measurements,
+                       %{}}
+
+      assert is_list(stop_measurements.candidate_types)
+      assert :semantic in stop_measurements.candidate_types
+    end
+
+    test "empty candidates still emit telemetry" do
+      attach_telemetry([:mnemosyne, :reasoning, :reason, :start])
+      attach_telemetry([:mnemosyne, :reasoning, :reason, :stop])
+
+      result = %Retrieval.Result{mode: :mixed, tags: [], candidates: %{}}
+
+      {:ok, _memory} = Reasoning.reason(result, llm: Mnemosyne.MockLLM, query: "test")
+
+      assert_received {:telemetry, [:mnemosyne, :reasoning, :reason, :start], _, _}
+      assert_received {:telemetry, [:mnemosyne, :reasoning, :reason, :stop], stop_measurements, _}
+      assert stop_measurements.candidate_types == []
+    end
+  end
+end

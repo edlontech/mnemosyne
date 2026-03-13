@@ -83,9 +83,14 @@ defmodule Mnemosyne.Graph do
   @doc "Applies a changeset's additions and links to the graph."
   @spec apply_changeset(t(), Changeset.t()) :: t()
   def apply_changeset(%__MODULE__{} = graph, %Changeset{} = cs) do
-    graph
-    |> apply_additions(cs.additions)
-    |> apply_links(cs.links)
+    Mnemosyne.Telemetry.span([:graph, :apply_changeset], %{}, fn ->
+      result =
+        graph
+        |> apply_additions(cs.additions)
+        |> apply_links(cs.links)
+
+      {result, %{nodes_added: length(cs.additions), links_added: length(cs.links)}}
+    end)
   end
 
   defp put_in_nodes(%__MODULE__{} = graph, id, node) do
