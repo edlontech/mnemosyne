@@ -12,7 +12,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
   alias Mnemosyne.Errors.Invalid.PromptError
 
   @doc "Returns the Zoi schema for structured LLM output validation."
-  @spec schema :: Zoi.Types.Map.t()
+  @spec schema :: Zoi.Type.t()
   def schema do
     Zoi.map(
       %{

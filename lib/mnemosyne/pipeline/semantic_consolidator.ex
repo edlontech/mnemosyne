@@ -66,15 +66,17 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
         condemned
       else
         neighbors = tag_neighbors(node, backend_mod, bs)
-
-        Enum.reduce(neighbors, condemned, fn neighbor_id, acc ->
-          if neighbor_id == node_id or MapSet.member?(acc, neighbor_id) do
-            acc
-          else
-            compare_and_condemn(node_id, neighbor_id, sem_by_id, all_meta, params, threshold, acc)
-          end
-        end)
+        check_neighbors(neighbors, node_id, sem_by_id, all_meta, params, threshold, condemned)
       end
+    end)
+  end
+
+  defp check_neighbors(neighbors, node_id, sem_by_id, all_meta, params, threshold, condemned) do
+    Enum.reduce(neighbors, condemned, fn neighbor_id, acc ->
+      if neighbor_id == node_id or MapSet.member?(acc, neighbor_id),
+        do: acc,
+        else:
+          compare_and_condemn(node_id, neighbor_id, sem_by_id, all_meta, params, threshold, acc)
     end)
   end
 
@@ -107,7 +109,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     else
       similarity = Similarity.cosine_similarity(emb_a, emb_b)
 
-      if is_float(similarity) and similarity > threshold do
+      if similarity > threshold do
         loser = pick_loser(id_a, id_b, all_meta, params)
         MapSet.put(condemned, loser)
       else
