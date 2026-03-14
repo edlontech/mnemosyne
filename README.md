@@ -72,6 +72,14 @@ Two standalone operations keep the graph clean over time:
 
 Both are triggered explicitly via `Mnemosyne.consolidate_semantics/2` and `Mnemosyne.decay_nodes/2`.
 
+### 5. Notifier -- Real-Time Events
+
+The `Mnemosyne.Notifier` behaviour receives events whenever the graph changes -- changeset applications, node deletions, decay/consolidation results, recall queries, and session state transitions. Plug in a `Phoenix.PubSub` adapter to build live graph visualizations without any Phoenix dependency in Mnemosyne itself.
+
+Four query functions (`get_node`, `get_nodes_by_type`, `get_metadata`, `get_linked_nodes`) complement the event stream, letting consumers fetch current node state on demand.
+
+See the [Notifier guide](guides/notifier.md) for implementation details and a LiveView example.
+
 ## Architecture
 
 ```mermaid

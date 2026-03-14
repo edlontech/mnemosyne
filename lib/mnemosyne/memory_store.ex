@@ -11,6 +11,7 @@ defmodule Mnemosyne.MemoryStore do
 
   alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Graph
+  alias Mnemosyne.Notifier
   alias Mnemosyne.Pipeline.Decay
   alias Mnemosyne.Pipeline.IntentMerger
   alias Mnemosyne.Pipeline.Reasoning
@@ -80,11 +81,38 @@ defmodule Mnemosyne.MemoryStore do
     GenServer.call(server, {:decay_nodes, opts}, :timer.seconds(120))
   end
 
-  @doc "Returns the config, llm, and embedding modules for session creation."
+  @doc "Fetches a single node by ID from the backend."
+  @spec get_node(GenServer.server(), String.t()) :: {:ok, struct() | nil} | {:error, term()}
+  def get_node(server, node_id) do
+    GenServer.call(server, {:get_node, node_id})
+  end
+
+  @doc "Fetches all nodes of the given types from the backend."
+  @spec get_nodes_by_type(GenServer.server(), [atom()]) :: {:ok, [struct()]} | {:error, term()}
+  def get_nodes_by_type(server, types) do
+    GenServer.call(server, {:get_nodes_by_type, types})
+  end
+
+  @doc "Fetches metadata for the given node IDs."
+  @spec get_metadata(GenServer.server(), [String.t()]) ::
+          {:ok, %{String.t() => Mnemosyne.NodeMetadata.t()}} | {:error, term()}
+  def get_metadata(server, node_ids) do
+    GenServer.call(server, {:get_metadata, node_ids})
+  end
+
+  @doc "Fetches nodes by their IDs from the backend."
+  @spec get_linked_nodes(GenServer.server(), [String.t()]) :: {:ok, [struct()]} | {:error, term()}
+  def get_linked_nodes(server, node_ids) do
+    GenServer.call(server, {:get_linked_nodes, node_ids})
+  end
+
+  @doc "Returns the config, llm, embedding, notifier, and repo_id for session creation."
   @spec get_session_defaults(GenServer.server()) :: %{
           config: term(),
           llm: module(),
-          embedding: module()
+          embedding: module(),
+          notifier: module(),
+          repo_id: String.t() | nil
         }
   def get_session_defaults(server) do
     GenServer.call(server, :get_session_defaults)
@@ -104,6 +132,7 @@ defmodule Mnemosyne.MemoryStore do
           config: Keyword.fetch!(opts, :config),
           llm: Keyword.fetch!(opts, :llm),
           embedding: Keyword.fetch!(opts, :embedding),
+          notifier: Keyword.get(opts, :notifier, Mnemosyne.Notifier.Noop),
           task_supervisor: Keyword.fetch!(opts, :task_supervisor),
           pending_recalls: %{}
         }
@@ -131,6 +160,7 @@ defmodule Mnemosyne.MemoryStore do
     with {:ok, merged_cs} <- IntentMerger.merge(changeset, merge_opts),
          {:ok, new_bs} <- backend_mod.apply_changeset(merged_cs, backend_state),
          {:ok, final_bs} <- maybe_update_metadata(backend_mod, merged_cs.metadata, new_bs) do
+      Notifier.safe_notify(state.notifier, state.repo_id, {:changeset_applied, merged_cs})
       {:reply, :ok, %{state | backend: {backend_mod, final_bs}}}
     else
       {:error, _} = error ->
@@ -145,11 +175,52 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   @impl true
+  def handle_call({:get_node, node_id}, _from, state) do
+    {backend_mod, backend_state} = state.backend
+
+    case backend_mod.get_node(node_id, backend_state) do
+      {:ok, node, _bs} -> {:reply, {:ok, node}, state}
+      {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_nodes_by_type, types}, _from, state) do
+    {backend_mod, backend_state} = state.backend
+
+    case backend_mod.get_nodes_by_type(types, backend_state) do
+      {:ok, nodes, _bs} -> {:reply, {:ok, nodes}, state}
+      {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_metadata, node_ids}, _from, state) do
+    {backend_mod, backend_state} = state.backend
+
+    case backend_mod.get_metadata(node_ids, backend_state) do
+      {:ok, metadata, _bs} -> {:reply, {:ok, metadata}, state}
+      {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_linked_nodes, node_ids}, _from, state) do
+    {backend_mod, backend_state} = state.backend
+
+    case backend_mod.get_linked_nodes(node_ids, backend_state) do
+      {:ok, nodes, _bs} -> {:reply, {:ok, nodes}, state}
+      {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
+  @impl true
   def handle_call(:get_session_defaults, _from, state) do
     defaults = %{
       config: state.config,
       llm: state.llm,
       embedding: state.embedding,
+      notifier: state.notifier,
       repo_id: state.repo_id
     }
 
@@ -159,7 +230,7 @@ defmodule Mnemosyne.MemoryStore do
   @impl true
   def handle_call({:recall, query, opts}, from, state) do
     task = spawn_recall_task(state, query, opts)
-    pending = Map.put(state.pending_recalls, task.ref, from)
+    pending = Map.put(state.pending_recalls, task.ref, {from, query})
     {:noreply, %{state | pending_recalls: pending}}
   end
 
@@ -167,7 +238,7 @@ defmodule Mnemosyne.MemoryStore do
   def handle_call({:recall_in_context, session_id, query, opts}, from, state) do
     augmented_query = augment_query_with_context(session_id, query)
     task = spawn_recall_task(state, augmented_query, opts)
-    pending = Map.put(state.pending_recalls, task.ref, from)
+    pending = Map.put(state.pending_recalls, task.ref, {from, augmented_query})
     {:noreply, %{state | pending_recalls: pending}}
   end
 
@@ -180,6 +251,17 @@ defmodule Mnemosyne.MemoryStore do
       Telemetry.span([:consolidator, :consolidate], %{repo_id: state.repo_id}, fn ->
         case SemanticConsolidator.consolidate(consolidation_opts) do
           {:ok, result, updated_backend} ->
+            Notifier.safe_notify(
+              state.notifier,
+              state.repo_id,
+              {:consolidation_completed,
+               %{
+                 checked: result.checked,
+                 deleted: result.deleted,
+                 deleted_ids: result.deleted_ids
+               }}
+            )
+
             reply = {:ok, result}
             new_state = %{state | backend: updated_backend}
             {{reply, new_state}, %{checked: result.checked, deleted: result.deleted}}
@@ -201,6 +283,17 @@ defmodule Mnemosyne.MemoryStore do
       Telemetry.span([:decay, :prune], %{repo_id: state.repo_id}, fn ->
         case Decay.decay(decay_opts) do
           {:ok, result, updated_backend} ->
+            Notifier.safe_notify(
+              state.notifier,
+              state.repo_id,
+              {:decay_completed,
+               %{
+                 checked: result.checked,
+                 deleted: result.deleted,
+                 deleted_ids: result.deleted_ids
+               }}
+            )
+
             reply = {:ok, result}
             new_state = %{state | backend: updated_backend}
             {{reply, new_state}, %{checked: result.checked, deleted: result.deleted}}
@@ -219,6 +312,7 @@ defmodule Mnemosyne.MemoryStore do
 
     case backend_mod.delete_nodes(node_ids, backend_state) do
       {:ok, new_bs} ->
+        Notifier.safe_notify(state.notifier, state.repo_id, {:nodes_deleted, node_ids})
         {:reply, :ok, %{state | backend: {backend_mod, new_bs}}}
 
       {:error, _} = error ->
@@ -232,8 +326,17 @@ defmodule Mnemosyne.MemoryStore do
       {nil, _} ->
         {:noreply, state}
 
-      {from, pending} ->
+      {{from, query}, pending} ->
         Process.demonitor(ref, [:flush])
+
+        case result do
+          {:ok, _} ->
+            Notifier.safe_notify(state.notifier, state.repo_id, {:recall_executed, query, result})
+
+          _ ->
+            :ok
+        end
+
         GenServer.reply(from, result)
         {:noreply, %{state | pending_recalls: pending}}
     end
@@ -245,7 +348,7 @@ defmodule Mnemosyne.MemoryStore do
       {nil, _} ->
         {:noreply, state}
 
-      {from, pending} ->
+      {{from, _query}, pending} ->
         GenServer.reply(from, {:error, PipelineError.exception(reason: {:task_crashed, reason})})
         {:noreply, %{state | pending_recalls: pending}}
     end

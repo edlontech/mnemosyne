@@ -25,10 +25,15 @@ defmodule Mnemosyne.Pipeline.Decay do
     * `:threshold` - minimum score to survive (default `#{@default_threshold}`)
     * `:node_types` - list of node type atoms (default `#{inspect(@default_types)}`)
 
-  Returns `{:ok, %{deleted: n, checked: n}, {backend_mod, new_state}}`.
+  Returns `{:ok, %{deleted: n, checked: n, deleted_ids: [id]}, {backend_mod, new_state}}`.
   """
   @spec decay(keyword()) ::
-          {:ok, %{deleted: non_neg_integer(), checked: non_neg_integer()}, {module(), term()}}
+          {:ok,
+           %{
+             deleted: non_neg_integer(),
+             checked: non_neg_integer(),
+             deleted_ids: [String.t()]
+           }, {module(), term()}}
           | {:error, term()}
   def decay(opts) do
     {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
@@ -55,8 +60,10 @@ defmodule Mnemosyne.Pipeline.Decay do
            {:ok, orphan_ids, bs} <- find_orphaned_routing_nodes(backend_mod, bs),
            {:ok, bs} <- backend_mod.delete_nodes(orphan_ids, bs),
            {:ok, bs} <- backend_mod.delete_metadata(orphan_ids, bs) do
-        total = length(to_delete) + length(orphan_ids)
-        {:ok, %{deleted: total, checked: length(nodes)}, {backend_mod, bs}}
+        all_deleted = to_delete ++ orphan_ids
+
+        {:ok, %{deleted: length(all_deleted), checked: length(nodes), deleted_ids: all_deleted},
+         {backend_mod, bs}}
       end
     end
   end

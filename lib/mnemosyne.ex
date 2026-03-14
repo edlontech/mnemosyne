@@ -113,6 +113,7 @@ defmodule Mnemosyne do
       config: Keyword.get(opts, :config, defaults.config),
       llm: Keyword.get(opts, :llm, defaults.llm),
       embedding: Keyword.get(opts, :embedding, defaults.embedding),
+      notifier: Keyword.get(opts, :notifier, defaults.notifier),
       task_supervisor: task_sup
     ]
 
@@ -212,7 +213,8 @@ defmodule Mnemosyne do
         repo_id: repo_id,
         config: Keyword.get(opts, :config, defaults.config),
         llm: Keyword.get(opts, :llm, defaults.llm),
-        embedding: Keyword.get(opts, :embedding, defaults.embedding)
+        embedding: Keyword.get(opts, :embedding, defaults.embedding),
+        notifier: Keyword.get(opts, :notifier, defaults.notifier)
       ]
 
       case DynamicSupervisor.start_child(session_sup, {Session, session_opts}) do
@@ -406,6 +408,40 @@ defmodule Mnemosyne do
   def get_graph(repo_id, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.get_graph(pid)
+    end
+  end
+
+  @doc "Fetches a single node by ID from the repo's graph."
+  @spec get_node(String.t(), String.t(), keyword()) :: {:ok, struct() | nil} | {:error, term()}
+  def get_node(repo_id, node_id, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.get_node(pid, node_id)
+    end
+  end
+
+  @doc "Fetches all nodes of the given types from the repo's graph."
+  @spec get_nodes_by_type(String.t(), [atom()], keyword()) :: {:ok, [struct()]} | {:error, term()}
+  def get_nodes_by_type(repo_id, types, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.get_nodes_by_type(pid, types)
+    end
+  end
+
+  @doc "Fetches metadata for the given node IDs."
+  @spec get_metadata(String.t(), [String.t()], keyword()) ::
+          {:ok, %{String.t() => Mnemosyne.NodeMetadata.t()}} | {:error, term()}
+  def get_metadata(repo_id, node_ids, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.get_metadata(pid, node_ids)
+    end
+  end
+
+  @doc "Fetches nodes linked to the given node IDs."
+  @spec get_linked_nodes(String.t(), [String.t()], keyword()) ::
+          {:ok, [struct()]} | {:error, term()}
+  def get_linked_nodes(repo_id, node_ids, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.get_linked_nodes(pid, node_ids)
     end
   end
 

@@ -25,10 +25,15 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     * `:config` - `%Mnemosyne.Config{}` (required)
     * `:threshold` - cosine similarity above which nodes are duplicates (default `#{@default_threshold}`)
 
-  Returns `{:ok, %{deleted: n, checked: n}, {backend_mod, new_state}}`.
+  Returns `{:ok, %{deleted: n, checked: n, deleted_ids: [id]}, {backend_mod, new_state}}`.
   """
   @spec consolidate(keyword()) ::
-          {:ok, %{deleted: non_neg_integer(), checked: non_neg_integer()}, {module(), term()}}
+          {:ok,
+           %{
+             deleted: non_neg_integer(),
+             checked: non_neg_integer(),
+             deleted_ids: [String.t()]
+           }, {module(), term()}}
           | {:error, term()}
   def consolidate(opts) do
     {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
@@ -48,7 +53,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
 
       with {:ok, bs} <- backend_mod.delete_nodes(to_delete, bs),
            {:ok, bs} <- backend_mod.delete_metadata(to_delete, bs) do
-        {:ok, %{deleted: length(to_delete), checked: length(sem_nodes)}, {backend_mod, bs}}
+        {:ok, %{deleted: length(to_delete), checked: length(sem_nodes), deleted_ids: to_delete},
+         {backend_mod, bs}}
       end
     end
   end

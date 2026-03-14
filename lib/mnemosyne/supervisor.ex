@@ -5,8 +5,8 @@ defmodule Mnemosyne.Supervisor do
   Starts the process tree with `:rest_for_one` strategy:
   SessionRegistry -> RepoRegistry -> TaskSupervisor -> RepoSupervisor -> SessionSupervisor.
 
-  Shared defaults (config, LLM adapter, embedding adapter) are stored in
-  `:persistent_term` and applied to each repo opened via `Mnemosyne.open_repo/2`.
+  Shared defaults (config, LLM adapter, embedding adapter, notifier) are stored
+  in `:persistent_term` and applied to each repo opened via `Mnemosyne.open_repo/2`.
   """
   use Supervisor
 
@@ -28,7 +28,8 @@ defmodule Mnemosyne.Supervisor do
     defaults = %{
       config: Keyword.fetch!(opts, :config),
       llm: Keyword.fetch!(opts, :llm),
-      embedding: Keyword.fetch!(opts, :embedding)
+      embedding: Keyword.fetch!(opts, :embedding),
+      notifier: Keyword.get(opts, :notifier, Mnemosyne.Notifier.Noop)
     }
 
     :persistent_term.put({__MODULE__, name, :defaults}, defaults)
@@ -48,7 +49,12 @@ defmodule Mnemosyne.Supervisor do
   Returns shared defaults (config, LLM adapter, embedding adapter)
   for the given supervisor instance.
   """
-  @spec get_defaults(module()) :: %{config: term(), llm: module(), embedding: module()}
+  @spec get_defaults(module()) :: %{
+          config: term(),
+          llm: module(),
+          embedding: module(),
+          notifier: module()
+        }
   def get_defaults(sup_name \\ __MODULE__) do
     :persistent_term.get({__MODULE__, sup_name, :defaults})
   end

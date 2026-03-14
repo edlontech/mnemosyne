@@ -52,6 +52,30 @@ defmodule Mnemosyne.SupervisorTest do
       assert defaults.config == config
       assert defaults.llm == Mnemosyne.MockLLM
       assert defaults.embedding == Mnemosyne.MockEmbedding
+      assert defaults.notifier == Mnemosyne.Notifier.Noop
+    end
+
+    test "accepts a custom notifier module" do
+      name = unique_sup_name()
+
+      defmodule CustomNotifier do
+        @behaviour Mnemosyne.Notifier
+        @impl true
+        def notify(_repo_id, _event), do: :ok
+      end
+
+      opts = [
+        name: name,
+        config: build_config(),
+        llm: Mnemosyne.MockLLM,
+        embedding: Mnemosyne.MockEmbedding,
+        notifier: CustomNotifier
+      ]
+
+      start_supervised!({MneSupervisor, opts})
+
+      defaults = MneSupervisor.get_defaults(name)
+      assert defaults.notifier == CustomNotifier
     end
   end
 

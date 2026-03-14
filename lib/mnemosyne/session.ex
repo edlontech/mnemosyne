@@ -15,6 +15,7 @@ defmodule Mnemosyne.Session do
   alias Mnemosyne.Errors.Framework.SessionError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.MemoryStore
+  alias Mnemosyne.Notifier
   alias Mnemosyne.Pipeline.Episode
   alias Mnemosyne.Pipeline.Structuring
 
@@ -29,6 +30,7 @@ defmodule Mnemosyne.Session do
           config: Mnemosyne.Config.t() | nil,
           llm: module() | nil,
           embedding: module() | nil,
+          notifier: module() | nil,
           memory_store: GenServer.server() | nil,
           task_supervisor: module() | nil,
           extraction_task: reference() | nil
@@ -43,6 +45,7 @@ defmodule Mnemosyne.Session do
     :config,
     :llm,
     :embedding,
+    :notifier,
     :memory_store,
     :task_supervisor,
     :extraction_task
@@ -158,6 +161,7 @@ defmodule Mnemosyne.Session do
       config: Keyword.fetch!(opts, :config),
       llm: Keyword.fetch!(opts, :llm),
       embedding: Keyword.fetch!(opts, :embedding),
+      notifier: Keyword.get(opts, :notifier, Mnemosyne.Notifier.Noop),
       memory_store: Keyword.fetch!(opts, :memory_store),
       task_supervisor: Keyword.fetch!(opts, :task_supervisor)
     }
@@ -412,6 +416,12 @@ defmodule Mnemosyne.Session do
       [:mnemosyne, :session, :transition, :stop],
       %{duration: 0},
       %{session_id: data.id, repo_id: data.repo_id, from_state: from_state, to_state: to_state}
+    )
+
+    Notifier.safe_notify(
+      data.notifier,
+      data.repo_id,
+      {:session_transition, data.id, from_state, to_state}
     )
   end
 end

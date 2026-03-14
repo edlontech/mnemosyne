@@ -87,6 +87,7 @@ defmodule Mnemosyne.MixProject do
         {"guides/custom-backends.md", title: "Custom Backends"},
         {"guides/custom-adapters.md", title: "Custom Adapters"},
         {"guides/multi-repo.md", title: "Multi-Repository Isolation"},
+        {"guides/notifier.md", title: "Notifier -- Real-Time Events"},
         {"LICENSE", title: "License"}
       ],
       groups_for_extras: [
@@ -98,7 +99,8 @@ defmodule Mnemosyne.MixProject do
           "guides/graph-maintenance.md",
           "guides/custom-backends.md",
           "guides/custom-adapters.md",
-          "guides/multi-repo.md"
+          "guides/multi-repo.md",
+          "guides/notifier.md"
         ],
         About: [
           "LICENSE"
@@ -135,7 +137,9 @@ defmodule Mnemosyne.MixProject do
           Mnemosyne.LLM,
           Mnemosyne.Embedding,
           Mnemosyne.ValueFunction,
-          Mnemosyne.Prompt
+          Mnemosyne.Prompt,
+          Mnemosyne.Notifier,
+          Mnemosyne.Notifier.Noop
         ],
         Adapters: [
           ~r/Mnemosyne\.Adapters\./
