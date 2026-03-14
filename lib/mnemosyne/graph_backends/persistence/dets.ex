@@ -22,17 +22,25 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
     end
   end
 
-  @doc "Reads all nodes from DETS and rebuilds a `Graph` struct."
-  @spec load(map()) :: {:ok, Graph.t()} | {:error, term()}
+  @doc """
+  Reads all records from DETS and rebuilds a `Graph` struct plus metadata map.
+
+  Node records are stored as `{id, node}` tuples, metadata records as
+  `{{:meta, id}, metadata}` tuples. Both are separated during the fold.
+  """
+  @spec load(map()) :: {:ok, Graph.t(), map()} | {:error, term()}
   def load(%{ref: ref}) do
-    graph =
+    {graph, metadata} =
       :dets.foldl(
-        fn {_id, node}, acc -> Graph.put_node(acc, node) end,
-        Graph.new(),
+        fn
+          {{:meta, id}, meta}, {g, m} -> {g, Map.put(m, id, meta)}
+          {_id, node}, {g, m} -> {Graph.put_node(g, node), m}
+        end,
+        {Graph.new(), %{}},
         ref
       )
 
-    {:ok, graph}
+    {:ok, graph, metadata}
   rescue
     e -> {:error, e}
   end
@@ -52,6 +60,34 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
     with :ok <- do_delete_nodes(node_ids, ref) do
       :dets.sync(ref)
     end
+  end
+
+  @doc "Persists metadata entries as `{{:meta, id}, metadata}` records."
+  @spec save_metadata(%{String.t() => struct()}, map()) :: :ok | {:error, term()}
+  def save_metadata(entries, %{ref: ref}) do
+    result =
+      Enum.reduce_while(entries, :ok, fn {id, meta}, :ok ->
+        case :dets.insert(ref, {{:meta, id}, meta}) do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+
+    with :ok <- result, do: :dets.sync(ref)
+  end
+
+  @doc "Removes metadata entries by node ID from DETS."
+  @spec delete_metadata([String.t()], map()) :: :ok | {:error, term()}
+  def delete_metadata(node_ids, %{ref: ref}) do
+    result =
+      Enum.reduce_while(node_ids, :ok, fn id, :ok ->
+        case :dets.delete(ref, {:meta, id}) do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+
+    with :ok <- result, do: :dets.sync(ref)
   end
 
   defp insert_nodes(additions, ref) do

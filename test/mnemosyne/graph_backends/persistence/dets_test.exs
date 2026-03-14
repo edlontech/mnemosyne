@@ -32,7 +32,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
 
       assert :ok = PersistenceDETS.save(changeset, state)
 
-      {:ok, graph} = PersistenceDETS.load(state)
+      {:ok, graph, _metadata} = PersistenceDETS.load(state)
       assert %Semantic{id: "s1"} = graph.nodes["s1"]
       assert %Semantic{id: "s2"} = graph.nodes["s2"]
 
@@ -51,7 +51,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
 
       assert :ok = PersistenceDETS.save(changeset, state)
 
-      {:ok, graph} = PersistenceDETS.load(state)
+      {:ok, graph, _metadata} = PersistenceDETS.load(state)
       assert MapSet.member?(graph.nodes["s1"].links, "s2")
       assert MapSet.member?(graph.nodes["s2"].links, "s1")
 
@@ -72,9 +72,68 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
       :ok = PersistenceDETS.save(changeset, state)
       assert :ok = PersistenceDETS.delete(["s1"], state)
 
-      {:ok, graph} = PersistenceDETS.load(state)
+      {:ok, graph, _metadata} = PersistenceDETS.load(state)
       assert is_nil(graph.nodes["s1"])
       assert %Semantic{id: "s2"} = graph.nodes["s2"]
+
+      :dets.close(state.ref)
+    end
+  end
+
+  describe "save_metadata/2 and load/1" do
+    alias Mnemosyne.NodeMetadata
+
+    test "round-trips metadata records", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "meta_roundtrip.dets")
+      {:ok, state} = PersistenceDETS.init(path: path)
+
+      meta1 = NodeMetadata.new(created_at: ~U[2025-01-01 00:00:00Z], access_count: 3)
+      meta2 = NodeMetadata.new(created_at: ~U[2025-06-01 00:00:00Z])
+
+      :ok = PersistenceDETS.save_metadata(%{"s1" => meta1, "s2" => meta2}, state)
+
+      {:ok, _graph, metadata} = PersistenceDETS.load(state)
+      assert %NodeMetadata{access_count: 3} = metadata["s1"]
+      assert %NodeMetadata{} = metadata["s2"]
+
+      :dets.close(state.ref)
+    end
+
+    test "load distinguishes node records from metadata records", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "mixed.dets")
+      {:ok, state} = PersistenceDETS.init(path: path)
+
+      changeset =
+        Changeset.add_node(Changeset.new(), semantic_node("s1"))
+
+      :ok = PersistenceDETS.save(changeset, state)
+
+      meta = NodeMetadata.new(created_at: ~U[2025-01-01 00:00:00Z])
+      :ok = PersistenceDETS.save_metadata(%{"s1" => meta}, state)
+
+      {:ok, graph, metadata} = PersistenceDETS.load(state)
+      assert %Semantic{id: "s1"} = graph.nodes["s1"]
+      assert %NodeMetadata{} = metadata["s1"]
+
+      :dets.close(state.ref)
+    end
+  end
+
+  describe "delete_metadata/2" do
+    alias Mnemosyne.NodeMetadata
+
+    test "removes metadata entries", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "meta_delete.dets")
+      {:ok, state} = PersistenceDETS.init(path: path)
+
+      meta = NodeMetadata.new(created_at: ~U[2025-01-01 00:00:00Z])
+      :ok = PersistenceDETS.save_metadata(%{"s1" => meta, "s2" => meta}, state)
+
+      :ok = PersistenceDETS.delete_metadata(["s1"], state)
+
+      {:ok, _graph, metadata} = PersistenceDETS.load(state)
+      refute Map.has_key?(metadata, "s1")
+      assert Map.has_key?(metadata, "s2")
 
       :dets.close(state.ref)
     end

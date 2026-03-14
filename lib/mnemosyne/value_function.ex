@@ -1,12 +1,15 @@
 defmodule Mnemosyne.ValueFunction do
   @moduledoc """
-  Behaviour for scoring and filtering memory nodes.
+  Behaviour for scoring memory nodes during retrieval.
 
-  Implementations define how relevance scores are computed,
-  what threshold to apply, and how many top results to return.
+  Implementations combine raw cosine relevance with node metadata
+  (recency, frequency, reward) to produce a final score.
   """
 
-  @callback score(relevance :: float(), node :: struct()) :: float()
-  @callback threshold() :: float()
-  @callback top_k() :: pos_integer()
+  @callback score(
+              relevance :: float(),
+              node :: struct(),
+              metadata :: map() | nil,
+              params :: map()
+            ) :: float()
 end

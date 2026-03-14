@@ -15,7 +15,6 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
   alias Mnemosyne.GraphBackends.InMemory
   alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Retrieval
-  alias Mnemosyne.ValueFunctions
 
   @default_opts [
     llm: Mnemosyne.MockLLM,
@@ -25,14 +24,17 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
   @test_vector List.duplicate(0.1, 128)
   @alt_vector List.duplicate(0.2, 128)
 
-  @value_functions %{
-    episodic: ValueFunctions.EpisodicRelevant,
-    semantic: ValueFunctions.SemanticRelevant,
-    procedural: ValueFunctions.ProceduralEqual,
-    subgoal: ValueFunctions.SubgoalMatch,
-    tag: ValueFunctions.TagExact,
-    source: ValueFunctions.SourceLinked,
-    intent: ValueFunctions.IntentRelevance
+  @value_function %{
+    module: Mnemosyne.ValueFunction.Default,
+    params: %{
+      episodic: %{threshold: 0.0, top_k: 30, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      semantic: %{threshold: 0.0, top_k: 20, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      procedural: %{threshold: 0.0, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      subgoal: %{threshold: 0.0, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      tag: %{threshold: 0.0, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      source: %{threshold: 0.0, top_k: 50, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      intent: %{threshold: 0.0, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+    }
   }
 
   setup :set_mimic_from_context
@@ -137,7 +139,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     backend_state = %InMemory{graph: graph}
 
     @default_opts ++
-      [backend: {InMemory, backend_state}, value_functions: @value_functions] ++ extra
+      [backend: {InMemory, backend_state}, value_function: @value_function] ++ extra
   end
 
   describe "retrieve/2" do
@@ -283,6 +285,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       config = %Config{
         llm: %{model: "test:model", opts: %{}},
         embedding: %{model: "test:embed", opts: %{}},
+        value_function: %{module: Mnemosyne.ValueFunction.Default, params: %{}},
         overrides: %{get_mode: %{model: "test:fast", opts: %{}}}
       }
 

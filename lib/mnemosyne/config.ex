@@ -45,6 +45,52 @@ defmodule Mnemosyne.Config do
                     description: "Graph backend configuration"
                   )
 
+  @vf_entry_schema Zoi.object(%{
+                     threshold: Zoi.default(Zoi.float(), 0.0),
+                     top_k: Zoi.default(Zoi.integer(), 20),
+                     lambda: Zoi.default(Zoi.float(), 0.01),
+                     k: Zoi.default(Zoi.integer(), 5),
+                     base_floor: Zoi.default(Zoi.float(), 0.3),
+                     beta: Zoi.default(Zoi.float(), 1.0)
+                   })
+
+  @vf_param_defaults %{
+    semantic: %{threshold: 0.0, top_k: 20, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+    procedural: %{threshold: 0.8, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+    episodic: %{threshold: 0.0, top_k: 30, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+    subgoal: %{threshold: 0.75, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+    tag: %{threshold: 0.9, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+    source: %{threshold: 0.0, top_k: 50, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+    intent: %{threshold: 0.7, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+  }
+
+  @vf_safe_default %{threshold: 0.0, top_k: 20, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+
+  @vf_params_schema Zoi.default(
+                      Zoi.map(Zoi.atom(), @vf_entry_schema,
+                        description: "Per-node-type value function parameters"
+                      ),
+                      @vf_param_defaults
+                    )
+
+  @vf_schema Zoi.default(
+               Zoi.object(
+                 %{
+                   module:
+                     Zoi.default(
+                       Zoi.atom(
+                         description:
+                           "Module implementing the ValueFunction behaviour for scoring nodes"
+                       ),
+                       Mnemosyne.ValueFunction.Default
+                     ),
+                   params: @vf_params_schema
+                 },
+                 description: "Value function module and per-node-type scoring parameters"
+               ),
+               %{module: Mnemosyne.ValueFunction.Default, params: @vf_param_defaults}
+             )
+
   @override_schema Zoi.map(
                      Zoi.atom(),
                      Zoi.object(%{
@@ -66,6 +112,7 @@ defmodule Mnemosyne.Config do
                    embedding: @embedding_schema,
                    overrides: @override_schema,
                    backend: Zoi.optional(@backend_schema),
+                   value_function: @vf_schema,
                    intent_merge_threshold:
                      Zoi.default(Zoi.float(), 0.8,
                        description:
@@ -83,6 +130,7 @@ defmodule Mnemosyne.Config do
     embedding: @embedding_schema,
     overrides: @override_schema,
     backend: Zoi.optional(@backend_schema),
+    value_function: @vf_schema,
     intent_merge_threshold:
       Zoi.default(Zoi.float(), 0.8,
         description:
@@ -178,6 +226,19 @@ defmodule Mnemosyne.Config do
           opts: Map.merge(base.opts, override[:opts] || %{})
         }
     end
+  end
+
+  @doc """
+  Returns the value function params for a given node type.
+
+  Looks up the type in `config.value_function.params` and merges with
+  per-type defaults. Returns safe defaults for unknown types.
+  """
+  @spec resolve_value_function(t(), atom()) :: map()
+  def resolve_value_function(%__MODULE__{} = config, node_type) do
+    type_default = Map.get(@vf_param_defaults, node_type, @vf_safe_default)
+    override = Map.get(config.value_function.params, node_type, %{})
+    Map.merge(type_default, override)
   end
 
   @doc """

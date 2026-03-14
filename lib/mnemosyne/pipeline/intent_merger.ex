@@ -15,6 +15,7 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Similarity
+  alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Prompts.MergeIntent, as: MergePrompt
 
   @doc """
@@ -26,7 +27,7 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
   - `:llm` - LLM adapter module
   - `:embedding` - embedding adapter module
   - `:config` - `%Config{}` with threshold settings
-  - `:value_functions` - value function map for candidate scoring
+  - `:value_function` - value function config map (`:module` + `:params`) for candidate scoring
   """
   @spec merge(Changeset.t(), keyword()) :: {:ok, Changeset.t()}
   def merge(%Changeset{} = changeset, opts) do
@@ -39,9 +40,11 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
       llm = Keyword.fetch!(opts, :llm)
       embedding = Keyword.fetch!(opts, :embedding)
       config = Keyword.fetch!(opts, :config)
-      value_functions = Keyword.get(opts, :value_functions, %{})
 
-      {merged_intents, link_rewrites} =
+      value_function =
+        Keyword.get(opts, :value_function, %{module: Mnemosyne.ValueFunction.Default, params: %{}})
+
+      {merged_intents, link_rewrites, updated_metadata} =
         process_intents(
           intents,
           backend_mod,
@@ -49,13 +52,20 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
           llm,
           embedding,
           config,
-          value_functions
+          value_function,
+          changeset.metadata
         )
 
       rewritten_links = rewrite_links(changeset.links, link_rewrites)
       merged_additions = other_nodes ++ merged_intents
 
-      {:ok, %Changeset{changeset | additions: merged_additions, links: rewritten_links}}
+      {:ok,
+       %Changeset{
+         changeset
+         | additions: merged_additions,
+           links: rewritten_links,
+           metadata: updated_metadata
+       }}
     end
   end
 
@@ -66,60 +76,94 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
          llm,
          embedding,
          config,
-         value_functions
+         value_function,
+         metadata
        ) do
-    {final_intents, rewrites, _seen} =
-      Enum.reduce(intents, {[], %{}, %{}}, fn intent, {acc_intents, acc_rewrites, seen} ->
-        graph_match = find_graph_match(intent, backend_mod, backend_state, value_functions)
+    {final_intents, rewrites, _seen, updated_metadata} =
+      Enum.reduce(intents, {[], %{}, %{}, metadata}, fn intent,
+                                                        {acc_intents, acc_rewrites, seen,
+                                                         acc_meta} ->
+        graph_match = find_graph_match(intent, backend_mod, backend_state, value_function)
         batch_match = find_batch_match(intent, seen)
         best = pick_best_match(graph_match, batch_match)
 
         apply_strategy(
           classify_match(best, config),
           intent,
-          {acc_intents, acc_rewrites, seen},
+          {acc_intents, acc_rewrites, seen, acc_meta},
           llm,
           embedding,
           config
         )
       end)
 
-    {Enum.reverse(final_intents), rewrites}
+    {Enum.reverse(final_intents), rewrites, updated_metadata}
   end
 
-  defp apply_strategy(:no_match, intent, {acc_intents, acc_rewrites, seen}, _llm, _emb, _cfg) do
-    {[intent | acc_intents], acc_rewrites, Map.put(seen, intent.id, intent)}
+  defp apply_strategy(
+         :no_match,
+         intent,
+         {acc_intents, acc_rewrites, seen, meta},
+         _llm,
+         _emb,
+         _cfg
+       ) do
+    {[intent | acc_intents], acc_rewrites, Map.put(seen, intent.id, intent), meta}
   end
 
-  defp apply_strategy({:identity, existing}, intent, {acc_intents, acc_rewrites, seen}, _, _, _) do
-    {acc_intents, Map.put(acc_rewrites, intent.id, existing.id), seen}
+  defp apply_strategy(
+         {:identity, existing},
+         intent,
+         {acc_intents, acc_rewrites, seen, meta},
+         _,
+         _,
+         _
+       ) do
+    updated_meta = propagate_reward(meta, intent.id, existing.id)
+    {acc_intents, Map.put(acc_rewrites, intent.id, existing.id), seen, updated_meta}
   end
 
   defp apply_strategy(
          {:merge, existing},
          intent,
-         {acc_intents, acc_rewrites, seen},
+         {acc_intents, acc_rewrites, seen, meta},
          llm,
          emb,
          cfg
        ) do
     case llm_merge(intent, existing, llm, emb, cfg) do
       {:ok, merged} ->
+        updated_meta = propagate_reward(meta, intent.id, merged.id)
         seen = Map.put(seen, merged.id, merged)
         rewrites = Map.put(acc_rewrites, intent.id, merged.id)
-        {replace_or_add(acc_intents, merged), rewrites, seen}
+        {replace_or_add(acc_intents, merged), rewrites, seen, updated_meta}
 
       :error ->
-        {[intent | acc_intents], acc_rewrites, Map.put(seen, intent.id, intent)}
+        {[intent | acc_intents], acc_rewrites, Map.put(seen, intent.id, intent), meta}
     end
   end
 
-  defp find_graph_match(intent, backend_mod, backend_state, value_functions) do
+  defp propagate_reward(metadata, source_id, target_id) do
+    case Map.get(metadata, source_id) do
+      %NodeMetadata{cumulative_reward: reward, reward_count: rc} when rc > 0 ->
+        target_meta = Map.get(metadata, target_id, NodeMetadata.new())
+        updated_target = NodeMetadata.update_reward(target_meta, reward)
+
+        metadata
+        |> Map.delete(source_id)
+        |> Map.put(target_id, updated_target)
+
+      _ ->
+        Map.delete(metadata, source_id)
+    end
+  end
+
+  defp find_graph_match(intent, backend_mod, backend_state, value_function) do
     case backend_mod.find_candidates(
            [:intent],
            intent.embedding,
            [],
-           value_functions,
+           value_function,
            [],
            backend_state
          ) do

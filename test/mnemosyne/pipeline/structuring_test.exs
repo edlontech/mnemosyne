@@ -7,6 +7,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
   alias Mnemosyne.Errors.Invalid.EpisodeError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.LLM
+  alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Episode
   alias Mnemosyne.Pipeline.Structuring
 
@@ -309,7 +310,68 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       assert {:error, :extraction_failed} =
                Structuring.extract(episode, @default_opts)
     end
+
+    test "changeset metadata contains entries for all created nodes" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      node_ids = Enum.map(cs.additions, &node_id/1)
+
+      Enum.each(node_ids, fn id ->
+        assert Map.has_key?(cs.metadata, id),
+               "expected metadata for node #{id}"
+      end)
+    end
+
+    test "semantic and procedural nodes have reward_count > 0" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      semantic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> Enum.map(& &1.id)
+
+      procedural_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Procedural{}, &1))
+        |> Enum.map(& &1.id)
+
+      Enum.each(semantic_ids ++ procedural_ids, fn id ->
+        meta = cs.metadata[id]
+        assert %NodeMetadata{reward_count: rc} = meta
+        assert rc > 0
+      end)
+    end
+
+    test "tag and intent nodes have reward_count == 0" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      tag_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Tag{}, &1))
+        |> Enum.map(& &1.id)
+
+      intent_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Intent{}, &1))
+        |> Enum.map(& &1.id)
+
+      Enum.each(tag_ids ++ intent_ids, fn id ->
+        meta = cs.metadata[id]
+        assert %NodeMetadata{reward_count: 0} = meta
+      end)
+    end
   end
+
+  defp node_id(%{id: id}), do: id
 
   defp struct_type(%Mnemosyne.Graph.Node.Episodic{}), do: :episodic
   defp struct_type(%Mnemosyne.Graph.Node.Semantic{}), do: :semantic

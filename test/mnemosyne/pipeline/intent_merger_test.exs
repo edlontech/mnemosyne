@@ -10,6 +10,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.GraphBackends.InMemory
   alias Mnemosyne.LLM
+  alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.IntentMerger
 
   setup :set_mimic_from_context
@@ -18,6 +19,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
     llm: %{model: "test:model", opts: %{}},
     embedding: %{model: "test:embed", opts: %{}},
     overrides: %{},
+    value_function: %{module: Mnemosyne.ValueFunction.Default, params: %{}},
     intent_merge_threshold: 0.8,
     intent_identity_threshold: 0.95
   }
@@ -29,7 +31,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
     llm: Mnemosyne.MockLLM,
     embedding: Mnemosyne.MockEmbedding,
     config: @config,
-    value_functions: %{}
+    value_function: %{module: Mnemosyne.ValueFunction.Default, params: %{}}
   ]
 
   defp make_intent(id, description, embedding) do
@@ -75,7 +77,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_new", "proc_1")
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], %{}, [], @backend_state ->
+      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
         {:ok, [], @backend_state}
       end)
 
@@ -103,7 +105,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_new", "proc_1")
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], %{}, [], @backend_state ->
+      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
         {:ok, [{existing_intent, 0.97}], @backend_state}
       end)
 
@@ -130,7 +132,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_new", "proc_1")
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], %{}, [], @backend_state ->
+      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
         {:ok, [{existing_intent, 0.88}], @backend_state}
       end)
 
@@ -181,7 +183,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_new", "proc_1")
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], %{}, [], @backend_state ->
+      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
         {:ok, [{existing_intent, 0.88}], @backend_state}
       end)
 
@@ -215,7 +217,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_b", "proc_b")
 
       InMemory
-      |> stub(:find_candidates, fn [:intent], _emb, [], %{}, [], @backend_state ->
+      |> stub(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
         {:ok, [], @backend_state}
       end)
 
@@ -227,6 +229,135 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
       [kept] = intent_nodes
       assert {kept.id, "proc_a"} in result.links
       assert {kept.id, "proc_b"} in result.links
+    end
+  end
+
+  describe "metadata reward propagation" do
+    test "identity match propagates reward from new intent to existing" do
+      new_intent = make_intent("int_new", "Optimize database", [0.99, 0.01, 0.0])
+
+      existing_intent =
+        make_intent("int_existing", "Optimize database queries", [0.99, 0.01, 0.0])
+
+      proc = make_procedural("proc_1")
+      new_meta = NodeMetadata.new(cumulative_reward: 2.5, reward_count: 1)
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(new_intent)
+        |> Changeset.add_node(proc)
+        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.put_metadata("int_new", new_meta)
+
+      InMemory
+      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
+        {:ok, [{existing_intent, 0.97}], @backend_state}
+      end)
+
+      assert {:ok, result} = IntentMerger.merge(cs, @base_opts)
+
+      refute Map.has_key?(result.metadata, "int_new")
+
+      assert %NodeMetadata{cumulative_reward: 2.5, reward_count: 1} =
+               result.metadata["int_existing"]
+    end
+
+    test "LLM merge propagates reward from new intent to merged intent" do
+      new_intent = make_intent("int_new", "Deploy app", [0.9, 0.1, 0.0])
+      existing_intent = make_intent("int_existing", "Deploy service", [0.9, 0.1, 0.0])
+      proc = make_procedural("proc_1")
+      new_meta = NodeMetadata.new(cumulative_reward: 3.0, reward_count: 1)
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(new_intent)
+        |> Changeset.add_node(proc)
+        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.put_metadata("int_new", new_meta)
+
+      InMemory
+      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
+        {:ok, [{existing_intent, 0.88}], @backend_state}
+      end)
+
+      Mnemosyne.MockLLM
+      |> expect(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{merged_intent: "Deploy application service"},
+           model: "test:model",
+           usage: %{}
+         }}
+      end)
+
+      Mnemosyne.MockEmbedding
+      |> expect(:embed_batch, fn ["Deploy application service"], _opts ->
+        {:ok,
+         %Embedding.Response{
+           vectors: [[0.95, 0.05, 0.0]],
+           model: "test:embed",
+           usage: %{}
+         }}
+      end)
+
+      assert {:ok, result} = IntentMerger.merge(cs, @base_opts)
+
+      refute Map.has_key?(result.metadata, "int_new")
+
+      assert %NodeMetadata{cumulative_reward: 3.0, reward_count: 1} =
+               result.metadata["int_existing"]
+    end
+
+    test "identity match propagates even when cumulative_reward is zero" do
+      new_intent = make_intent("int_new", "Optimize database", [0.99, 0.01, 0.0])
+
+      existing_intent =
+        make_intent("int_existing", "Optimize database queries", [0.99, 0.01, 0.0])
+
+      proc = make_procedural("proc_1")
+      new_meta = NodeMetadata.new(cumulative_reward: 0.0, reward_count: 1)
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(new_intent)
+        |> Changeset.add_node(proc)
+        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.put_metadata("int_new", new_meta)
+
+      InMemory
+      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
+        {:ok, [{existing_intent, 0.97}], @backend_state}
+      end)
+
+      assert {:ok, result} = IntentMerger.merge(cs, @base_opts)
+
+      refute Map.has_key?(result.metadata, "int_new")
+
+      existing_meta = result.metadata["int_existing"]
+      assert existing_meta.cumulative_reward == 0.0
+      assert existing_meta.reward_count == 1
+    end
+
+    test "no match preserves metadata unchanged" do
+      intent = make_intent("int_new", "Deploy to production", [1.0, 0.0, 0.0])
+      proc = make_procedural("proc_1")
+      intent_meta = NodeMetadata.new(cumulative_reward: 1.0)
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(intent)
+        |> Changeset.add_node(proc)
+        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.put_metadata("int_new", intent_meta)
+
+      InMemory
+      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
+        {:ok, [], @backend_state}
+      end)
+
+      assert {:ok, result} = IntentMerger.merge(cs, @base_opts)
+
+      assert %NodeMetadata{cumulative_reward: 1.0} = result.metadata["int_new"]
     end
   end
 end

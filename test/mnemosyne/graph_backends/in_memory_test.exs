@@ -12,10 +12,13 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
   @alt_vector List.duplicate(0.2, 128)
 
   @value_fns %{
-    episodic: Mnemosyne.ValueFunctions.EpisodicRelevant,
-    semantic: Mnemosyne.ValueFunctions.SemanticRelevant,
-    tag: Mnemosyne.ValueFunctions.TagExact,
-    subgoal: Mnemosyne.ValueFunctions.SubgoalMatch
+    module: Mnemosyne.ValueFunction.Default,
+    params: %{
+      episodic: %{threshold: 0.0, top_k: 30, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      semantic: %{threshold: 0.0, top_k: 20, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      tag: %{threshold: 0.9, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      subgoal: %{threshold: 0.75, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+    }
   }
 
   defp semantic_node(id, embedding) do
@@ -184,10 +187,24 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
       orthogonal_query = List.duplicate(0.0, 127) ++ [1.0]
 
       {:ok, candidates_no_tags, _} =
-        InMemory.find_candidates([:tag], orthogonal_query, [], %{}, [], state)
+        InMemory.find_candidates(
+          [:tag],
+          orthogonal_query,
+          [],
+          %{module: Mnemosyne.ValueFunction.Default, params: %{}},
+          [],
+          state
+        )
 
       {:ok, candidates_with_tags, _} =
-        InMemory.find_candidates([:tag], orthogonal_query, [@test_vector], %{}, [], state)
+        InMemory.find_candidates(
+          [:tag],
+          orthogonal_query,
+          [@test_vector],
+          %{module: Mnemosyne.ValueFunction.Default, params: %{}},
+          [],
+          state
+        )
 
       no_tag_score =
         case candidates_no_tags do
@@ -197,6 +214,66 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
 
       assert [{_, with_tag_score}] = candidates_with_tags
       assert with_tag_score > no_tag_score
+    end
+  end
+
+  describe "metadata callbacks" do
+    alias Mnemosyne.NodeMetadata
+
+    setup do
+      {:ok, state} = InMemory.init([])
+      %{state: state}
+    end
+
+    test "get_metadata returns empty map for unknown IDs", %{state: state} do
+      {:ok, result, _state} = InMemory.get_metadata(["unknown-1", "unknown-2"], state)
+      assert result == %{}
+    end
+
+    test "update_metadata stores entries and get_metadata retrieves them", %{state: state} do
+      meta = NodeMetadata.new(created_at: ~U[2025-01-01 00:00:00Z])
+
+      {:ok, state} = InMemory.update_metadata(%{"n1" => meta, "n2" => meta}, state)
+      {:ok, result, _state} = InMemory.get_metadata(["n1", "n2"], state)
+
+      assert map_size(result) == 2
+      assert %NodeMetadata{} = result["n1"]
+      assert %NodeMetadata{} = result["n2"]
+    end
+
+    test "get_metadata returns only entries for requested IDs", %{state: state} do
+      meta = NodeMetadata.new(created_at: ~U[2025-01-01 00:00:00Z])
+
+      {:ok, state} = InMemory.update_metadata(%{"n1" => meta, "n2" => meta}, state)
+      {:ok, result, _state} = InMemory.get_metadata(["n1"], state)
+
+      assert map_size(result) == 1
+      assert Map.has_key?(result, "n1")
+      refute Map.has_key?(result, "n2")
+    end
+
+    test "delete_metadata removes entries", %{state: state} do
+      meta = NodeMetadata.new(created_at: ~U[2025-01-01 00:00:00Z])
+
+      {:ok, state} = InMemory.update_metadata(%{"n1" => meta, "n2" => meta}, state)
+      {:ok, state} = InMemory.delete_metadata(["n1"], state)
+      {:ok, result, _state} = InMemory.get_metadata(["n1", "n2"], state)
+
+      assert map_size(result) == 1
+      refute Map.has_key?(result, "n1")
+      assert Map.has_key?(result, "n2")
+    end
+
+    test "update_metadata merges with existing entries", %{state: state} do
+      meta1 = NodeMetadata.new(created_at: ~U[2025-01-01 00:00:00Z])
+      meta2 = NodeMetadata.new(created_at: ~U[2025-06-01 00:00:00Z], access_count: 5)
+
+      {:ok, state} = InMemory.update_metadata(%{"n1" => meta1}, state)
+      {:ok, state} = InMemory.update_metadata(%{"n2" => meta2}, state)
+      {:ok, result, _state} = InMemory.get_metadata(["n1", "n2"], state)
+
+      assert result["n1"].created_at == ~U[2025-01-01 00:00:00Z]
+      assert result["n2"].access_count == 5
     end
   end
 end

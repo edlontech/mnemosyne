@@ -29,8 +29,6 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     field :candidates, %{atom() => [{struct(), float()}]}, default: %{}
   end
 
-  @type value_functions :: %{atom() => module()}
-
   @default_max_hops 2
   @max_candidates_per_hop 100
   @provenance_decay 0.5
@@ -42,7 +40,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     - `:llm` (required) - LLM module implementing the LLM behaviour
     - `:embedding` (required) - Embedding module implementing the Embedding behaviour
     - `:backend` (required) - Tuple of `{module, state}` implementing GraphBackend
-    - `:value_functions` (required) - Map of node type atoms to ValueFunction modules
+    - `:value_function` (required) - Map with `:module` (ValueFunction impl) and `:params` (per-type params)
     - `:llm_opts` - Additional LLM options (default: [])
     - `:config` - Config struct for per-step model overrides
     - `:max_hops` - Maximum traversal hops (default: 2)
@@ -53,7 +51,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       llm = Keyword.fetch!(opts, :llm)
       embedding = Keyword.fetch!(opts, :embedding)
       backend = Keyword.fetch!(opts, :backend)
-      value_fns = Keyword.fetch!(opts, :value_functions)
+      value_fns = Keyword.fetch!(opts, :value_function)
       llm_opts = Keyword.get(opts, :llm_opts, [])
       config = Keyword.get(opts, :config)
       max_hops = Keyword.get(opts, :max_hops, @default_max_hops)
@@ -131,13 +129,15 @@ defmodule Mnemosyne.Pipeline.Retrieval do
 
     {:ok, neighbors, _bs} = mod.get_linked_nodes(neighbor_ids, bs)
 
+    vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
+
     scored_neighbors =
       Enum.map(neighbors, fn node ->
         emb = NodeProtocol.embedding(node)
         relevance = if emb, do: Similarity.cosine_similarity(query_vector, emb), else: 0.0
         type = NodeProtocol.node_type(node)
-        value_fn = Map.get(value_fns, type)
-        score = if value_fn, do: value_fn.score(relevance, node), else: relevance
+        params = get_in(value_fns, [:params, type]) || %{}
+        score = vf_module.score(relevance, node, nil, params)
         {node, score}
       end)
 

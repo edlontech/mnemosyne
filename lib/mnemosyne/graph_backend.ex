@@ -38,7 +38,7 @@ defmodule Mnemosyne.GraphBackend do
               node_types :: [atom()],
               query_embedding :: [float()],
               tag_embeddings :: [[float()]],
-              value_functions :: %{atom() => module()},
+              value_fn_config :: %{module: module(), params: %{atom() => map()}},
               opts :: keyword(),
               state()
             ) ::
@@ -49,4 +49,13 @@ defmodule Mnemosyne.GraphBackend do
 
   @callback get_linked_nodes([String.t()], state()) ::
               {:ok, [struct()], state()}
+
+  @callback get_metadata([String.t()], state()) ::
+              {:ok, %{String.t() => struct()}, state()}
+
+  @callback update_metadata(%{String.t() => struct()}, state()) ::
+              {:ok, state()}
+
+  @callback delete_metadata([String.t()], state()) ::
+              {:ok, state()}
 end

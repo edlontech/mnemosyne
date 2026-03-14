@@ -47,7 +47,7 @@ Nodes are linked bidirectionally and indexed by type, tag, and subgoal for effic
 When the agent needs memory, the retrieval pipeline:
 
 1. Computes an embedding for the query
-2. Scores candidate nodes using **value functions** specialized per node type (episodic relevance, semantic relevance, procedural match, subgoal match, tag exact, source linked)
+2. Scores candidate nodes using a **value function** that combines cosine relevance with node metadata (recency, access frequency, reward quality) via a multiplicative formula
 3. Returns the highest-scoring knowledge, ranked by decision relevance
 
 ## Architecture
@@ -62,7 +62,7 @@ graph TD
 
     Session --> Episode[Episode Pipeline]
     Store --> Backend[GraphBackend]
-    Retrieval --> VF[Value Functions\nper node type]
+    Retrieval --> VF[Value Function\nrelevance * recency * frequency * reward]
     Retrieval -->|find_candidates\nget_linked_nodes| Backend
 
     Episode --> Structuring

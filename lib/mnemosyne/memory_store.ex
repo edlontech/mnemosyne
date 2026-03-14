@@ -15,15 +15,6 @@ defmodule Mnemosyne.MemoryStore do
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
 
-  @default_value_functions %{
-    episodic: Mnemosyne.ValueFunctions.EpisodicRelevant,
-    semantic: Mnemosyne.ValueFunctions.SemanticRelevant,
-    procedural: Mnemosyne.ValueFunctions.ProceduralEqual,
-    subgoal: Mnemosyne.ValueFunctions.SubgoalMatch,
-    tag: Mnemosyne.ValueFunctions.TagExact,
-    source: Mnemosyne.ValueFunctions.SourceLinked
-  }
-
   # -- Client API --
 
   def start_link(opts) do
@@ -93,7 +84,6 @@ defmodule Mnemosyne.MemoryStore do
           config: Keyword.fetch!(opts, :config),
           llm: Keyword.fetch!(opts, :llm),
           embedding: Keyword.fetch!(opts, :embedding),
-          value_functions: Keyword.get(opts, :value_functions, @default_value_functions),
           task_supervisor: Keyword.fetch!(opts, :task_supervisor),
           pending_recalls: %{}
         }
@@ -114,12 +104,13 @@ defmodule Mnemosyne.MemoryStore do
       llm: state.llm,
       embedding: state.embedding,
       config: state.config,
-      value_functions: state.value_functions
+      value_function: state.config.value_function
     ]
 
     with {:ok, merged_cs} <- IntentMerger.merge(changeset, merge_opts),
-         {:ok, new_bs} <- backend_mod.apply_changeset(merged_cs, backend_state) do
-      {:reply, :ok, %{state | backend: {backend_mod, new_bs}}}
+         {:ok, new_bs} <- backend_mod.apply_changeset(merged_cs, backend_state),
+         {:ok, final_bs} <- maybe_update_metadata(backend_mod, merged_cs.metadata, new_bs) do
+      {:reply, :ok, %{state | backend: {backend_mod, final_bs}}}
     else
       {:error, _} = error ->
         {:reply, error, state}
@@ -200,7 +191,7 @@ defmodule Mnemosyne.MemoryStore do
     config = state.config
     llm = state.llm
     embedding = state.embedding
-    value_fns = state.value_functions
+    value_fn = config.value_function
     max_hops = Keyword.get(opts, :max_hops, 2)
     backend = state.backend
 
@@ -209,7 +200,7 @@ defmodule Mnemosyne.MemoryStore do
         llm: llm,
         embedding: embedding,
         backend: backend,
-        value_functions: value_fns,
+        value_function: value_fn,
         config: config,
         max_hops: max_hops
       ]
@@ -219,6 +210,12 @@ defmodule Mnemosyne.MemoryStore do
       end
     end)
   end
+
+  defp maybe_update_metadata(_backend_mod, metadata, bs) when map_size(metadata) == 0,
+    do: {:ok, bs}
+
+  defp maybe_update_metadata(backend_mod, metadata, bs),
+    do: backend_mod.update_metadata(metadata, bs)
 
   defp augment_query_with_context(session_ref, query) do
     case Mnemosyne.Session.get_context(session_ref) do

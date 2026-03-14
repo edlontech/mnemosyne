@@ -17,6 +17,7 @@ defmodule Mnemosyne.GraphBackends.InMemory do
   typedstruct do
     field :graph, Graph.t(), default: Graph.new()
     field :persistence, {module(), term()} | nil, default: nil
+    field :metadata, %{String.t() => Mnemosyne.NodeMetadata.t()}, default: %{}
   end
 
   @impl true
@@ -27,8 +28,8 @@ defmodule Mnemosyne.GraphBackends.InMemory do
 
       {mod, persistence_opts} ->
         with {:ok, ps} <- mod.init(persistence_opts),
-             {:ok, graph} <- mod.load(ps) do
-          {:ok, %__MODULE__{graph: graph, persistence: {mod, ps}}}
+             {:ok, graph, metadata} <- mod.load(ps) do
+          {:ok, %__MODULE__{graph: graph, persistence: {mod, ps}, metadata: metadata}}
         end
     end
   end
@@ -48,10 +49,12 @@ defmodule Mnemosyne.GraphBackends.InMemory do
   end
 
   @impl true
-  def find_candidates(node_types, query_vector, tag_vectors, value_fns, _opts, state) do
+  def find_candidates(node_types, query_vector, tag_vectors, vf_config, _opts, state) do
     candidates =
       node_types
-      |> Enum.flat_map(&score_type(state.graph, &1, query_vector, tag_vectors, value_fns))
+      |> Enum.flat_map(
+        &score_type(state.graph, &1, query_vector, tag_vectors, vf_config, state.metadata)
+      )
       |> Enum.uniq_by(fn {node, _score} -> NodeProtocol.id(node) end)
 
     {:ok, candidates, state}
@@ -72,24 +75,26 @@ defmodule Mnemosyne.GraphBackends.InMemory do
     {:ok, nodes, state}
   end
 
-  defp score_type(graph, type, query_vector, tag_vectors, value_fns) do
+  defp score_type(graph, type, query_vector, tag_vectors, vf_config, metadata) do
+    vf_module = Map.get(vf_config, :module, Mnemosyne.ValueFunction.Default)
     nodes = Graph.nodes_by_type(graph, type)
-    value_fn = Map.get(value_fns, type)
-    candidates = Enum.map(nodes, &score_node(&1, query_vector, tag_vectors, value_fn))
-    threshold = if value_fn, do: value_fn.threshold(), else: 0.0
-    k = if value_fn, do: value_fn.top_k(), else: 20
+    params = get_in(vf_config, [:params, type]) || %{}
+    threshold = Map.get(params, :threshold, 0.0)
+    k = Map.get(params, :top_k, 20)
+
+    candidates =
+      Enum.map(nodes, fn node ->
+        emb = NodeProtocol.embedding(node)
+        relevance = compute_relevance(emb, query_vector, tag_vectors)
+        node_meta = Map.get(metadata, NodeProtocol.id(node))
+        score = vf_module.score(relevance, node, node_meta, params)
+        {node, score}
+      end)
 
     candidates
     |> Enum.filter(fn {_node, score} -> score >= threshold end)
     |> Enum.sort_by(&elem(&1, 1), :desc)
     |> Enum.take(k)
-  end
-
-  defp score_node(node, query_vector, tag_vectors, value_fn) do
-    emb = NodeProtocol.embedding(node)
-    relevance = compute_relevance(emb, query_vector, tag_vectors)
-    score = if value_fn, do: value_fn.score(relevance, node), else: relevance
-    {node, score}
   end
 
   defp compute_relevance(nil, _query_vector, _tag_vectors), do: 0.0
@@ -105,9 +110,35 @@ defmodule Mnemosyne.GraphBackends.InMemory do
     max(query_sim, tag_sim) |> max(0.0)
   end
 
+  @impl true
+  def get_metadata(node_ids, state) do
+    result = Map.take(state.metadata, node_ids)
+    {:ok, result, state}
+  end
+
+  @impl true
+  def update_metadata(entries, state) do
+    updated = Map.merge(state.metadata, entries)
+    :ok = maybe_persist_metadata(entries, state.persistence)
+    {:ok, %{state | metadata: updated}}
+  end
+
+  @impl true
+  def delete_metadata(node_ids, state) do
+    updated = Map.drop(state.metadata, node_ids)
+    :ok = maybe_delete_metadata(node_ids, state.persistence)
+    {:ok, %{state | metadata: updated}}
+  end
+
   defp maybe_persist(_changeset, nil), do: :ok
   defp maybe_persist(changeset, {mod, ps}), do: mod.save(changeset, ps)
 
   defp maybe_delete(_ids, nil), do: :ok
   defp maybe_delete(ids, {mod, ps}), do: mod.delete(ids, ps)
+
+  defp maybe_persist_metadata(_entries, nil), do: :ok
+  defp maybe_persist_metadata(entries, {mod, ps}), do: mod.save_metadata(entries, ps)
+
+  defp maybe_delete_metadata(_ids, nil), do: :ok
+  defp maybe_delete_metadata(ids, {mod, ps}), do: mod.delete_metadata(ids, ps)
 end

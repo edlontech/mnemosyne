@@ -11,7 +11,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
   alias Mnemosyne.Pipeline.Structuring
-  alias Mnemosyne.ValueFunctions
+  alias Mnemosyne.ValueFunction
 
   setup :set_mimic_global
 
@@ -225,9 +225,19 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
           [
             backend:
               {Mnemosyne.GraphBackends.InMemory, %Mnemosyne.GraphBackends.InMemory{graph: graph}},
-            value_functions: %{
-              semantic: ValueFunctions.SemanticRelevant,
-              tag: ValueFunctions.TagExact
+            value_function: %{
+              module: ValueFunction.Default,
+              params: %{
+                semantic: %{
+                  threshold: 0.0,
+                  top_k: 20,
+                  lambda: 0.01,
+                  k: 5,
+                  base_floor: 0.3,
+                  beta: 1.0
+                },
+                tag: %{threshold: 0.0, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+              }
             }
           ]
 

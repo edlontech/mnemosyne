@@ -7,9 +7,12 @@ defmodule Mnemosyne.Graph.Changeset do
   """
   use TypedStruct
 
+  alias Mnemosyne.NodeMetadata
+
   typedstruct do
     field :additions, [struct()], default: []
     field :links, [{String.t(), String.t()}], default: []
+    field :metadata, %{String.t() => NodeMetadata.t()}, default: %{}
   end
 
   @doc "Creates an empty changeset."
@@ -28,12 +31,19 @@ defmodule Mnemosyne.Graph.Changeset do
     %{cs | links: [{id_a, id_b} | cs.links]}
   end
 
-  @doc "Merges two changesets by concatenating their additions and links."
+  @doc "Associates metadata with a node ID in the changeset."
+  @spec put_metadata(t(), String.t(), NodeMetadata.t()) :: t()
+  def put_metadata(%__MODULE__{} = cs, node_id, %NodeMetadata{} = meta) do
+    %{cs | metadata: Map.put(cs.metadata, node_id, meta)}
+  end
+
+  @doc "Merges two changesets by concatenating their additions, links, and metadata maps."
   @spec merge(t(), t()) :: t()
   def merge(%__MODULE__{} = a, %__MODULE__{} = b) do
     %__MODULE__{
       additions: a.additions ++ b.additions,
-      links: a.links ++ b.links
+      links: a.links ++ b.links,
+      metadata: Map.merge(a.metadata, b.metadata)
     }
   end
 end

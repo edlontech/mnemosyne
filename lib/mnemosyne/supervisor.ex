@@ -27,7 +27,6 @@ defmodule Mnemosyne.Supervisor do
       config: Keyword.fetch!(opts, :config),
       llm: Keyword.fetch!(opts, :llm),
       embedding: Keyword.fetch!(opts, :embedding),
-      value_functions: Keyword.get(opts, :value_functions, %{}),
       task_supervisor: task_sup_name
     ]
 
