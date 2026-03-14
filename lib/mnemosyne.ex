@@ -19,13 +19,22 @@ defmodule Mnemosyne do
     3. **Retrieval** - Value-function-scored retrieval over the graph, combining
        multiple node types to produce contextually relevant memory results.
 
+  ## Repositories
+
+  All graph operations are scoped to a **repository**. A repository is an
+  isolated graph backend with its own MemoryStore process. Open a repo via
+  `open_repo/2`, then pass its `repo_id` as the first argument to all
+  operations.
+
+      {:ok, _pid} = Mnemosyne.open_repo("my-repo", backend: {InMemory, persistence: {DETS, path: "repo.dets"}})
+
   ## Write Path (Sessions)
 
-  Sessions are the write interface to the knowledge graph. A session
-  collects observation-action pairs, groups them into trajectories, and
-  uses LLM calls to extract semantic and procedural knowledge.
+  Sessions are the write interface to the knowledge graph. A session is tied
+  to a specific repo and collects observation-action pairs, groups them into
+  trajectories, and uses LLM calls to extract semantic and procedural knowledge.
 
-      {:ok, session_id} = Mnemosyne.start_session("Learn Elixir patterns")
+      {:ok, session_id} = Mnemosyne.start_session("Learn Elixir patterns", repo: "my-repo")
       :ok = Mnemosyne.append(session_id, "Read about GenServer", "Implemented a cache")
       :ok = Mnemosyne.append(session_id, "Cache worked well", "Added TTL support")
       :ok = Mnemosyne.close_and_commit(session_id)
@@ -43,33 +52,116 @@ defmodule Mnemosyne do
   nodes by relevance. Session context can augment queries with the current
   episode's state for more targeted retrieval.
 
-      {:ok, memories} = Mnemosyne.recall("How to implement caching?")
-      {:ok, memories} = Mnemosyne.recall_in_context(session_id, "What did I try before?")
+      {:ok, memories} = Mnemosyne.recall("my-repo", "How to implement caching?")
+      {:ok, memories} = Mnemosyne.recall_in_context("my-repo", session_id, "What did I try before?")
 
   ## Graph Management
 
   Direct graph operations for inspection and bulk mutations:
 
-      graph = Mnemosyne.get_graph()
-      :ok = Mnemosyne.apply_changeset(changeset)
-      :ok = Mnemosyne.delete_nodes(["node-1", "node-2"])
+      graph = Mnemosyne.get_graph("my-repo")
+      :ok = Mnemosyne.apply_changeset("my-repo", changeset)
+      :ok = Mnemosyne.delete_nodes("my-repo", ["node-1", "node-2"])
 
   ## Supervision
 
   Mnemosyne runs under its own supervision tree (`Mnemosyne.Supervisor`).
   Multiple independent instances can coexist by passing a custom `:supervisor`
-  name in opts. Each supervisor owns its own Registry, MemoryStore,
-  TaskSupervisor, and SessionSupervisor.
+  name in opts. Each supervisor owns its own Registry, RepoRegistry,
+  TaskSupervisor, RepoSupervisor, and SessionSupervisor.
   """
 
   alias Mnemosyne.Errors.Framework.NotFoundError
   alias Mnemosyne.Errors.Framework.PipelineError
-  alias Mnemosyne.Errors.Framework.StorageError
+  alias Mnemosyne.Errors.Framework.RepoError
   alias Mnemosyne.MemoryStore
   alias Mnemosyne.Session
   alias Mnemosyne.Supervisor, as: MneSupervisor
 
   @default_sup Mnemosyne.Supervisor
+
+  # -- Repo Lifecycle --
+
+  @doc """
+  Opens a new memory repository under the supervision tree.
+
+  Starts a `MemoryStore` process registered in the `RepoRegistry` with the
+  given `repo_id`. Each repo has its own isolated graph backend.
+
+  ## Options
+
+    * `:backend` - Required. A `{module, opts}` tuple for the graph backend.
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+    * `:config` - A `Mnemosyne.Config` struct overriding shared defaults.
+    * `:llm` - LLM adapter module overriding shared defaults.
+    * `:embedding` - Embedding adapter module overriding shared defaults.
+  """
+  @spec open_repo(String.t(), keyword()) :: {:ok, pid()} | {:error, Mnemosyne.Errors.error()}
+  def open_repo(repo_id, opts \\ []) do
+    sup_name = Keyword.get(opts, :supervisor, @default_sup)
+    defaults = MneSupervisor.get_defaults(sup_name)
+    repo_sup = MneSupervisor.repo_supervisor_name(sup_name)
+    repo_registry = MneSupervisor.repo_registry_name(sup_name)
+    task_sup = MneSupervisor.task_supervisor_name(sup_name)
+
+    via = {:via, Registry, {repo_registry, repo_id}}
+
+    store_opts = [
+      name: via,
+      backend: Keyword.fetch!(opts, :backend),
+      config: Keyword.get(opts, :config, defaults.config),
+      llm: Keyword.get(opts, :llm, defaults.llm),
+      embedding: Keyword.get(opts, :embedding, defaults.embedding),
+      task_supervisor: task_sup
+    ]
+
+    case DynamicSupervisor.start_child(repo_sup, {MemoryStore, store_opts}) do
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:error, {:already_started, _}} ->
+        {:error, RepoError.exception(repo_id: repo_id, reason: :already_open)}
+
+      {:error, reason} ->
+        {:error, RepoError.exception(repo_id: repo_id, reason: reason)}
+    end
+  end
+
+  @doc """
+  Closes a running memory repository.
+
+  Terminates the `MemoryStore` process for the given `repo_id`.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec close_repo(String.t(), keyword()) :: :ok | {:error, NotFoundError.t()}
+  def close_repo(repo_id, opts \\ []) do
+    sup_name = Keyword.get(opts, :supervisor, @default_sup)
+    repo_sup = MneSupervisor.repo_supervisor_name(sup_name)
+
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      DynamicSupervisor.terminate_child(repo_sup, pid)
+    end
+  end
+
+  @doc """
+  Lists all currently open repository IDs.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec list_repos(keyword()) :: [String.t()]
+  def list_repos(opts \\ []) do
+    sup_name = Keyword.get(opts, :supervisor, @default_sup)
+    repo_registry = MneSupervisor.repo_registry_name(sup_name)
+
+    Registry.select(repo_registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+  end
+
+  # -- Sessions --
 
   @doc """
   Starts a new memory session with the given goal.
@@ -78,11 +170,12 @@ defmodule Mnemosyne do
   opens an episode with the provided goal. The session begins in the `:collecting`
   state, ready to receive observation-action pairs via `append/4`.
 
-  LLM, embedding, and config defaults are pulled from the `MemoryStore` unless
-  explicitly overridden in `opts`.
+  LLM, embedding, and config defaults are pulled from the repo's `MemoryStore`
+  unless explicitly overridden in `opts`.
 
   ## Options
 
+    * `:repo` - Required. The repo ID to bind this session to.
     * `:supervisor` - Name of the Mnemosyne supervisor to use. Defaults to `Mnemosyne.Supervisor`.
     * `:config` - A `Mnemosyne.Config` struct overriding the stored defaults.
     * `:llm` - LLM adapter module overriding the stored default.
@@ -90,39 +183,37 @@ defmodule Mnemosyne do
 
   ## Examples
 
-      {:ok, session_id} = Mnemosyne.start_session("Explore caching strategies")
-
-      {:ok, session_id} = Mnemosyne.start_session("Debug auth flow",
-        config: %Mnemosyne.Config{llm: %{model: "gpt-4o", opts: %{}}, embedding: %{model: "e5-base-v2", opts: %{}}}
-      )
+      {:ok, session_id} = Mnemosyne.start_session("Explore caching strategies", repo: "my-repo")
   """
   @spec start_session(String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def start_session(goal, opts \\ []) do
     sup_name = Keyword.get(opts, :supervisor, @default_sup)
+    repo_id = Keyword.fetch!(opts, :repo)
     registry = MneSupervisor.registry_name(sup_name)
     task_sup = MneSupervisor.task_supervisor_name(sup_name)
-    store = MneSupervisor.memory_store_name(sup_name)
     session_sup = MneSupervisor.session_supervisor_name(sup_name)
 
-    defaults = MemoryStore.get_session_defaults(store)
+    with {:ok, store_pid} <- lookup_repo(repo_id, opts) do
+      defaults = MemoryStore.get_session_defaults(store_pid)
 
-    session_opts = [
-      registry: registry,
-      task_supervisor: task_sup,
-      memory_store: store,
-      config: Keyword.get(opts, :config, defaults.config),
-      llm: Keyword.get(opts, :llm, defaults.llm),
-      embedding: Keyword.get(opts, :embedding, defaults.embedding)
-    ]
+      session_opts = [
+        registry: registry,
+        task_supervisor: task_sup,
+        memory_store: store_pid,
+        config: Keyword.get(opts, :config, defaults.config),
+        llm: Keyword.get(opts, :llm, defaults.llm),
+        embedding: Keyword.get(opts, :embedding, defaults.embedding)
+      ]
 
-    case DynamicSupervisor.start_child(session_sup, {Session, session_opts}) do
-      {:ok, pid} ->
-        session_id = Session.id(pid)
-        :ok = Session.start_episode(pid, goal)
-        {:ok, session_id}
+      case DynamicSupervisor.start_child(session_sup, {Session, session_opts}) do
+        {:ok, pid} ->
+          session_id = Session.id(pid)
+          :ok = Session.start_episode(pid, goal)
+          {:ok, session_id}
 
-      {:error, _} = error ->
-        error
+        {:error, _} = error ->
+          error
+      end
     end
   end
 
@@ -172,7 +263,7 @@ defmodule Mnemosyne do
   Commits the extracted changeset to the MemoryStore.
 
   Applies the knowledge graph changeset produced by the extraction pipeline
-  to the shared `MemoryStore`, making the new nodes and links available for
+  to the repo's `MemoryStore`, making the new nodes and links available for
   future recall queries. The session must be in the `:ready` state.
 
   After committing, the session transitions back to `:idle` and can start
@@ -244,6 +335,8 @@ defmodule Mnemosyne do
     end
   end
 
+  # -- Repo-scoped Operations --
+
   @doc """
   Retrieves relevant memories from the knowledge graph for the given query.
 
@@ -258,12 +351,14 @@ defmodule Mnemosyne do
 
   ## Examples
 
-      {:ok, memories} = Mnemosyne.recall("How to handle GenServer timeouts?")
+      {:ok, memories} = Mnemosyne.recall("my-repo", "How to handle GenServer timeouts?")
   """
-  @spec recall(String.t(), keyword()) :: {:ok, term()} | {:error, Mnemosyne.Errors.error()}
-  def recall(query, opts \\ []) do
-    store = store_name(opts)
-    MemoryStore.recall(store, query, opts)
+  @spec recall(String.t(), String.t(), keyword()) ::
+          {:ok, term()} | {:error, Mnemosyne.Errors.error()}
+  def recall(repo_id, query, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.recall(pid, query, opts)
+    end
   end
 
   @doc """
@@ -271,36 +366,37 @@ defmodule Mnemosyne do
 
   Augments the query with the active episode's state (current subgoal,
   recent observations) to produce more contextually relevant results.
-  If the session is not found, falls back to a plain `recall/2`.
+  If the session is not found, falls back to a plain `recall/3`.
 
   ## Examples
 
-      {:ok, memories} = Mnemosyne.recall_in_context(session_id, "What patterns apply here?")
+      {:ok, memories} = Mnemosyne.recall_in_context("my-repo", session_id, "What patterns apply here?")
   """
-  @spec recall_in_context(String.t(), String.t(), keyword()) ::
+  @spec recall_in_context(String.t(), String.t(), String.t(), keyword()) ::
           {:ok, term()} | {:error, Mnemosyne.Errors.error()}
-  def recall_in_context(session_id, query, opts \\ []) do
-    store = store_name(opts)
+  def recall_in_context(repo_id, session_id, query, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      case lookup_session(session_id, opts) do
+        {:ok, session_pid} ->
+          MemoryStore.recall_in_context(pid, session_pid, query, opts)
 
-    case lookup_session(session_id, opts) do
-      {:ok, pid} ->
-        MemoryStore.recall_in_context(store, pid, query, opts)
-
-      {:error, %NotFoundError{}} ->
-        MemoryStore.recall(store, query, opts)
+        {:error, %NotFoundError{}} ->
+          MemoryStore.recall(pid, query, opts)
+      end
     end
   end
 
   @doc """
-  Returns the current knowledge graph held by the MemoryStore.
+  Returns the current knowledge graph held by the repo's MemoryStore.
 
   The graph contains all committed nodes and their links. Useful for
   inspection, debugging, or building custom retrieval strategies.
   """
-  @spec get_graph(keyword()) :: Mnemosyne.Graph.t()
-  def get_graph(opts \\ []) do
-    store = store_name(opts)
-    MemoryStore.get_graph(store)
+  @spec get_graph(String.t(), keyword()) :: Mnemosyne.Graph.t() | {:error, NotFoundError.t()}
+  def get_graph(repo_id, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.get_graph(pid)
+    end
   end
 
   @doc """
@@ -310,11 +406,12 @@ defmodule Mnemosyne do
   updated graph to storage. This is the low-level mutation interface;
   prefer the session-based write path for normal operation.
   """
-  @spec apply_changeset(Mnemosyne.Graph.Changeset.t(), keyword()) ::
-          :ok | {:error, StorageError.t()}
-  def apply_changeset(changeset, opts \\ []) do
-    store = store_name(opts)
-    MemoryStore.apply_changeset(store, changeset)
+  @spec apply_changeset(String.t(), Mnemosyne.Graph.Changeset.t(), keyword()) ::
+          :ok | {:error, Mnemosyne.Errors.error()}
+  def apply_changeset(repo_id, changeset, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.apply_changeset(pid, changeset)
+    end
   end
 
   @doc """
@@ -323,13 +420,63 @@ defmodule Mnemosyne do
   Removes the specified nodes and any links referencing them, then persists
   the updated graph to storage.
   """
-  @spec delete_nodes([String.t()], keyword()) :: :ok | {:error, StorageError.t()}
-  def delete_nodes(node_ids, opts \\ []) do
-    store = store_name(opts)
-    MemoryStore.delete_nodes(store, node_ids)
+  @spec delete_nodes(String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Mnemosyne.Errors.error()}
+  def delete_nodes(repo_id, node_ids, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.delete_nodes(pid, node_ids)
+    end
+  end
+
+  @doc """
+  Consolidates near-duplicate semantic nodes in the repo's graph.
+
+  Discovers semantically similar nodes via tag-neighbor similarity and
+  deletes the lower-scored one.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec consolidate_semantics(String.t(), keyword()) ::
+          {:ok, %{deleted: non_neg_integer(), checked: non_neg_integer()}}
+          | {:error, Mnemosyne.Errors.error()}
+  def consolidate_semantics(repo_id, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.consolidate_semantics(pid, opts)
+    end
+  end
+
+  @doc """
+  Prunes low-utility nodes from the repo's graph via decay scoring.
+
+  Scores nodes on recency, frequency, and reward signals and removes those
+  below the threshold. Cleans up orphaned Tags/Intents after deletion.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec decay_nodes(String.t(), keyword()) ::
+          {:ok, %{deleted: non_neg_integer(), checked: non_neg_integer()}}
+          | {:error, Mnemosyne.Errors.error()}
+  def decay_nodes(repo_id, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.decay_nodes(pid, opts)
+    end
   end
 
   # -- Private --
+
+  defp lookup_repo(repo_id, opts) do
+    sup_name = Keyword.get(opts, :supervisor, @default_sup)
+    repo_registry = MneSupervisor.repo_registry_name(sup_name)
+
+    case Registry.lookup(repo_registry, repo_id) do
+      [{pid, _}] -> {:ok, pid}
+      [] -> {:error, NotFoundError.exception(resource: :repo, id: repo_id)}
+    end
+  end
 
   defp lookup_session(session_id, opts) do
     sup_name = Keyword.get(opts, :supervisor, @default_sup)
@@ -339,11 +486,6 @@ defmodule Mnemosyne do
       [{pid, nil}] -> {:ok, pid}
       [] -> {:error, NotFoundError.exception(resource: :session, id: session_id)}
     end
-  end
-
-  defp store_name(opts) do
-    sup_name = Keyword.get(opts, :supervisor, @default_sup)
-    MneSupervisor.memory_store_name(sup_name)
   end
 
   defp await_and_commit(pid, retries_remaining, poll_opts) do

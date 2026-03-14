@@ -76,14 +76,17 @@ defmodule Mnemosyne.IntegrationCase do
     dets_path = Path.join(tmp_dir, "integration_test.dets")
 
     opts = [
-      backend:
-        {Mnemosyne.GraphBackends.InMemory,
-         persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: dets_path}},
       config: config,
       llm: Mnemosyne.Adapters.SycophantLLM,
       embedding: Mnemosyne.Adapters.BumblebeeEmbedding
     ]
 
     ExUnit.Callbacks.start_supervised!({Mnemosyne.Supervisor, opts})
+
+    backend =
+      {Mnemosyne.GraphBackends.InMemory,
+       persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: dets_path}}
+
+    {:ok, _pid} = Mnemosyne.open_repo("integration", backend: backend)
   end
 end

@@ -22,6 +22,7 @@ defmodule Mnemosyne.Errors do
           | Mnemosyne.Errors.Framework.StorageError.t()
           | Mnemosyne.Errors.Framework.AdapterError.t()
           | Mnemosyne.Errors.Framework.NotFoundError.t()
+          | Mnemosyne.Errors.Framework.RepoError.t()
           | Mnemosyne.Errors.Unknown.Unknown.t()
 end
 

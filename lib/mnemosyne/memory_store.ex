@@ -20,7 +20,7 @@ defmodule Mnemosyne.MemoryStore do
   # -- Client API --
 
   def start_link(opts) do
-    name = Keyword.get(opts, :name, __MODULE__)
+    name = Keyword.fetch!(opts, :name)
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 

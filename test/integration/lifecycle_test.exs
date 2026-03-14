@@ -5,9 +5,11 @@ defmodule Mnemosyne.Integration.LifecycleTest do
 
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
 
+  @repo "integration"
+
   @tag timeout: 120_000
   test "full memory write-read cycle with real LLM and embeddings" do
-    {:ok, session_id} = Mnemosyne.start_session("Learning Elixir OTP patterns")
+    {:ok, session_id} = Mnemosyne.start_session("Learning Elixir OTP patterns", repo: @repo)
 
     :ok =
       Mnemosyne.append(
@@ -37,7 +39,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
                max_retries: 2
              )
 
-    graph = Mnemosyne.get_graph()
+    graph = Mnemosyne.get_graph(@repo)
     assert map_size(graph.nodes) > 0
 
     node_types =
@@ -64,14 +66,15 @@ defmodule Mnemosyne.Integration.LifecycleTest do
     end
 
     assert {:ok, %ReasonedMemory{} = result} =
-             Mnemosyne.recall("how do supervisors work in Elixir?")
+             Mnemosyne.recall(@repo, "how do supervisors work in Elixir?")
 
     assert result.episodic != nil or result.semantic != nil or result.procedural != nil
   end
 
   @tag timeout: 120_000
   test "recall_in_context augments query with session context" do
-    {:ok, write_session} = Mnemosyne.start_session("Understanding process isolation in BEAM")
+    {:ok, write_session} =
+      Mnemosyne.start_session("Understanding process isolation in BEAM", repo: @repo)
 
     :ok =
       Mnemosyne.append(
@@ -87,10 +90,10 @@ defmodule Mnemosyne.Integration.LifecycleTest do
                max_retries: 2
              )
 
-    graph = Mnemosyne.get_graph()
+    graph = Mnemosyne.get_graph(@repo)
     assert map_size(graph.nodes) > 0
 
-    {:ok, read_session} = Mnemosyne.start_session("Exploring BEAM internals")
+    {:ok, read_session} = Mnemosyne.start_session("Exploring BEAM internals", repo: @repo)
 
     :ok =
       Mnemosyne.append(
@@ -100,7 +103,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
       )
 
     assert {:ok, %ReasonedMemory{} = result} =
-             Mnemosyne.recall_in_context(read_session, "how does process memory work?")
+             Mnemosyne.recall_in_context(@repo, read_session, "how does process memory work?")
 
     assert result.episodic != nil or result.semantic != nil or result.procedural != nil
   end

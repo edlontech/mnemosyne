@@ -70,23 +70,28 @@ Two standalone operations keep the graph clean over time:
 - **Semantic consolidation** -- discovers near-duplicate semantic nodes that share tag-neighbors, compares their embeddings, and deletes the lower-scored duplicate when similarity exceeds a threshold
 - **Node decay** -- scores all nodes on recency, access frequency, and reward quality (without a query), pruning those below a threshold and cleaning up orphaned Tags/Intents
 
-Both are triggered explicitly via `MemoryStore.consolidate_semantics/2` and `MemoryStore.decay_nodes/2`.
+Both are triggered explicitly via `Mnemosyne.consolidate_semantics/2` and `Mnemosyne.decay_nodes/2`.
 
 ## Architecture
 
 ```mermaid
 graph TD
-    Agent[Your Agent] -->|start_session / append / close / recall| API[Mnemosyne API]
+    Agent[Your Agent] -->|open_repo / start_session / recall| API[Mnemosyne API]
+
+    API --> RepoSup[RepoSupervisor\nDynamicSupervisor]
+    RepoSup --> Store1[MemoryStore\nProject A]
+    RepoSup --> Store2[MemoryStore\nProject B]
 
     API --> Session[Session\nGenStateMachine]
-    API --> Store[Memory Store\nGenServer]
+
+    Store1 --> Backend1[GraphBackend]
+    Store2 --> Backend2[GraphBackend]
+
     API --> Retrieval[Retrieval\nPipeline]
+    Retrieval --> VF[Value Function\nrelevance * recency * frequency * reward]
+    Retrieval -->|find_candidates\nget_linked_nodes| Backend1
 
     Session --> Episode[Episode Pipeline]
-    Store --> Backend[GraphBackend]
-    Retrieval --> VF[Value Function\nrelevance * recency * frequency * reward]
-    Retrieval -->|find_candidates\nget_linked_nodes| Backend
-
     Episode --> Structuring
 
     subgraph Structuring [Parallel Extraction]
@@ -95,9 +100,13 @@ graph TD
         Returns[Return\nComputation]
     end
 
-    Structuring -->|Changeset| Backend
-    VF --> Backend
+    Structuring -->|Changeset| Backend1
+    VF --> Backend1
 ```
+
+### Multi-Repository Isolation
+
+Mnemosyne supports multiple isolated graph repositories under a single supervision tree. Each repository has its own MemoryStore process and GraphBackend instance, identified by an opaque string ID. Shared configuration (LLM, embedding adapters) is set once at supervisor startup; per-repo backend config is provided when opening a repo.
 
 The **Session** is a `GenStateMachine` that manages the episode lifecycle:
 
@@ -117,36 +126,44 @@ stateDiagram-v2
 ## Usage
 
 ```elixir
-# Start a session with a goal
-{:ok, session} = Mnemosyne.start_session(config, "Help user plan a trip")
+# Open an isolated graph repository for a project
+{:ok, _pid} = Mnemosyne.open_repo("my-project",
+  backend: {Mnemosyne.GraphBackends.InMemory,
+    persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: "my-project.dets"}})
+
+# Start a session with a goal, tied to a repo
+{:ok, session} = Mnemosyne.start_session("Help user plan a trip", repo: "my-project")
 
 # Collect observations and actions during interaction
-:ok = Mnemosyne.append(session, config, "User says they want to visit Tokyo", "Asking about dates")
-:ok = Mnemosyne.append(session, config, "User says next March for 2 weeks", "Suggesting itinerary")
+:ok = Mnemosyne.append(session, "User says they want to visit Tokyo", "Asking about dates")
+:ok = Mnemosyne.append(session, "User says next March for 2 weeks", "Suggesting itinerary")
 
-# Close the episode -- triggers async LLM extraction
-:ok = Mnemosyne.close(session, config)
-
-# Once extraction completes, commit knowledge to the graph
-:ok = Mnemosyne.commit(session, config)
+# Close the episode and commit knowledge to the graph
+:ok = Mnemosyne.close_and_commit(session)
 
 # Later, recall relevant knowledge for a new decision
-{:ok, memories} = Mnemosyne.recall(session, "What are the user's travel preferences?")
+{:ok, memories} = Mnemosyne.recall("my-project", "What are the user's travel preferences?")
+
+# List all open repos, close when done
+["my-project"] = Mnemosyne.list_repos()
+:ok = Mnemosyne.close_repo("my-project")
 ```
 
 ## Configuration
 
-Mnemosyne uses pluggable adapters for LLM, embedding, and graph storage backends.
+Mnemosyne uses pluggable adapters for LLM, embedding, and graph storage backends. Shared config is provided when starting the supervisor; backend config is per-repo.
 
 ```elixir
-config = %Mnemosyne.Config{
-  llm: %{model: "gpt-4o-mini", opts: %{}},
-  embedding: %{model: "text-embedding-3-small", opts: %{}},
-  backend: %{
-    module: Mnemosyne.GraphBackends.InMemory,
-    opts: %{}
-  }
-}
+# Add Mnemosyne to your supervision tree
+children = [
+  {Mnemosyne.Supervisor,
+    config: %Mnemosyne.Config{
+      llm: %{model: "gpt-4o-mini", opts: %{}},
+      embedding: %{model: "text-embedding-3-small", opts: %{}}
+    },
+    llm: MyApp.LLMAdapter,
+    embedding: MyApp.EmbeddingAdapter}
+]
 ```
 
 ### Graph Backends

@@ -2,6 +2,7 @@ defmodule Mnemosyne.ErrorsTest do
   use ExUnit.Case, async: true
 
   alias Mnemosyne.Errors
+  alias Mnemosyne.Errors.Framework.RepoError
   alias Mnemosyne.Errors.Unknown.Unknown
 
   describe "Splode error creation" do
@@ -50,6 +51,35 @@ defmodule Mnemosyne.ErrorsTest do
 
     test "returns false for a non-struct value" do
       refute Errors.splode_error?("just a string")
+    end
+  end
+
+  describe "RepoError" do
+    test "formats message with repo_id and reason" do
+      error = RepoError.exception(repo_id: :my_repo, reason: :already_open)
+
+      assert %RepoError{} = error
+      assert Exception.message(error) == "repo :my_repo: repository is already open"
+    end
+
+    test "formats message with reason only" do
+      error = RepoError.exception(reason: :already_open)
+
+      assert %RepoError{} = error
+      assert Exception.message(error) == "repository is already open"
+    end
+
+    test "formats unknown reason via inspect" do
+      error = RepoError.exception(repo_id: :test, reason: {:custom, "details"})
+
+      assert Exception.message(error) == "repo :test: {:custom, \"details\"}"
+    end
+
+    test "belongs to the framework error class" do
+      error = RepoError.exception(repo_id: :x, reason: :already_open)
+      class = Errors.to_class(error)
+
+      assert %{class: :framework} = class
     end
   end
 
