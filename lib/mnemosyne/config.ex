@@ -65,14 +65,34 @@ defmodule Mnemosyne.Config do
                    llm: @llm_schema,
                    embedding: @embedding_schema,
                    overrides: @override_schema,
-                   backend: Zoi.optional(@backend_schema)
+                   backend: Zoi.optional(@backend_schema),
+                   intent_merge_threshold:
+                     Zoi.default(Zoi.float(), 0.8,
+                       description:
+                         "Cosine similarity threshold above which incoming intents are merged via LLM rewrite"
+                     ),
+                   intent_identity_threshold:
+                     Zoi.default(Zoi.float(), 0.95,
+                       description:
+                         "Cosine similarity threshold above which incoming intents are silently deduplicated"
+                     )
                  })
 
   defstruct(
     llm: @llm_schema,
     embedding: @embedding_schema,
     overrides: @override_schema,
-    backend: Zoi.optional(@backend_schema)
+    backend: Zoi.optional(@backend_schema),
+    intent_merge_threshold:
+      Zoi.default(Zoi.float(), 0.8,
+        description:
+          "Cosine similarity threshold above which incoming intents are merged via LLM rewrite"
+      ),
+    intent_identity_threshold:
+      Zoi.default(Zoi.float(), 0.95,
+        description:
+          "Cosine similarity threshold above which incoming intents are silently deduplicated"
+      )
   )
 
   @moduledoc """

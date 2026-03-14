@@ -11,6 +11,7 @@ defmodule Mnemosyne.MemoryStore do
 
   alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Graph
+  alias Mnemosyne.Pipeline.IntentMerger
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
 
@@ -108,10 +109,18 @@ defmodule Mnemosyne.MemoryStore do
   def handle_call({:apply_changeset, changeset}, _from, state) do
     {backend_mod, backend_state} = state.backend
 
-    case backend_mod.apply_changeset(changeset, backend_state) do
-      {:ok, new_bs} ->
-        {:reply, :ok, %{state | backend: {backend_mod, new_bs}}}
+    merge_opts = [
+      backend: state.backend,
+      llm: state.llm,
+      embedding: state.embedding,
+      config: state.config,
+      value_functions: state.value_functions
+    ]
 
+    with {:ok, merged_cs} <- IntentMerger.merge(changeset, merge_opts),
+         {:ok, new_bs} <- backend_mod.apply_changeset(merged_cs, backend_state) do
+      {:reply, :ok, %{state | backend: {backend_mod, new_bs}}}
+    else
       {:error, _} = error ->
         {:reply, error, state}
     end
