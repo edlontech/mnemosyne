@@ -33,36 +33,40 @@ defmodule Mnemosyne.Pipeline.Structuring do
     do: {:error, EpisodeError.exception(reason: :episode_not_closed)}
 
   def extract(%Episode{} = episode, opts) do
-    Mnemosyne.Telemetry.span([:structuring, :extract], %{episode_id: episode.id}, fn ->
-      llm = Keyword.fetch!(opts, :llm)
-      embedding = Keyword.fetch!(opts, :embedding)
-      llm_opts = Keyword.get(opts, :llm_opts, [])
-      config = Keyword.get(opts, :config)
+    Mnemosyne.Telemetry.span(
+      [:structuring, :extract],
+      %{episode_id: episode.id, repo_id: Keyword.get(opts, :repo_id)},
+      fn ->
+        llm = Keyword.fetch!(opts, :llm)
+        embedding = Keyword.fetch!(opts, :embedding)
+        llm_opts = Keyword.get(opts, :llm_opts, [])
+        config = Keyword.get(opts, :config)
 
-      changesets =
-        episode.trajectories
-        |> Enum.map(fn trajectory ->
-          Logger.debug("extracting trajectory #{trajectory.id}")
+        changesets =
+          episode.trajectories
+          |> Enum.map(fn trajectory ->
+            Logger.debug("extracting trajectory #{trajectory.id}")
 
-          extract_trajectory(episode, trajectory, llm, embedding, llm_opts, config)
-        end)
-        |> collect_results()
+            extract_trajectory(episode, trajectory, llm, embedding, llm_opts, config)
+          end)
+          |> collect_results()
 
-      case changesets do
-        {:ok, css} ->
-          cs = Enum.reduce(css, Changeset.new(), &Changeset.merge(&2, &1))
+        case changesets do
+          {:ok, css} ->
+            cs = Enum.reduce(css, Changeset.new(), &Changeset.merge(&2, &1))
 
-          {{:ok, cs},
-           %{
-             trajectory_count: length(episode.trajectories),
-             nodes_created: length(cs.additions),
-             links_created: length(cs.links)
-           }}
+            {{:ok, cs},
+             %{
+               trajectory_count: length(episode.trajectories),
+               nodes_created: length(cs.additions),
+               links_created: length(cs.links)
+             }}
 
-        {:error, _} = err ->
-          {err, %{}}
+          {:error, _} = err ->
+            {err, %{}}
+        end
       end
-    end)
+    )
   end
 
   defp extract_trajectory(episode, trajectory, llm, embedding, llm_opts, config) do

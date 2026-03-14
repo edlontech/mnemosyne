@@ -108,6 +108,7 @@ defmodule Mnemosyne do
 
     store_opts = [
       name: via,
+      repo_id: repo_id,
       backend: Keyword.fetch!(opts, :backend),
       config: Keyword.get(opts, :config, defaults.config),
       llm: Keyword.get(opts, :llm, defaults.llm),
@@ -115,16 +116,18 @@ defmodule Mnemosyne do
       task_supervisor: task_sup
     ]
 
-    case DynamicSupervisor.start_child(repo_sup, {MemoryStore, store_opts}) do
-      {:ok, pid} ->
-        {:ok, pid}
+    Mnemosyne.Telemetry.span([:repo, :open], %{repo_id: repo_id}, fn ->
+      case DynamicSupervisor.start_child(repo_sup, {MemoryStore, store_opts}) do
+        {:ok, pid} ->
+          {{:ok, pid}, %{}}
 
-      {:error, {:already_started, _}} ->
-        {:error, RepoError.exception(repo_id: repo_id, reason: :already_open)}
+        {:error, {:already_started, _}} ->
+          {{:error, RepoError.exception(repo_id: repo_id, reason: :already_open)}, %{}}
 
-      {:error, reason} ->
-        {:error, RepoError.exception(repo_id: repo_id, reason: reason)}
-    end
+        {:error, reason} ->
+          {{:error, RepoError.exception(repo_id: repo_id, reason: reason)}, %{}}
+      end
+    end)
   end
 
   @doc """
@@ -141,9 +144,15 @@ defmodule Mnemosyne do
     sup_name = Keyword.get(opts, :supervisor, @default_sup)
     repo_sup = MneSupervisor.repo_supervisor_name(sup_name)
 
-    with {:ok, pid} <- lookup_repo(repo_id, opts) do
-      DynamicSupervisor.terminate_child(repo_sup, pid)
-    end
+    Mnemosyne.Telemetry.span([:repo, :close], %{repo_id: repo_id}, fn ->
+      case lookup_repo(repo_id, opts) do
+        {:ok, pid} ->
+          {DynamicSupervisor.terminate_child(repo_sup, pid), %{}}
+
+        {:error, _} = error ->
+          {error, %{}}
+      end
+    end)
   end
 
   @doc """
@@ -200,6 +209,7 @@ defmodule Mnemosyne do
         registry: registry,
         task_supervisor: task_sup,
         memory_store: store_pid,
+        repo_id: repo_id,
         config: Keyword.get(opts, :config, defaults.config),
         llm: Keyword.get(opts, :llm, defaults.llm),
         embedding: Keyword.get(opts, :embedding, defaults.embedding)

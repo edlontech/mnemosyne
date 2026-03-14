@@ -16,6 +16,7 @@ defmodule Mnemosyne.MemoryStore do
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
   alias Mnemosyne.Pipeline.SemanticConsolidator
+  alias Mnemosyne.Telemetry
 
   # -- Client API --
 
@@ -98,6 +99,7 @@ defmodule Mnemosyne.MemoryStore do
     case backend_mod.init(backend_opts) do
       {:ok, backend_state} ->
         state = %{
+          repo_id: Keyword.get(opts, :repo_id),
           backend: {backend_mod, backend_state},
           config: Keyword.fetch!(opts, :config),
           llm: Keyword.fetch!(opts, :llm),
@@ -118,6 +120,7 @@ defmodule Mnemosyne.MemoryStore do
     {backend_mod, backend_state} = state.backend
 
     merge_opts = [
+      repo_id: state.repo_id,
       backend: state.backend,
       llm: state.llm,
       embedding: state.embedding,
@@ -143,7 +146,13 @@ defmodule Mnemosyne.MemoryStore do
 
   @impl true
   def handle_call(:get_session_defaults, _from, state) do
-    defaults = %{config: state.config, llm: state.llm, embedding: state.embedding}
+    defaults = %{
+      config: state.config,
+      llm: state.llm,
+      embedding: state.embedding,
+      repo_id: state.repo_id
+    }
+
     {:reply, defaults, state}
   end
 
@@ -167,13 +176,20 @@ defmodule Mnemosyne.MemoryStore do
     consolidation_opts =
       Keyword.merge(opts, backend: state.backend, config: state.config)
 
-    case SemanticConsolidator.consolidate(consolidation_opts) do
-      {:ok, result, updated_backend} ->
-        {:reply, {:ok, result}, %{state | backend: updated_backend}}
+    {reply, new_state} =
+      Telemetry.span([:consolidator, :consolidate], %{repo_id: state.repo_id}, fn ->
+        case SemanticConsolidator.consolidate(consolidation_opts) do
+          {:ok, result, updated_backend} ->
+            reply = {:ok, result}
+            new_state = %{state | backend: updated_backend}
+            {{reply, new_state}, %{checked: result.checked, deleted: result.deleted}}
 
-      {:error, _} = error ->
-        {:reply, error, state}
-    end
+          {:error, _} = error ->
+            {{error, state}, %{}}
+        end
+      end)
+
+    {:reply, reply, new_state}
   end
 
   @impl true
@@ -181,13 +197,20 @@ defmodule Mnemosyne.MemoryStore do
     decay_opts =
       Keyword.merge(opts, backend: state.backend, config: state.config)
 
-    case Decay.decay(decay_opts) do
-      {:ok, result, updated_backend} ->
-        {:reply, {:ok, result}, %{state | backend: updated_backend}}
+    {reply, new_state} =
+      Telemetry.span([:decay, :prune], %{repo_id: state.repo_id}, fn ->
+        case Decay.decay(decay_opts) do
+          {:ok, result, updated_backend} ->
+            reply = {:ok, result}
+            new_state = %{state | backend: updated_backend}
+            {{reply, new_state}, %{checked: result.checked, deleted: result.deleted}}
 
-      {:error, _} = error ->
-        {:reply, error, state}
-    end
+          {:error, _} = error ->
+            {{error, state}, %{}}
+        end
+      end)
+
+    {:reply, reply, new_state}
   end
 
   @impl true
@@ -240,9 +263,11 @@ defmodule Mnemosyne.MemoryStore do
     value_fn = config.value_function
     max_hops = Keyword.get(opts, :max_hops, 2)
     backend = state.backend
+    repo_id = state.repo_id
 
     Task.Supervisor.async_nolink(state.task_supervisor, fn ->
       retrieval_opts = [
+        repo_id: repo_id,
         llm: llm,
         embedding: embedding,
         backend: backend,
@@ -252,7 +277,7 @@ defmodule Mnemosyne.MemoryStore do
       ]
 
       with {:ok, result} <- Retrieval.retrieve(query, retrieval_opts) do
-        Reasoning.reason(result, llm: llm, query: query, config: config)
+        Reasoning.reason(result, repo_id: repo_id, llm: llm, query: query, config: config)
       end
     end)
   end

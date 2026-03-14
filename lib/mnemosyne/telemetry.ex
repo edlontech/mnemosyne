@@ -21,8 +21,17 @@ defmodule Mnemosyne.Telemetry do
   - `[:mnemosyne, :retrieval, :retrieve, :start | :stop | :exception]`
   - `[:mnemosyne, :reasoning, :reason, :start | :stop | :exception]`
 
+  ### Maintenance
+  - `[:mnemosyne, :decay, :prune, :start | :stop | :exception]`
+  - `[:mnemosyne, :consolidator, :consolidate, :start | :stop | :exception]`
+  - `[:mnemosyne, :intent_merger, :merge, :start | :stop | :exception]`
+
   ### Session
   - `[:mnemosyne, :session, :transition, :start | :stop | :exception]`
+
+  ### Repository Lifecycle
+  - `[:mnemosyne, :repo, :open, :start | :stop | :exception]`
+  - `[:mnemosyne, :repo, :close, :start | :stop | :exception]`
 
   ### Storage / Graph
   - `[:mnemosyne, :graph, :apply_changeset, :start | :stop | :exception]`
@@ -41,7 +50,12 @@ defmodule Mnemosyne.Telemetry do
     @prefix ++ [:structuring, :extract],
     @prefix ++ [:retrieval, :retrieve],
     @prefix ++ [:reasoning, :reason],
+    @prefix ++ [:decay, :prune],
+    @prefix ++ [:consolidator, :consolidate],
+    @prefix ++ [:intent_merger, :merge],
     @prefix ++ [:session, :transition],
+    @prefix ++ [:repo, :open],
+    @prefix ++ [:repo, :close],
     @prefix ++ [:graph, :apply_changeset],
     @prefix ++ [:storage, :persist],
     @prefix ++ [:storage, :load]

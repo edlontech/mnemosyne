@@ -42,9 +42,13 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   @spec reason(Retrieval.Result.t(), keyword()) ::
           {:ok, ReasonedMemory.t()} | {:error, Mnemosyne.Errors.error()}
   def reason(%Retrieval.Result{candidates: candidates}, opts) do
-    Mnemosyne.Telemetry.span([:reasoning, :reason], %{}, fn ->
-      do_reason(candidates, opts)
-    end)
+    Mnemosyne.Telemetry.span(
+      [:reasoning, :reason],
+      %{repo_id: Keyword.get(opts, :repo_id)},
+      fn ->
+        do_reason(candidates, opts)
+      end
+    )
   end
 
   defp do_reason(candidates, opts) do

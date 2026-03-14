@@ -36,36 +36,51 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     if intents == [] do
       {:ok, changeset}
     else
-      {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
-      llm = Keyword.fetch!(opts, :llm)
-      embedding = Keyword.fetch!(opts, :embedding)
-      config = Keyword.fetch!(opts, :config)
+      repo_id = Keyword.get(opts, :repo_id)
 
-      value_function =
-        Keyword.get(opts, :value_function, %{module: Mnemosyne.ValueFunction.Default, params: %{}})
+      Mnemosyne.Telemetry.span(
+        [:intent_merger, :merge],
+        %{repo_id: repo_id, intent_count: length(intents)},
+        fn ->
+          {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
+          llm = Keyword.fetch!(opts, :llm)
+          embedding = Keyword.fetch!(opts, :embedding)
+          config = Keyword.fetch!(opts, :config)
 
-      {merged_intents, link_rewrites, updated_metadata} =
-        process_intents(
-          intents,
-          backend_mod,
-          backend_state,
-          llm,
-          embedding,
-          config,
-          value_function,
-          changeset.metadata
-        )
+          value_function =
+            Keyword.get(opts, :value_function, %{
+              module: Mnemosyne.ValueFunction.Default,
+              params: %{}
+            })
 
-      rewritten_links = rewrite_links(changeset.links, link_rewrites)
-      merged_additions = other_nodes ++ merged_intents
+          {merged_intents, link_rewrites, updated_metadata} =
+            process_intents(
+              intents,
+              backend_mod,
+              backend_state,
+              llm,
+              embedding,
+              config,
+              value_function,
+              changeset.metadata
+            )
 
-      {:ok,
-       %Changeset{
-         changeset
-         | additions: merged_additions,
-           links: rewritten_links,
-           metadata: updated_metadata
-       }}
+          rewritten_links = rewrite_links(changeset.links, link_rewrites)
+          merged_additions = other_nodes ++ merged_intents
+          rewrites_count = map_size(link_rewrites)
+
+          result =
+            {:ok,
+             %Changeset{
+               changeset
+               | additions: merged_additions,
+                 links: rewritten_links,
+                 metadata: updated_metadata
+             }}
+
+          {result, %{merged: length(merged_intents), rewrites: rewrites_count}}
+        end
+      )
     end
   end
 

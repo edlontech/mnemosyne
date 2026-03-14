@@ -67,47 +67,51 @@ defmodule Mnemosyne.Pipeline.Episode do
     do: {:error, EpisodeError.exception(reason: :episode_closed)}
 
   def append(%__MODULE__{} = episode, observation, action, opts) do
-    Telemetry.span([:episode, :append], %{episode_id: episode.id}, fn ->
-      llm = Keyword.fetch!(opts, :llm)
-      embedding = Keyword.fetch!(opts, :embedding)
-      llm_opts = Keyword.get(opts, :llm_opts, [])
-      config = Keyword.get(opts, :config)
+    Telemetry.span(
+      [:episode, :append],
+      %{episode_id: episode.id, repo_id: Keyword.get(opts, :repo_id)},
+      fn ->
+        llm = Keyword.fetch!(opts, :llm)
+        embedding = Keyword.fetch!(opts, :embedding)
+        llm_opts = Keyword.get(opts, :llm_opts, [])
+        config = Keyword.get(opts, :config)
 
-      with {:ok, subgoal} <-
-             infer_subgoal(llm, observation, action, episode.goal, config, llm_opts),
-           {:ok, %Embedding.Response{vectors: [subgoal_embedding | _]}} <-
-             embedding.embed(subgoal, Config.embedding_opts(config)),
-           {:ok, reward} <- evaluate_reward(llm, observation, action, subgoal, config, llm_opts),
-           {:ok, state} <- summarize_state(llm, episode, config, llm_opts) do
-        step = %{
-          index: length(episode.steps),
-          observation: observation,
-          action: action,
-          subgoal: subgoal,
-          state: state,
-          reward: reward,
-          embedding: subgoal_embedding,
-          trajectory_id: episode.current_trajectory_id
-        }
-
-        prev_trajectory_id = episode.current_trajectory_id
-        episode = maybe_segment_trajectory(episode, subgoal_embedding)
-        step = %{step | trajectory_id: episode.current_trajectory_id}
-
-        updated =
-          %{
-            episode
-            | steps: episode.steps ++ [step],
-              current_subgoal_embedding: subgoal_embedding
+        with {:ok, subgoal} <-
+               infer_subgoal(llm, observation, action, episode.goal, config, llm_opts),
+             {:ok, %Embedding.Response{vectors: [subgoal_embedding | _]}} <-
+               embedding.embed(subgoal, Config.embedding_opts(config)),
+             {:ok, reward} <- evaluate_reward(llm, observation, action, subgoal, config, llm_opts),
+             {:ok, state} <- summarize_state(llm, episode, config, llm_opts) do
+          step = %{
+            index: length(episode.steps),
+            observation: observation,
+            action: action,
+            subgoal: subgoal,
+            state: state,
+            reward: reward,
+            embedding: subgoal_embedding,
+            trajectory_id: episode.current_trajectory_id
           }
 
-        new_trajectory = updated.current_trajectory_id != prev_trajectory_id
+          prev_trajectory_id = episode.current_trajectory_id
+          episode = maybe_segment_trajectory(episode, subgoal_embedding)
+          step = %{step | trajectory_id: episode.current_trajectory_id}
 
-        {{:ok, updated}, %{step_count: length(updated.steps), new_trajectory: new_trajectory}}
-      else
-        error -> {error, %{}}
+          updated =
+            %{
+              episode
+              | steps: episode.steps ++ [step],
+                current_subgoal_embedding: subgoal_embedding
+            }
+
+          new_trajectory = updated.current_trajectory_id != prev_trajectory_id
+
+          {{:ok, updated}, %{step_count: length(updated.steps), new_trajectory: new_trajectory}}
+        else
+          error -> {error, %{}}
+        end
       end
-    end)
+    )
   end
 
   @doc "Closes the episode, grouping steps into trajectory segments."

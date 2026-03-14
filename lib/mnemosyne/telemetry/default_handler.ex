@@ -68,6 +68,7 @@ defmodule Mnemosyne.Telemetry.DefaultHandler do
   defp format_extra(measurements, metadata) do
     parts =
       []
+      |> maybe_add("repo", metadata[:repo_id])
       |> maybe_add("tokens_in", measurements[:tokens_input])
       |> maybe_add("tokens_out", measurements[:tokens_output])
       |> maybe_add("batch_size", measurements[:batch_size])
@@ -76,6 +77,10 @@ defmodule Mnemosyne.Telemetry.DefaultHandler do
       |> maybe_add("trajectories", measurements[:trajectory_count])
       |> maybe_add("candidates", measurements[:candidates_found])
       |> maybe_add("steps", measurements[:step_count])
+      |> maybe_add("checked", measurements[:checked])
+      |> maybe_add("deleted", measurements[:deleted])
+      |> maybe_add("merged", measurements[:merged])
+      |> maybe_add("rewrites", measurements[:rewrites])
       |> maybe_add("model", metadata[:model])
       |> maybe_add("step", metadata[:step])
       |> maybe_add("mode", metadata[:mode])

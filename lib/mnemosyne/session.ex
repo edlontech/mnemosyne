@@ -22,6 +22,7 @@ defmodule Mnemosyne.Session do
 
   @type t :: %__MODULE__{
           id: String.t() | nil,
+          repo_id: String.t() | nil,
           registry: module() | nil,
           episode: Episode.t() | nil,
           changeset: Changeset.t() | nil,
@@ -35,6 +36,7 @@ defmodule Mnemosyne.Session do
 
   defstruct [
     :id,
+    :repo_id,
     :registry,
     :episode,
     :changeset,
@@ -151,6 +153,7 @@ defmodule Mnemosyne.Session do
   def init(opts) do
     data = %__MODULE__{
       id: Keyword.fetch!(opts, :id),
+      repo_id: Keyword.get(opts, :repo_id),
       registry: Keyword.fetch!(opts, :registry),
       config: Keyword.fetch!(opts, :config),
       llm: Keyword.fetch!(opts, :llm),
@@ -207,6 +210,7 @@ defmodule Mnemosyne.Session do
   @doc false
   def collecting({:call, from}, {:append, observation, action}, data) do
     opts = [
+      repo_id: data.repo_id,
       llm: data.llm,
       embedding: data.embedding,
       config: data.config
@@ -367,7 +371,13 @@ defmodule Mnemosyne.Session do
 
   defp spawn_extraction(data) do
     episode = data.episode
-    opts = [llm: data.llm, embedding: data.embedding, config: data.config]
+
+    opts = [
+      repo_id: data.repo_id,
+      llm: data.llm,
+      embedding: data.embedding,
+      config: data.config
+    ]
 
     Task.Supervisor.async_nolink(data.task_supervisor, fn ->
       Structuring.extract(episode, opts)
@@ -401,7 +411,7 @@ defmodule Mnemosyne.Session do
     :telemetry.execute(
       [:mnemosyne, :session, :transition, :stop],
       %{duration: 0},
-      %{session_id: data.id, from_state: from_state, to_state: to_state}
+      %{session_id: data.id, repo_id: data.repo_id, from_state: from_state, to_state: to_state}
     )
   end
 end
