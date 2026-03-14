@@ -13,6 +13,7 @@ defmodule Mnemosyne.MemoryStoreTest do
   alias Mnemosyne.GraphBackends.Persistence.DETS
   alias Mnemosyne.LLM
   alias Mnemosyne.MemoryStore
+  alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
 
   @moduletag :tmp_dir
@@ -186,6 +187,117 @@ defmodule Mnemosyne.MemoryStoreTest do
       pid = start_store(tmp_dir)
 
       assert {:error, _reason} = MemoryStore.recall(pid, "crash query")
+    end
+  end
+
+  describe "consolidate_semantics/2" do
+    test "consolidates near-duplicate semantic nodes", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      emb = List.duplicate(0.5, 128)
+      emb_similar = List.duplicate(0.5, 127) ++ [0.50001]
+
+      tag = %Tag{id: "t1", label: "elixir", links: MapSet.new(["s1", "s2"])}
+
+      sem1 = %Semantic{
+        id: "s1",
+        proposition: "Elixir is great",
+        confidence: 0.9,
+        embedding: emb,
+        links: MapSet.new(["t1"])
+      }
+
+      sem2 = %Semantic{
+        id: "s2",
+        proposition: "Elixir is awesome",
+        confidence: 0.9,
+        embedding: emb_similar,
+        links: MapSet.new(["t1"])
+      }
+
+      meta1 = NodeMetadata.new(created_at: DateTime.utc_now(), access_count: 5)
+      meta2 = NodeMetadata.new(created_at: DateTime.utc_now(), access_count: 0)
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(tag)
+        |> Changeset.add_node(sem1)
+        |> Changeset.add_node(sem2)
+        |> Changeset.put_metadata("s1", meta1)
+        |> Changeset.put_metadata("s2", meta2)
+
+      :ok = MemoryStore.apply_changeset(pid, changeset)
+
+      assert {:ok, %{deleted: 1, checked: 2}} = MemoryStore.consolidate_semantics(pid)
+
+      graph = MemoryStore.get_graph(pid)
+      remaining = Graph.nodes_by_type(graph, :semantic)
+      assert length(remaining) == 1
+    end
+
+    test "returns zeros on empty graph", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      assert {:ok, %{deleted: 0, checked: 0}} = MemoryStore.consolidate_semantics(pid)
+    end
+  end
+
+  describe "decay_nodes/2" do
+    test "prunes low-utility nodes", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      old_time = ~U[2020-01-01 00:00:00Z]
+      emb = List.duplicate(0.5, 128)
+
+      sem = %Semantic{id: "s-old", proposition: "Stale fact", confidence: 0.9, embedding: emb}
+      meta = NodeMetadata.new(created_at: old_time, access_count: 0)
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(sem)
+        |> Changeset.put_metadata("s-old", meta)
+
+      :ok = MemoryStore.apply_changeset(pid, changeset)
+
+      assert {:ok, %{deleted: deleted, checked: 1}} = MemoryStore.decay_nodes(pid)
+      assert deleted >= 1
+
+      graph = MemoryStore.get_graph(pid)
+      assert Graph.get_node(graph, "s-old") == nil
+    end
+
+    test "returns zeros on empty graph", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      assert {:ok, %{deleted: 0, checked: 0}} = MemoryStore.decay_nodes(pid)
+    end
+
+    test "state persists after maintenance", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      old_time = ~U[2020-01-01 00:00:00Z]
+      emb = List.duplicate(0.5, 128)
+
+      sem = %Semantic{
+        id: "s-persist",
+        proposition: "Will be pruned",
+        confidence: 0.9,
+        embedding: emb
+      }
+
+      meta = NodeMetadata.new(created_at: old_time, access_count: 0)
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(sem)
+        |> Changeset.put_metadata("s-persist", meta)
+
+      :ok = MemoryStore.apply_changeset(pid, changeset)
+
+      {:ok, _result} = MemoryStore.decay_nodes(pid)
+
+      graph = MemoryStore.get_graph(pid)
+      assert Graph.get_node(graph, "s-persist") == nil
     end
   end
 

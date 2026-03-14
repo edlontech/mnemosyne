@@ -348,6 +348,175 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       end)
     end
 
+    test "adds pairwise sibling links between semantic nodes from same trajectory" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      semantic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> MapSet.new(& &1.id)
+
+      sibling_links =
+        Enum.filter(cs.links, fn {from, to} ->
+          MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
+        end)
+
+      # 2 semantic nodes => 2 choose 2 = 1 pair
+      assert length(sibling_links) == 1
+    end
+
+    test "three semantic nodes produce three sibling links" do
+      episode = build_closed_episode()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat, fn _messages, _opts ->
+        {:ok, %LLM.Response{content: "0.85", model: "mock:test", usage: %{}}}
+      end)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content)
+
+        content =
+          cond do
+            system_content =~ "factual knowledge" ->
+              %{
+                facts: [
+                  %{proposition: "Fact A", concepts: ["c1"]},
+                  %{proposition: "Fact B", concepts: ["c1"]},
+                  %{proposition: "Fact C", concepts: ["c2"]}
+                ]
+              }
+
+            system_content =~ "actionable instructions" ->
+              %{
+                instructions: [
+                  %{
+                    intent: "Do something",
+                    condition: "Always",
+                    instruction: "Do it",
+                    expected_outcome: "Done"
+                  }
+                ]
+              }
+
+            true ->
+              %{}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      stub_default_embedding()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      semantic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> MapSet.new(& &1.id)
+
+      sibling_links =
+        Enum.filter(cs.links, fn {from, to} ->
+          MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
+        end)
+
+      # 3 semantic nodes => 3 choose 2 = 3 pairs
+      assert length(sibling_links) == 3
+    end
+
+    test "single semantic node produces no sibling links" do
+      episode = build_closed_episode()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat, fn _messages, _opts ->
+        {:ok, %LLM.Response{content: "0.85", model: "mock:test", usage: %{}}}
+      end)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content)
+
+        content =
+          cond do
+            system_content =~ "factual knowledge" ->
+              %{facts: [%{proposition: "Only fact", concepts: ["c1"]}]}
+
+            system_content =~ "actionable instructions" ->
+              %{
+                instructions: [
+                  %{
+                    intent: "Do something",
+                    condition: "Always",
+                    instruction: "Do it",
+                    expected_outcome: "Done"
+                  }
+                ]
+              }
+
+            true ->
+              %{}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      stub_default_embedding()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      semantic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> MapSet.new(& &1.id)
+
+      sibling_links =
+        Enum.filter(cs.links, fn {from, to} ->
+          MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
+        end)
+
+      assert sibling_links == []
+    end
+
+    test "sibling links coexist with tag-to-semantic links" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      semantic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> MapSet.new(& &1.id)
+
+      tag_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Tag{}, &1))
+        |> MapSet.new(& &1.id)
+
+      tag_to_sem_links =
+        Enum.filter(cs.links, fn {from, to} ->
+          MapSet.member?(tag_ids, from) and MapSet.member?(semantic_ids, to)
+        end)
+
+      sibling_links =
+        Enum.filter(cs.links, fn {from, to} ->
+          MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
+        end)
+
+      assert tag_to_sem_links != []
+      assert sibling_links != []
+    end
+
     test "tag and intent nodes have reward_count == 0" do
       episode = build_closed_episode()
       stub_extraction_llm()

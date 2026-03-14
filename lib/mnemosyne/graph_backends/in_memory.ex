@@ -124,6 +124,12 @@ defmodule Mnemosyne.GraphBackends.InMemory do
   end
 
   @impl true
+  def get_nodes_by_type(node_types, state) do
+    nodes = Enum.flat_map(node_types, &Graph.nodes_by_type(state.graph, &1))
+    {:ok, nodes, state}
+  end
+
+  @impl true
   def delete_metadata(node_ids, state) do
     updated = Map.drop(state.metadata, node_ids)
     :ok = maybe_delete_metadata(node_ids, state.persistence)

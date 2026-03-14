@@ -4,6 +4,18 @@ An Elixir implementation of task-agnostic agentic memory for LLM agents, based o
 
 Mnemosyne structures raw agent interactions into a knowledge-centric memory graph, transforming verbose episodic traces into compact, reusable knowledge that any LLM agent can query at decision time.
 
+## Installation
+
+Add `mnemosyne` to your list of dependencies in `mix.exs`:
+
+```elixir
+def deps do
+  [
+    {:mnemosyne, github: "edlontech/mnemosyne"}
+  ]
+end
+```
+
 ## Memory Layers
 
 - **Episodic memory** -- detailed records of experience (observation-action pairs)
@@ -23,6 +35,7 @@ When an episode closes, the **structuring pipeline** extracts knowledge in paral
 - **Semantic extraction** -- distills factual propositions with confidence scores
 - **Procedural extraction** -- abstracts reusable instructions with conditions and expected outcomes
 - **Return computation** -- evaluates trajectory quality via cumulative reward signals
+- **Sibling linking** -- creates pairwise links between semantic nodes from the same trajectory, preserving co-occurrence structure
 
 Trajectory boundaries are detected automatically using embedding similarity (cosine threshold), splitting episodes into coherent subsequences that share a common intent.
 
@@ -49,6 +62,15 @@ When the agent needs memory, the retrieval pipeline:
 1. Computes an embedding for the query
 2. Scores candidate nodes using a **value function** that combines cosine relevance with node metadata (recency, access frequency, reward quality) via a multiplicative formula
 3. Returns the highest-scoring knowledge, ranked by decision relevance
+
+### 4. Maintenance -- Graph Hygiene
+
+Two standalone operations keep the graph clean over time:
+
+- **Semantic consolidation** -- discovers near-duplicate semantic nodes that share tag-neighbors, compares their embeddings, and deletes the lower-scored duplicate when similarity exceeds a threshold
+- **Node decay** -- scores all nodes on recency, access frequency, and reward quality (without a query), pruning those below a threshold and cleaning up orphaned Tags/Intents
+
+Both are triggered explicitly via `MemoryStore.consolidate_semantics/2` and `MemoryStore.decay_nodes/2`.
 
 ## Architecture
 
@@ -140,7 +162,7 @@ backend: {Mnemosyne.GraphBackends.InMemory,
   persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: "memory.dets"}}
 ```
 
-Custom backends can push queries to external databases (e.g. Postgres with pgvector) by implementing `find_candidates/6`, `get_node/2`, and `get_linked_nodes/2`.
+Custom backends can push queries to external databases (e.g. Postgres with pgvector) by implementing the `Mnemosyne.GraphBackend` behaviour
 
 ### LLM and Embedding Adapters
 
@@ -148,34 +170,9 @@ The built-in adapters wrap [Sycophant](https://github.com/edlontech/sycophant) f
 
 Per-pipeline-step model overrides are supported via `config.overrides[step_atom]`, so you can use a cheaper model for subgoal inference and a stronger one for knowledge extraction.
 
-## Installation
-
-Add `mnemosyne` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:mnemosyne, github: "edlontech/mnemosyne"}
-  ]
-end
-```
-
-## Key Dependencies
-
-- [Nx](https://github.com/elixir-nx/nx) / [Scholar](https://github.com/elixir-nx/scholar) -- tensor math for embeddings and cosine similarity
-- [GenStateMachine](https://github.com/ericentin/gen_state_machine) -- session lifecycle state machine
-- [Sycophant](https://github.com/edlontech/sycophant) -- optional LLM client adapter
-- [Bumblebee](https://github.com/elixir-nx/bumblebee) -- optional local embedding models
-- [Splode](https://github.com/ash-project/splode) -- structured error handling
-- [Telemetry](https://github.com/beam-telemetry/telemetry) -- instrumentation for all pipeline stages
-
 ## Status
 
 Mnemosyne is under active development. The structuring and session management layers are functional. Retrieval and reasoning modules are partially implemented.
-
-## License
-
-See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 

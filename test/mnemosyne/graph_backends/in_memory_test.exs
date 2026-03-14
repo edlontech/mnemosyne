@@ -3,6 +3,7 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
 
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
+  alias Mnemosyne.Graph.Node.Procedural
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
@@ -214,6 +215,63 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
 
       assert [{_, with_tag_score}] = candidates_with_tags
       assert with_tag_score > no_tag_score
+    end
+  end
+
+  defp procedural_node(id, embedding) do
+    %Procedural{
+      id: id,
+      condition: "condition #{id}",
+      instruction: "instruction #{id}",
+      expected_outcome: "outcome #{id}",
+      embedding: embedding
+    }
+  end
+
+  describe "get_nodes_by_type/2" do
+    test "returns nodes of requested types only" do
+      {:ok, state} = InMemory.init([])
+      s1 = semantic_node("s1", @test_vector)
+      e1 = episodic_node("e1", @alt_vector)
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(s1)
+        |> Changeset.add_node(e1)
+
+      {:ok, state} = InMemory.apply_changeset(changeset, state)
+
+      {:ok, nodes, _state} = InMemory.get_nodes_by_type([:semantic], state)
+
+      assert [%Semantic{id: "s1"}] = nodes
+    end
+
+    test "returns empty list when no nodes match" do
+      {:ok, state} = InMemory.init([])
+
+      {:ok, nodes, _state} = InMemory.get_nodes_by_type([:procedural], state)
+
+      assert nodes == []
+    end
+
+    test "returns nodes from multiple types when multiple requested" do
+      {:ok, state} = InMemory.init([])
+      s1 = semantic_node("s1", @test_vector)
+      p1 = procedural_node("p1", @alt_vector)
+      e1 = episodic_node("e1", @test_vector)
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(s1)
+        |> Changeset.add_node(p1)
+        |> Changeset.add_node(e1)
+
+      {:ok, state} = InMemory.apply_changeset(changeset, state)
+
+      {:ok, nodes, _state} = InMemory.get_nodes_by_type([:semantic, :procedural], state)
+
+      ids = Enum.map(nodes, & &1.id) |> Enum.sort()
+      assert ids == ["p1", "s1"]
     end
   end
 

@@ -11,9 +11,11 @@ defmodule Mnemosyne.MemoryStore do
 
   alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Graph
+  alias Mnemosyne.Pipeline.Decay
   alias Mnemosyne.Pipeline.IntentMerger
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
+  alias Mnemosyne.Pipeline.SemanticConsolidator
 
   # -- Client API --
 
@@ -59,6 +61,22 @@ defmodule Mnemosyne.MemoryStore do
           :ok | {:error, term()}
   def delete_nodes(server, node_ids) do
     GenServer.call(server, {:delete_nodes, node_ids})
+  end
+
+  @doc "Consolidates near-duplicate semantic nodes."
+  @spec consolidate_semantics(GenServer.server(), keyword()) ::
+          {:ok, %{deleted: non_neg_integer(), checked: non_neg_integer()}}
+          | {:error, term()}
+  def consolidate_semantics(server, opts \\ []) do
+    GenServer.call(server, {:consolidate_semantics, opts}, :timer.seconds(120))
+  end
+
+  @doc "Prunes low-utility nodes via decay scoring."
+  @spec decay_nodes(GenServer.server(), keyword()) ::
+          {:ok, %{deleted: non_neg_integer(), checked: non_neg_integer()}}
+          | {:error, term()}
+  def decay_nodes(server, opts \\ []) do
+    GenServer.call(server, {:decay_nodes, opts}, :timer.seconds(120))
   end
 
   @doc "Returns the config, llm, and embedding modules for session creation."
@@ -142,6 +160,34 @@ defmodule Mnemosyne.MemoryStore do
     task = spawn_recall_task(state, augmented_query, opts)
     pending = Map.put(state.pending_recalls, task.ref, from)
     {:noreply, %{state | pending_recalls: pending}}
+  end
+
+  @impl true
+  def handle_call({:consolidate_semantics, opts}, _from, state) do
+    consolidation_opts =
+      Keyword.merge(opts, backend: state.backend, config: state.config)
+
+    case SemanticConsolidator.consolidate(consolidation_opts) do
+      {:ok, result, updated_backend} ->
+        {:reply, {:ok, result}, %{state | backend: updated_backend}}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:decay_nodes, opts}, _from, state) do
+    decay_opts =
+      Keyword.merge(opts, backend: state.backend, config: state.config)
+
+    case Decay.decay(decay_opts) do
+      {:ok, result, updated_backend} ->
+        {:reply, {:ok, result}, %{state | backend: updated_backend}}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
   end
 
   @impl true

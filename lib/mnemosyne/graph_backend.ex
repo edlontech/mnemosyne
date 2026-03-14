@@ -58,4 +58,7 @@ defmodule Mnemosyne.GraphBackend do
 
   @callback delete_metadata([String.t()], state()) ::
               {:ok, state()}
+
+  @callback get_nodes_by_type(node_types :: [atom()], state()) ::
+              {:ok, [struct()], state()} | {:error, Mnemosyne.Errors.error()}
 end

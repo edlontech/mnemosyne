@@ -166,10 +166,15 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
       reward_meta = NodeMetadata.new(cumulative_reward: avg_reward, reward_count: 1)
 
-      cs =
+      {cs, sem_ids} =
         facts
         |> Enum.zip(prop_embeddings)
-        |> Enum.reduce(Changeset.new(), &add_semantic_node(&1, &2, concept_map, reward_meta))
+        |> Enum.reduce({Changeset.new(), []}, fn fact_emb, {acc_cs, acc_ids} ->
+          {node, updated_cs} = add_semantic_node(fact_emb, acc_cs, concept_map, reward_meta)
+          {updated_cs, [node.id | acc_ids]}
+        end)
+
+      cs = add_sibling_links(cs, sem_ids)
 
       cs =
         Enum.reduce(Map.values(concept_map), cs, fn tag, acc ->
@@ -195,12 +200,15 @@ defmodule Mnemosyne.Pipeline.Structuring do
       |> Changeset.add_node(sem_node)
       |> Changeset.put_metadata(sem_node.id, reward_meta)
 
-    Enum.reduce(fact.concepts, cs, fn concept_label, acc ->
-      case Map.fetch(concept_map, concept_label) do
-        {:ok, tag} -> Changeset.add_link(acc, tag.id, sem_node.id)
-        :error -> acc
-      end
-    end)
+    cs =
+      Enum.reduce(fact.concepts, cs, fn concept_label, acc ->
+        case Map.fetch(concept_map, concept_label) do
+          {:ok, tag} -> Changeset.add_link(acc, tag.id, sem_node.id)
+          :error -> acc
+        end
+      end)
+
+    {sem_node, cs}
   end
 
   defp extract_procedural(trajectory, goal, llm, embedding, llm_opts, config, avg_reward) do
@@ -317,6 +325,16 @@ defmodule Mnemosyne.Pipeline.Structuring do
         %{}
     end
   end
+
+  defp add_sibling_links(cs, ids) do
+    ids
+    |> pairs()
+    |> Enum.reduce(cs, fn {a, b}, acc -> Changeset.add_link(acc, a, b) end)
+  end
+
+  defp pairs([]), do: []
+  defp pairs([_]), do: []
+  defp pairs([h | t]), do: Enum.map(t, &{h, &1}) ++ pairs(t)
 
   defp generate_id(prefix) do
     "#{prefix}_#{:crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)}"
