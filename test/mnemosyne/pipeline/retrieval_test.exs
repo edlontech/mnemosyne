@@ -5,6 +5,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
   alias Mnemosyne.Graph
+  alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Node.Episodic
   alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Node.Procedural
@@ -142,6 +143,268 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       [backend: {InMemory, backend_state}, value_function: @value_function] ++ extra
   end
 
+  @far_vector List.duplicate(-0.3, 128)
+  defp build_routing_test_graph do
+    Graph.new()
+    |> Graph.put_node(%Semantic{
+      id: "sem_pasta",
+      proposition: "Pasta is Italian",
+      confidence: 0.9,
+      embedding: @test_vector
+    })
+    |> Graph.put_node(%Semantic{
+      id: "sem_risotto",
+      proposition: "Risotto is Italian",
+      confidence: 0.9,
+      embedding: @alt_vector
+    })
+    |> Graph.put_node(%Semantic{
+      id: "sem_sushi",
+      proposition: "Sushi is Japanese",
+      confidence: 0.9,
+      embedding: @far_vector
+    })
+    |> Graph.put_node(%Tag{
+      id: "tag_cooking",
+      label: "cooking",
+      embedding: @test_vector
+    })
+    |> Graph.put_node(%Tag{
+      id: "tag_italian",
+      label: "italian",
+      embedding: @alt_vector
+    })
+    |> Graph.put_node(%Procedural{
+      id: "proc_migrate",
+      instruction: "Run migrations",
+      condition: "deploying",
+      expected_outcome: "schema updated",
+      embedding: @test_vector
+    })
+    |> Graph.put_node(%Procedural{
+      id: "proc_rollback",
+      instruction: "Rollback migrations",
+      condition: "deploy failed",
+      expected_outcome: "schema reverted",
+      embedding: @far_vector
+    })
+    |> Graph.put_node(%Intent{
+      id: "intent_deploy",
+      description: "Deploy application",
+      embedding: @test_vector
+    })
+    |> Graph.put_node(%Source{
+      id: "src_orphan",
+      episode_id: "ep_001",
+      step_index: 0
+    })
+    |> Graph.link("tag_cooking", "sem_pasta")
+    |> Graph.link("tag_cooking", "sem_risotto")
+    |> Graph.link("tag_cooking", "sem_sushi")
+    |> Graph.link("tag_italian", "sem_pasta")
+    |> Graph.link("tag_italian", "sem_risotto")
+    |> Graph.link("intent_deploy", "proc_migrate")
+    |> Graph.link("intent_deploy", "proc_rollback")
+  end
+
+  describe "expand_through_routing_nodes/4" do
+    test "discovers sibling semantic nodes through shared tags" do
+      graph = build_routing_test_graph()
+      backend = {InMemory, %InMemory{graph: graph}}
+      candidates = [{Graph.get_node(graph, "sem_pasta"), 0.9}]
+      seen = MapSet.new(["sem_pasta"])
+
+      siblings = Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:tag])
+      sibling_ids = Enum.map(siblings, &NodeProtocol.id/1)
+
+      assert "sem_risotto" in sibling_ids
+      assert "sem_sushi" in sibling_ids
+      refute "sem_pasta" in sibling_ids
+    end
+
+    test "discovers sibling procedural nodes through shared intents" do
+      graph = build_routing_test_graph()
+      backend = {InMemory, %InMemory{graph: graph}}
+      candidates = [{Graph.get_node(graph, "proc_migrate"), 0.9}]
+      seen = MapSet.new(["proc_migrate"])
+
+      siblings = Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:intent])
+      sibling_ids = Enum.map(siblings, &NodeProtocol.id/1)
+
+      assert "proc_rollback" in sibling_ids
+      refute "proc_migrate" in sibling_ids
+    end
+
+    test "excludes routing nodes from results" do
+      graph = build_routing_test_graph()
+      backend = {InMemory, %InMemory{graph: graph}}
+      candidates = [{Graph.get_node(graph, "sem_pasta"), 0.9}]
+      seen = MapSet.new(["sem_pasta"])
+
+      siblings = Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:tag])
+      sibling_types = Enum.map(siblings, &NodeProtocol.node_type/1)
+
+      refute :tag in sibling_types
+    end
+
+    test "returns empty list when no routing neighbors exist" do
+      graph = build_routing_test_graph()
+      backend = {InMemory, %InMemory{graph: graph}}
+      candidates = [{Graph.get_node(graph, "src_orphan"), 0.5}]
+      seen = MapSet.new(["src_orphan"])
+
+      assert [] == Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:tag])
+    end
+
+    test "returns empty list for empty candidates" do
+      graph = build_routing_test_graph()
+      backend = {InMemory, %InMemory{graph: graph}}
+
+      assert [] == Retrieval.expand_through_routing_nodes([], backend, MapSet.new(), [:tag])
+    end
+  end
+
+  describe "abstraction-specificity interleaving" do
+    test "hop discovers siblings through shared tag that hop 0 missed" do
+      query_vec = List.duplicate(0.5, 128)
+      close_vec = List.duplicate(0.49, 128)
+      far_vec = List.duplicate(-0.3, 128)
+      tag_vec = List.duplicate(0.1, 128)
+
+      graph =
+        Graph.new()
+        |> Graph.put_node(%Semantic{
+          id: "sem_close",
+          proposition: "Close match",
+          confidence: 0.9,
+          embedding: close_vec
+        })
+        |> Graph.put_node(%Semantic{
+          id: "sem_far",
+          proposition: "Far but related",
+          confidence: 0.9,
+          embedding: far_vec
+        })
+        |> Graph.put_node(%Tag{
+          id: "tag_shared",
+          label: "shared_concept",
+          embedding: tag_vec
+        })
+        |> Graph.link("tag_shared", "sem_close")
+        |> Graph.link("tag_shared", "sem_far")
+
+      stub_retrieval_llm("semantic", "shared_concept")
+
+      Mnemosyne.MockEmbedding
+      |> stub(:embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [query_vec], model: "mock", usage: %{}}}
+      end)
+      |> stub(:embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> query_vec end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "mock", usage: %{}}}
+      end)
+
+      {:ok, result} =
+        Retrieval.retrieve("Find related facts", retrieval_opts(graph, max_hops: 2))
+
+      all_ids =
+        result.candidates
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.map(fn {node, _} -> node.id end)
+
+      assert "sem_close" in all_ids
+      assert "sem_far" in all_ids
+    end
+
+    test "mixed mode routes through both tags and intents" do
+      query_vec = List.duplicate(0.5, 128)
+      close_vec = List.duplicate(0.49, 128)
+      far_vec = List.duplicate(-0.3, 128)
+      tag_vec = List.duplicate(0.1, 128)
+
+      graph =
+        Graph.new()
+        |> Graph.put_node(%Semantic{
+          id: "sem_a",
+          proposition: "A fact",
+          confidence: 0.9,
+          embedding: close_vec
+        })
+        |> Graph.put_node(%Semantic{
+          id: "sem_b",
+          proposition: "Related fact",
+          confidence: 0.9,
+          embedding: far_vec
+        })
+        |> Graph.put_node(%Tag{id: "tag_x", label: "concept", embedding: tag_vec})
+        |> Graph.put_node(%Procedural{
+          id: "proc_a",
+          instruction: "Do X",
+          condition: "when Y",
+          expected_outcome: "Z",
+          embedding: close_vec
+        })
+        |> Graph.put_node(%Procedural{
+          id: "proc_b",
+          instruction: "Do A",
+          condition: "when B",
+          expected_outcome: "C",
+          embedding: far_vec
+        })
+        |> Graph.put_node(%Intent{
+          id: "int_x",
+          description: "Goal",
+          embedding: tag_vec
+        })
+        |> Graph.link("tag_x", "sem_a")
+        |> Graph.link("tag_x", "sem_b")
+        |> Graph.link("int_x", "proc_a")
+        |> Graph.link("int_x", "proc_b")
+
+      stub_retrieval_llm("mixed", "concept\ngoal")
+
+      Mnemosyne.MockEmbedding
+      |> stub(:embed, fn _t, _o ->
+        {:ok, %Embedding.Response{vectors: [query_vec], model: "m", usage: %{}}}
+      end)
+      |> stub(:embed_batch, fn ts, _o ->
+        {:ok,
+         %Embedding.Response{vectors: Enum.map(ts, fn _ -> query_vec end), model: "m", usage: %{}}}
+      end)
+
+      {:ok, result} =
+        Retrieval.retrieve("Everything", retrieval_opts(graph, max_hops: 2))
+
+      all_ids =
+        result.candidates
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.map(fn {n, _} -> n.id end)
+
+      assert "sem_b" in all_ids
+      assert "proc_b" in all_ids
+    end
+
+    test "routing nodes never appear in final candidates" do
+      graph = build_test_graph()
+      stub_retrieval_llm("semantic", "deployment")
+      stub_default_embedding()
+
+      {:ok, result} =
+        Retrieval.retrieve("deployment", retrieval_opts(graph, max_hops: 2))
+
+      all_types =
+        result.candidates
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.map(fn {node, _} -> NodeProtocol.node_type(node) end)
+
+      refute :tag in all_types
+      refute :intent in all_types
+    end
+  end
+
   describe "retrieve/2" do
     test "returns retrieval result with mode, tags, and candidates" do
       graph = build_test_graph()
@@ -156,7 +419,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       assert is_map(result.candidates)
     end
 
-    test "semantic mode retrieves semantic and tag nodes" do
+    test "semantic mode retrieves semantic nodes" do
       graph = build_test_graph()
       stub_retrieval_llm("semantic")
       stub_default_embedding()
@@ -166,6 +429,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       assert result.mode == :semantic
       candidate_types = Map.keys(result.candidates)
       assert :semantic in candidate_types
+      refute :tag in candidate_types
     end
 
     test "episodic mode retrieves episodic nodes and expands provenance" do
@@ -328,7 +592,8 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         |> List.flatten()
         |> Enum.map(fn {node, _score} -> node.id end)
 
-      assert "int_1" in all_ids or "proc_1" in all_ids
+      assert "proc_1" in all_ids
+      refute "int_1" in all_ids
     end
 
     test "semantic mode discovers propositions through concept tags" do
@@ -345,7 +610,8 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         |> List.flatten()
         |> Enum.map(fn {node, _score} -> node.id end)
 
-      assert "tag_1" in all_ids or "sem_1" in all_ids
+      assert "sem_1" in all_ids
+      refute "tag_1" in all_ids
     end
 
     test "candidates include scores as floats" do

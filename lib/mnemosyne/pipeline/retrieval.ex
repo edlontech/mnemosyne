@@ -68,7 +68,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
 
         candidates =
           hop_0(backend, query_vector, tag_vectors, target_types, value_fns)
-          |> multi_hop(backend, query_vector, value_fns, max_hops)
+          |> multi_hop(backend, query_vector, value_fns, max_hops, mode)
           |> maybe_expand_provenance(backend, mode)
           |> partition_by_type()
 
@@ -102,9 +102,14 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   end
 
   defp types_for_mode(:episodic), do: [:episodic, :subgoal]
-  defp types_for_mode(:semantic), do: [:semantic, :tag]
-  defp types_for_mode(:procedural), do: [:procedural, :intent]
-  defp types_for_mode(:mixed), do: [:episodic, :semantic, :procedural, :subgoal, :tag, :intent]
+  defp types_for_mode(:semantic), do: [:semantic]
+  defp types_for_mode(:procedural), do: [:procedural]
+  defp types_for_mode(:mixed), do: [:episodic, :semantic, :procedural, :subgoal]
+
+  defp routing_types_for_mode(:semantic), do: [:tag]
+  defp routing_types_for_mode(:procedural), do: [:intent]
+  defp routing_types_for_mode(:mixed), do: [:tag, :intent]
+  defp routing_types_for_mode(:episodic), do: [:tag]
 
   defp hop_0(backend, query_vector, tag_vectors, target_types, value_fns) do
     {mod, bs} = backend
@@ -115,24 +120,17 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     candidates
   end
 
-  defp multi_hop(candidates, _backend, _query_vector, _value_fns, 0), do: candidates
+  defp multi_hop(candidates, _backend, _query_vector, _value_fns, 0, _mode), do: candidates
 
-  defp multi_hop(candidates, backend, query_vector, value_fns, hops_remaining) do
-    {mod, bs} = backend
-    candidate_ids = MapSet.new(candidates, fn {node, _} -> NodeProtocol.id(node) end)
-
-    neighbor_ids =
-      candidates
-      |> Enum.flat_map(fn {node, _} -> NodeProtocol.links(node) |> MapSet.to_list() end)
-      |> Enum.reject(&MapSet.member?(candidate_ids, &1))
-      |> Enum.uniq()
-
-    {:ok, neighbors, _bs} = mod.get_linked_nodes(neighbor_ids, bs)
+  defp multi_hop(candidates, backend, query_vector, value_fns, hops_remaining, mode) do
+    seen_ids = MapSet.new(candidates, fn {node, _} -> NodeProtocol.id(node) end)
+    routing_types = routing_types_for_mode(mode)
+    new_nodes = expand_through_routing_nodes(candidates, backend, seen_ids, routing_types)
 
     vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
 
-    scored_neighbors =
-      Enum.map(neighbors, fn node ->
+    scored =
+      Enum.map(new_nodes, fn node ->
         emb = NodeProtocol.embedding(node)
         relevance = if emb, do: Similarity.cosine_similarity(query_vector, emb), else: 0.0
         type = NodeProtocol.node_type(node)
@@ -142,12 +140,41 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       end)
 
     merged =
-      (candidates ++ scored_neighbors)
+      (candidates ++ scored)
       |> Enum.uniq_by(fn {node, _} -> NodeProtocol.id(node) end)
       |> Enum.sort_by(&elem(&1, 1), :desc)
       |> Enum.take(@max_candidates_per_hop)
 
-    multi_hop(merged, backend, query_vector, value_fns, hops_remaining - 1)
+    multi_hop(merged, backend, query_vector, value_fns, hops_remaining - 1, mode)
+  end
+
+  @doc false
+  def expand_through_routing_nodes(candidates, backend, seen_ids, routing_types) do
+    {mod, bs} = backend
+
+    candidate_link_ids =
+      candidates
+      |> Enum.flat_map(fn {node, _} -> NodeProtocol.links(node) |> MapSet.to_list() end)
+      |> Enum.uniq()
+
+    {:ok, linked_nodes, _bs} = mod.get_linked_nodes(candidate_link_ids, bs)
+
+    routing_nodes =
+      Enum.filter(linked_nodes, fn node ->
+        NodeProtocol.node_type(node) in routing_types
+      end)
+
+    sibling_ids =
+      routing_nodes
+      |> Enum.flat_map(fn node -> NodeProtocol.links(node) |> MapSet.to_list() end)
+      |> Enum.reject(&MapSet.member?(seen_ids, &1))
+      |> Enum.uniq()
+
+    {:ok, siblings, _bs} = mod.get_linked_nodes(sibling_ids, bs)
+
+    Enum.reject(siblings, fn node ->
+      NodeProtocol.node_type(node) in routing_types
+    end)
   end
 
   defp maybe_expand_provenance(candidates, backend, :episodic) do
