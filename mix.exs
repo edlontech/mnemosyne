@@ -6,7 +6,7 @@ defmodule Mnemosyne.MixProject do
       app: :mnemosyne,
       description: description(),
       package: package(),
-      version: "0.1.0",
+      version: "1.0.0",
       elixir: "~> 1.19",
       docs: docs(),
       dialyzer: [
