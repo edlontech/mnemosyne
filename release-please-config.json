@@ -1,0 +1,11 @@
+{
+  "release-type": "elixir",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "packages": {
+    ".": {
+      "package-name": "mnemosyne",
+      "changelogpath": "CHANGELOG.md"
+    }
+  }
+}
