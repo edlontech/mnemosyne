@@ -69,7 +69,7 @@ defmodule Mnemosyne.IntegrationCase do
   defp start_supervisor(tmp_dir, api_key, serving) do
     {:ok, config} =
       Zoi.parse(Mnemosyne.Config.t(), %{
-        llm: %{model: @llm_model, opts: %{api_key: api_key}},
+        llm: %{model: @llm_model, opts: %{credentials: %{api_key: api_key}}},
         embedding: %{model: @embedding_model, opts: %{serving: serving}}
       })
 
