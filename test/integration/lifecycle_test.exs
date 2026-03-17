@@ -66,6 +66,42 @@ defmodule Mnemosyne.Integration.LifecycleTest do
       assert type in known_types, "Unexpected node type: #{inspect(type)}"
     end
 
+    semantic_nodes =
+      graph.nodes
+      |> Map.values()
+      |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+
+    episodic_ids =
+      graph.nodes
+      |> Map.values()
+      |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Episodic{}, &1))
+      |> MapSet.new(& &1.id)
+
+    procedural_nodes =
+      graph.nodes
+      |> Map.values()
+      |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Procedural{}, &1))
+
+    assert semantic_nodes != [], "expected semantic nodes in graph"
+    assert procedural_nodes != [], "expected procedural nodes in graph"
+    assert MapSet.size(episodic_ids) > 0, "expected episodic nodes in graph"
+
+    Enum.each(semantic_nodes, fn sem ->
+      provenance =
+        MapSet.intersection(sem.links, episodic_ids)
+
+      assert MapSet.size(provenance) > 0,
+             "semantic node #{sem.id} should have provenance links to episodic nodes"
+    end)
+
+    Enum.each(procedural_nodes, fn proc ->
+      provenance =
+        MapSet.intersection(proc.links, episodic_ids)
+
+      assert MapSet.size(provenance) > 0,
+             "procedural node #{proc.id} should have provenance links to episodic nodes"
+    end)
+
     assert {:ok, %ReasonedMemory{} = result} =
              Mnemosyne.recall(@repo, "how do supervisors work in Elixir?")
 

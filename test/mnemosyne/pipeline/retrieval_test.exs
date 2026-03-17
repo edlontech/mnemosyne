@@ -207,6 +207,194 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     |> Graph.link("intent_deploy", "proc_rollback")
   end
 
+  defp build_provenance_graph do
+    Graph.new()
+    |> Graph.put_node(%Episodic{
+      id: "ep_1",
+      observation: "Server crashed under load",
+      action: "Added connection pooling",
+      state: "Degraded",
+      reward: 0.7,
+      trajectory_id: "traj_1",
+      embedding: @test_vector
+    })
+    |> Graph.put_node(%Episodic{
+      id: "ep_2",
+      observation: "Pool stabilized throughput",
+      action: "Verified metrics",
+      state: "Healthy",
+      reward: 0.9,
+      trajectory_id: "traj_1",
+      embedding: @alt_vector
+    })
+    |> Graph.put_node(%Source{id: "src_1", episode_id: "episode_1", step_index: 0})
+    |> Graph.put_node(%Source{id: "src_2", episode_id: "episode_1", step_index: 1})
+    |> Graph.put_node(%Subgoal{
+      id: "sg_1",
+      description: "Fix server stability",
+      parent_goal: "Improve uptime"
+    })
+    |> Graph.put_node(%Semantic{
+      id: "sem_pool",
+      proposition: "Connection pooling prevents resource exhaustion",
+      confidence: 0.95,
+      embedding: @test_vector
+    })
+    |> Graph.put_node(%Semantic{
+      id: "sem_throughput",
+      proposition: "Pooling improves throughput under high concurrency",
+      confidence: 0.9,
+      embedding: @alt_vector
+    })
+    |> Graph.put_node(%Tag{id: "tag_pooling", label: "pooling", embedding: @test_vector})
+    |> Graph.put_node(%Tag{id: "tag_perf", label: "performance", embedding: @alt_vector})
+    |> Graph.put_node(%Procedural{
+      id: "proc_pool",
+      instruction: "Configure connection pool size based on load",
+      condition: "Database connections exceed threshold",
+      expected_outcome: "Stable response times",
+      embedding: @test_vector
+    })
+    |> Graph.put_node(%Intent{
+      id: "int_scale",
+      description: "Scale database connections",
+      embedding: @test_vector
+    })
+    # episodic structure
+    |> Graph.link("ep_1", "sg_1")
+    |> Graph.link("ep_1", "src_1")
+    |> Graph.link("ep_2", "sg_1")
+    |> Graph.link("ep_2", "src_2")
+    # semantic subgraph: tag → semantic (membership)
+    |> Graph.link("tag_pooling", "sem_pool")
+    |> Graph.link("tag_pooling", "sem_throughput")
+    |> Graph.link("tag_perf", "sem_throughput")
+    # semantic sibling
+    |> Graph.link("sem_pool", "sem_throughput")
+    # procedural subgraph: intent → procedural (hierarchical)
+    |> Graph.link("int_scale", "proc_pool")
+    # provenance: semantic → episodic
+    |> Graph.link("sem_pool", "ep_1")
+    |> Graph.link("sem_pool", "ep_2")
+    |> Graph.link("sem_throughput", "ep_1")
+    |> Graph.link("sem_throughput", "ep_2")
+    # provenance: procedural → episodic
+    |> Graph.link("proc_pool", "ep_1")
+    |> Graph.link("proc_pool", "ep_2")
+  end
+
+  defp candidate_ids(result) do
+    result.candidates
+    |> Map.values()
+    |> List.flatten()
+    |> Enum.map(fn {node, _} -> NodeProtocol.id(node) end)
+  end
+
+  describe "retrieval with provenance edges" do
+    test "semantic search returns semantic nodes from provenance-linked graph" do
+      graph = build_provenance_graph()
+      stub_retrieval_llm("semantic", "pooling\nperformance")
+      stub_default_embedding()
+
+      {:ok, result} =
+        Retrieval.retrieve(
+          "How does connection pooling work?",
+          retrieval_opts(graph, max_hops: 2)
+        )
+
+      assert result.mode == :semantic
+      ids = candidate_ids(result)
+      assert "sem_pool" in ids
+      assert "sem_throughput" in ids
+      refute "ep_1" in ids
+      refute "ep_2" in ids
+    end
+
+    test "procedural search returns procedural nodes from provenance-linked graph" do
+      graph = build_provenance_graph()
+      stub_retrieval_llm("procedural", "scale database")
+      stub_default_embedding()
+
+      {:ok, result} =
+        Retrieval.retrieve("How to scale database?", retrieval_opts(graph, max_hops: 2))
+
+      assert result.mode == :procedural
+      ids = candidate_ids(result)
+      assert "proc_pool" in ids
+      refute "int_scale" in ids
+      refute "ep_1" in ids
+    end
+
+    test "episodic search retrieves episodic nodes and source provenance" do
+      graph = build_provenance_graph()
+      stub_retrieval_llm("episodic", "server crash\nstability")
+      stub_default_embedding()
+
+      {:ok, result} =
+        Retrieval.retrieve(
+          "What happened when server crashed?",
+          retrieval_opts(graph, max_hops: 2)
+        )
+
+      assert result.mode == :episodic
+      ids = candidate_ids(result)
+      assert "ep_1" in ids or "ep_2" in ids
+      assert "src_1" in ids or "src_2" in ids
+    end
+
+    test "semantic candidates carry provenance links to episodic nodes" do
+      graph = build_provenance_graph()
+      stub_retrieval_llm("semantic", "pooling")
+      stub_default_embedding()
+
+      {:ok, result} =
+        Retrieval.retrieve("pooling facts", retrieval_opts(graph, max_hops: 2))
+
+      semantic_nodes =
+        result.candidates
+        |> Map.get(:semantic, [])
+        |> Enum.map(fn {node, _} -> node end)
+
+      assert semantic_nodes != []
+
+      Enum.each(semantic_nodes, fn node ->
+        episodic_links =
+          node.links
+          |> MapSet.to_list()
+          |> Enum.filter(&String.starts_with?(&1, "ep_"))
+
+        assert episodic_links != [],
+               "semantic node #{node.id} should have provenance links to episodic nodes"
+      end)
+    end
+
+    test "procedural candidates carry provenance links to episodic nodes" do
+      graph = build_provenance_graph()
+      stub_retrieval_llm("procedural", "scale database")
+      stub_default_embedding()
+
+      {:ok, result} =
+        Retrieval.retrieve("how to scale", retrieval_opts(graph, max_hops: 2))
+
+      procedural_nodes =
+        result.candidates
+        |> Map.get(:procedural, [])
+        |> Enum.map(fn {node, _} -> node end)
+
+      assert procedural_nodes != []
+
+      Enum.each(procedural_nodes, fn node ->
+        episodic_links =
+          node.links
+          |> MapSet.to_list()
+          |> Enum.filter(&String.starts_with?(&1, "ep_"))
+
+        assert episodic_links != [],
+               "procedural node #{node.id} should have provenance links to episodic nodes"
+      end)
+    end
+  end
+
   describe "expand_through_routing_nodes/4" do
     test "discovers sibling semantic nodes through shared tags" do
       graph = build_routing_test_graph()

@@ -96,13 +96,32 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
   defp do_extract_trajectory(trajectory, goal, episode_id, llm, embedding, llm_opts, config) do
     avg_reward = trajectory_avg_reward(trajectory)
+    episodic_ids = Enum.map(trajectory.steps, fn _step -> generate_id("ep_node") end)
 
     extraction_tasks = [
       Task.async(fn ->
-        extract_semantic(trajectory, goal, llm, embedding, llm_opts, config, avg_reward)
+        extract_semantic(
+          trajectory,
+          goal,
+          llm,
+          embedding,
+          llm_opts,
+          config,
+          avg_reward,
+          episodic_ids
+        )
       end),
       Task.async(fn ->
-        extract_procedural(trajectory, goal, llm, embedding, llm_opts, config, avg_reward)
+        extract_procedural(
+          trajectory,
+          goal,
+          llm,
+          embedding,
+          llm_opts,
+          config,
+          avg_reward,
+          episodic_ids
+        )
       end),
       Task.async(fn -> compute_return(trajectory, goal, llm, llm_opts, config) end)
     ]
@@ -120,7 +139,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
     with {:ok, semantic_cs} <- tag_result(semantic_result, :semantic),
          {:ok, procedural_cs} <- tag_result(procedural_result, :procedural),
          {:ok, return_value} <- tag_result(return_result, :return) do
-      base_cs = build_base_changeset(goal, episode_id, trajectory, return_value)
+      base_cs = build_base_changeset(goal, episode_id, trajectory, return_value, episodic_ids)
 
       {:ok,
        base_cs
@@ -136,7 +155,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
     total / length(steps)
   end
 
-  defp build_base_changeset(goal, episode_id, trajectory, _return_value) do
+  defp build_base_changeset(goal, episode_id, trajectory, _return_value, episodic_ids) do
     subgoal_node = %Subgoal{
       id: generate_id("sg"),
       description: trajectory.subgoal,
@@ -148,8 +167,9 @@ defmodule Mnemosyne.Pipeline.Structuring do
       |> Changeset.add_node(subgoal_node)
       |> Changeset.put_metadata(subgoal_node.id, NodeMetadata.new())
 
-    Enum.reduce(trajectory.steps, cs, fn step, acc ->
-      episodic_id = generate_id("ep_node")
+    trajectory.steps
+    |> Enum.zip(episodic_ids)
+    |> Enum.reduce(cs, fn {step, episodic_id}, acc ->
       source_id = generate_id("src")
 
       episodic_node = %Episodic{
@@ -178,7 +198,16 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end)
   end
 
-  defp extract_semantic(trajectory, goal, llm, embedding, llm_opts, config, avg_reward) do
+  defp extract_semantic(
+         trajectory,
+         goal,
+         llm,
+         embedding,
+         llm_opts,
+         config,
+         avg_reward,
+         episodic_ids
+       ) do
     messages = SemanticPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
     with {:ok, %{content: content}} <-
@@ -203,7 +232,10 @@ defmodule Mnemosyne.Pipeline.Structuring do
           {updated_cs, [node.id | acc_ids]}
         end)
 
-      cs = add_sibling_links(cs, sem_ids)
+      cs =
+        cs
+        |> add_sibling_links(sem_ids)
+        |> add_provenance_links(sem_ids, episodic_ids)
 
       cs =
         Enum.reduce(Map.values(concept_map), cs, fn tag, acc ->
@@ -240,7 +272,16 @@ defmodule Mnemosyne.Pipeline.Structuring do
     {sem_node, cs}
   end
 
-  defp extract_procedural(trajectory, goal, llm, embedding, llm_opts, config, avg_reward) do
+  defp extract_procedural(
+         trajectory,
+         goal,
+         llm,
+         embedding,
+         llm_opts,
+         config,
+         avg_reward,
+         episodic_ids
+       ) do
     messages = ProceduralPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
 
     with {:ok, %{content: content}} <-
@@ -260,10 +301,15 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
       reward_meta = NodeMetadata.new(cumulative_reward: avg_reward, reward_count: 1)
 
-      cs =
+      {cs, proc_ids} =
         instructions
         |> Enum.zip(proc_embeddings)
-        |> Enum.reduce(Changeset.new(), &add_procedural_node(&1, &2, intent_map, reward_meta))
+        |> Enum.reduce({Changeset.new(), []}, fn instr_emb, {acc_cs, acc_ids} ->
+          {node, updated_cs} = add_procedural_node(instr_emb, acc_cs, intent_map, reward_meta)
+          {updated_cs, [node.id | acc_ids]}
+        end)
+
+      cs = add_provenance_links(cs, proc_ids, episodic_ids)
 
       cs =
         Enum.reduce(Map.values(intent_map), cs, fn intent, acc ->
@@ -290,10 +336,13 @@ defmodule Mnemosyne.Pipeline.Structuring do
       |> Changeset.add_node(proc_node)
       |> Changeset.put_metadata(proc_node.id, reward_meta)
 
-    case Map.fetch(intent_map, instr.intent) do
-      {:ok, intent} -> Changeset.add_link(cs, intent.id, proc_node.id)
-      :error -> cs
-    end
+    cs =
+      case Map.fetch(intent_map, instr.intent) do
+        {:ok, intent} -> Changeset.add_link(cs, intent.id, proc_node.id)
+        :error -> cs
+      end
+
+    {proc_node, cs}
   end
 
   defp compute_return(trajectory, goal, llm, llm_opts, config) do
@@ -352,6 +401,12 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
       _ ->
         %{}
+    end
+  end
+
+  defp add_provenance_links(cs, knowledge_ids, episodic_ids) do
+    for k_id <- knowledge_ids, e_id <- episodic_ids, reduce: cs do
+      acc -> Changeset.add_link(acc, k_id, e_id)
     end
   end
 

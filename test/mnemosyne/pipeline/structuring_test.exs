@@ -517,6 +517,57 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       assert sibling_links != []
     end
 
+    test "semantic nodes have provenance links to episodic nodes" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      semantic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> MapSet.new(& &1.id)
+
+      episodic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Episodic{}, &1))
+        |> MapSet.new(& &1.id)
+
+      provenance_links =
+        Enum.filter(cs.links, fn {from, to} ->
+          MapSet.member?(semantic_ids, from) and MapSet.member?(episodic_ids, to)
+        end)
+
+      # each semantic node links to each episodic node
+      expected_count = MapSet.size(semantic_ids) * MapSet.size(episodic_ids)
+      assert length(provenance_links) == expected_count
+    end
+
+    test "procedural nodes have provenance links to episodic nodes" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      procedural_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Procedural{}, &1))
+        |> MapSet.new(& &1.id)
+
+      episodic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Episodic{}, &1))
+        |> MapSet.new(& &1.id)
+
+      provenance_links =
+        Enum.filter(cs.links, fn {from, to} ->
+          MapSet.member?(procedural_ids, from) and MapSet.member?(episodic_ids, to)
+        end)
+
+      expected_count = MapSet.size(procedural_ids) * MapSet.size(episodic_ids)
+      assert length(provenance_links) == expected_count
+    end
+
     test "tag and intent nodes have reward_count == 0" do
       episode = build_closed_episode()
       stub_extraction_llm()
