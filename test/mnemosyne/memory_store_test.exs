@@ -1,5 +1,6 @@
 defmodule Mnemosyne.MemoryStoreTest do
   use ExUnit.Case, async: false
+  use AssertEventually, timeout: 500, interval: 10
 
   import Mimic
 
@@ -96,8 +97,9 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       assert :ok = MemoryStore.apply_changeset(pid, changeset)
 
-      graph = MemoryStore.get_graph(pid)
-      assert %Semantic{proposition: "Test fact"} = Graph.get_node(graph, "s1")
+      assert_eventually(
+        %Semantic{proposition: "Test fact"} = Graph.get_node(MemoryStore.get_graph(pid), "s1")
+      )
     end
 
     test "persists changes to DETS so they survive reload", %{tmp_dir: tmp_dir} do
@@ -108,12 +110,30 @@ defmodule Mnemosyne.MemoryStoreTest do
       changeset = Changeset.add_node(Changeset.new(), node)
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s2") != nil)
+
       stop_supervised!(name1)
 
       name2 = unique_name()
       pid2 = start_store(tmp_dir, name: name2)
       graph = MemoryStore.get_graph(pid2)
       assert %Semantic{proposition: "Persistent fact"} = Graph.get_node(graph, "s2")
+    end
+
+    test "serializes multiple concurrent changesets", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      for i <- 1..5 do
+        node = make_semantic("batch-#{i}", "Fact #{i}")
+        changeset = Changeset.add_node(Changeset.new(), node)
+        :ok = MemoryStore.apply_changeset(pid, changeset)
+      end
+
+      assert_eventually(
+        Enum.all?(1..5, fn i ->
+          Graph.get_node(MemoryStore.get_graph(pid), "batch-#{i}") != nil
+        end)
+      )
     end
   end
 
@@ -132,10 +152,11 @@ defmodule Mnemosyne.MemoryStoreTest do
       changeset = Changeset.add_node(Changeset.new(), node)
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "del-1") != nil)
+
       assert :ok = MemoryStore.delete_nodes(pid, ["del-1"])
 
-      graph = MemoryStore.get_graph(pid)
-      assert Graph.get_node(graph, "del-1") == nil
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "del-1") == nil)
     end
   end
 
@@ -165,6 +186,8 @@ defmodule Mnemosyne.MemoryStoreTest do
         |> Changeset.add_node(tag)
 
       :ok = MemoryStore.apply_changeset(pid, changeset)
+
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s1") != nil)
 
       assert {:ok, %ReasonedMemory{}} = MemoryStore.recall(pid, "what is elixir?")
     end
@@ -228,17 +251,26 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
-      assert {:ok, %{deleted: 1, checked: 2}} = MemoryStore.consolidate_semantics(pid)
+      assert_eventually(length(Graph.nodes_by_type(MemoryStore.get_graph(pid), :semantic)) == 2)
 
-      graph = MemoryStore.get_graph(pid)
-      remaining = Graph.nodes_by_type(graph, :semantic)
-      assert length(remaining) == 1
+      :ok = MemoryStore.consolidate_semantics(pid)
+
+      assert_eventually(length(Graph.nodes_by_type(MemoryStore.get_graph(pid), :semantic)) == 1)
     end
 
-    test "returns zeros on empty graph", %{tmp_dir: tmp_dir} do
+    test "handles empty graph without error", %{tmp_dir: tmp_dir} do
       pid = start_store(tmp_dir)
 
-      assert {:ok, %{deleted: 0, checked: 0}} = MemoryStore.consolidate_semantics(pid)
+      :ok = MemoryStore.consolidate_semantics(pid)
+      assert %Graph{} = MemoryStore.get_graph(pid)
+    end
+
+    test "accepts concurrent requests without crashing", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      :ok = MemoryStore.consolidate_semantics(pid)
+      :ok = MemoryStore.consolidate_semantics(pid)
+      assert %Graph{} = MemoryStore.get_graph(pid)
     end
   end
 
@@ -259,17 +291,18 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
-      assert {:ok, %{deleted: deleted, checked: 1}} = MemoryStore.decay_nodes(pid)
-      assert deleted >= 1
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s-old") != nil)
 
-      graph = MemoryStore.get_graph(pid)
-      assert Graph.get_node(graph, "s-old") == nil
+      :ok = MemoryStore.decay_nodes(pid)
+
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s-old") == nil)
     end
 
-    test "returns zeros on empty graph", %{tmp_dir: tmp_dir} do
+    test "handles empty graph without error", %{tmp_dir: tmp_dir} do
       pid = start_store(tmp_dir)
 
-      assert {:ok, %{deleted: 0, checked: 0}} = MemoryStore.decay_nodes(pid)
+      :ok = MemoryStore.decay_nodes(pid)
+      assert %Graph{} = MemoryStore.get_graph(pid)
     end
 
     test "state persists after maintenance", %{tmp_dir: tmp_dir} do
@@ -294,10 +327,48 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
-      {:ok, _result} = MemoryStore.decay_nodes(pid)
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s-persist") != nil)
 
-      graph = MemoryStore.get_graph(pid)
-      assert Graph.get_node(graph, "s-persist") == nil
+      :ok = MemoryStore.decay_nodes(pid)
+
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s-persist") == nil)
+    end
+  end
+
+  describe "concurrent lanes" do
+    test "write and maintenance can run simultaneously", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      old_time = ~U[2020-01-01 00:00:00Z]
+      emb = List.duplicate(0.5, 128)
+
+      stale = %Semantic{id: "stale-1", proposition: "Stale", confidence: 0.9, embedding: emb}
+      stale_meta = NodeMetadata.new(created_at: old_time, access_count: 0)
+
+      stale_cs =
+        Changeset.new()
+        |> Changeset.add_node(stale)
+        |> Changeset.put_metadata("stale-1", stale_meta)
+
+      :ok = MemoryStore.apply_changeset(pid, stale_cs)
+
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "stale-1") != nil)
+
+      # Fire both lanes at once: maintenance (decay) and write (add node)
+      :ok = MemoryStore.decay_nodes(pid)
+      new_node = make_semantic("new-1", "Fresh fact")
+      :ok = MemoryStore.apply_changeset(pid, Changeset.add_node(Changeset.new(), new_node))
+
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "stale-1") == nil)
+
+      # Verify the store is still functional by issuing a new write
+      fresh_node = make_semantic("new-2", "Post-maintenance fact")
+      :ok = MemoryStore.apply_changeset(pid, Changeset.add_node(Changeset.new(), fresh_node))
+
+      assert_eventually(
+        %Semantic{proposition: "Post-maintenance fact"} =
+          Graph.get_node(MemoryStore.get_graph(pid), "new-2")
+      )
     end
   end
 
@@ -324,6 +395,8 @@ defmodule Mnemosyne.MemoryStoreTest do
         Changeset.add_node(Changeset.new(), node)
 
       :ok = MemoryStore.apply_changeset(pid, changeset)
+
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s1") != nil)
 
       assert {:ok, %ReasonedMemory{}} =
                MemoryStore.recall_in_context(pid, "nonexistent-session", "what is elixir?")

@@ -1,9 +1,11 @@
 defmodule Mnemosyne.MaintenanceTelemetryTest do
   use ExUnit.Case, async: false
+  use AssertEventually, timeout: 500, interval: 10
 
   import Mimic
 
   alias Mnemosyne.Config
+  alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Node.Semantic
@@ -104,13 +106,17 @@ defmodule Mnemosyne.MaintenanceTelemetryTest do
       store = start_store(tmp_dir)
       seed_semantic_nodes(store, 3)
 
-      {:ok, _result} = MemoryStore.consolidate_semantics(store)
+      assert_eventually(length(Graph.nodes_by_type(MemoryStore.get_graph(store), :semantic)) == 3)
 
-      assert_received {:telemetry, [:mnemosyne, :consolidator, :consolidate, :start],
-                       %{monotonic_time: _}, %{repo_id: @test_repo_id}}
+      :ok = MemoryStore.consolidate_semantics(store)
 
-      assert_received {:telemetry, [:mnemosyne, :consolidator, :consolidate, :stop], measurements,
-                       %{repo_id: @test_repo_id}}
+      assert_receive {:telemetry, [:mnemosyne, :consolidator, :consolidate, :start],
+                      %{monotonic_time: _}, %{repo_id: @test_repo_id}},
+                     500
+
+      assert_receive {:telemetry, [:mnemosyne, :consolidator, :consolidate, :stop], measurements,
+                      %{repo_id: @test_repo_id}},
+                     500
 
       assert is_integer(measurements.duration)
       assert is_integer(measurements.checked)
@@ -126,13 +132,17 @@ defmodule Mnemosyne.MaintenanceTelemetryTest do
       store = start_store(tmp_dir)
       seed_semantic_nodes(store, 2)
 
-      {:ok, _result} = MemoryStore.decay_nodes(store)
+      assert_eventually(length(Graph.nodes_by_type(MemoryStore.get_graph(store), :semantic)) == 2)
 
-      assert_received {:telemetry, [:mnemosyne, :decay, :prune, :start], %{monotonic_time: _},
-                       %{repo_id: @test_repo_id}}
+      :ok = MemoryStore.decay_nodes(store)
 
-      assert_received {:telemetry, [:mnemosyne, :decay, :prune, :stop], measurements,
-                       %{repo_id: @test_repo_id}}
+      assert_receive {:telemetry, [:mnemosyne, :decay, :prune, :start], %{monotonic_time: _},
+                      %{repo_id: @test_repo_id}},
+                     500
+
+      assert_receive {:telemetry, [:mnemosyne, :decay, :prune, :stop], measurements,
+                      %{repo_id: @test_repo_id}},
+                     500
 
       assert is_integer(measurements.duration)
       assert is_integer(measurements.checked)
@@ -171,11 +181,13 @@ defmodule Mnemosyne.MaintenanceTelemetryTest do
 
       :ok = MemoryStore.apply_changeset(store, cs)
 
-      assert_received {:telemetry, [:mnemosyne, :intent_merger, :merge, :start],
-                       %{monotonic_time: _}, %{repo_id: @test_repo_id, intent_count: 1}}
+      assert_receive {:telemetry, [:mnemosyne, :intent_merger, :merge, :start],
+                      %{monotonic_time: _}, %{repo_id: @test_repo_id, intent_count: 1}},
+                     500
 
-      assert_received {:telemetry, [:mnemosyne, :intent_merger, :merge, :stop], measurements,
-                       %{repo_id: @test_repo_id}}
+      assert_receive {:telemetry, [:mnemosyne, :intent_merger, :merge, :stop], measurements,
+                      %{repo_id: @test_repo_id}},
+                     500
 
       assert is_integer(measurements.duration)
       assert is_integer(measurements.merged)
@@ -202,7 +214,9 @@ defmodule Mnemosyne.MaintenanceTelemetryTest do
 
       :ok = MemoryStore.apply_changeset(store, cs)
 
-      refute_received {:telemetry, [:mnemosyne, :intent_merger, :merge, :start], _, _}
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(store), "sem_1") != nil)
+
+      refute_receive {:telemetry, [:mnemosyne, :intent_merger, :merge, :start], _, _}, 100
     end
   end
 end

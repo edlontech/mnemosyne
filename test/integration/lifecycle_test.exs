@@ -1,5 +1,6 @@
 defmodule Mnemosyne.Integration.LifecycleTest do
   use Mnemosyne.IntegrationCase, async: false
+  use AssertEventually, timeout: 2000, interval: 50
 
   @moduletag :tmp_dir
 
@@ -39,8 +40,8 @@ defmodule Mnemosyne.Integration.LifecycleTest do
                max_retries: 2
              )
 
+    assert_eventually(map_size(Mnemosyne.get_graph(@repo).nodes) > 0)
     graph = Mnemosyne.get_graph(@repo)
-    assert map_size(graph.nodes) > 0
 
     node_types =
       graph.nodes
@@ -90,8 +91,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
                max_retries: 2
              )
 
-    graph = Mnemosyne.get_graph(@repo)
-    assert map_size(graph.nodes) > 0
+    assert_eventually(map_size(Mnemosyne.get_graph(@repo).nodes) > 0)
 
     {:ok, read_session} = Mnemosyne.start_session("Exploring BEAM internals", repo: @repo)
 

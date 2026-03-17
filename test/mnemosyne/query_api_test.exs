@@ -1,5 +1,6 @@
 defmodule Mnemosyne.QueryApiTest do
   use ExUnit.Case, async: true
+  use AssertEventually, timeout: 500, interval: 10
 
   alias Mnemosyne.Errors.Framework.NotFoundError
   alias Mnemosyne.Graph.Changeset
@@ -67,6 +68,11 @@ defmodule Mnemosyne.QueryApiTest do
     sup = start_sup(tmp_dir)
     repo_id = open_repo(sup)
     {_sem, _tag, _meta} = seed_graph(repo_id, sup)
+
+    assert_eventually(
+      match?({:ok, %Semantic{}}, Mnemosyne.get_node(repo_id, "s1", supervisor: sup))
+    )
+
     %{sup: sup, repo_id: repo_id}
   end
 

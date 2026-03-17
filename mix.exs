@@ -53,6 +53,7 @@ defmodule Mnemosyne.MixProject do
       {:emlx, "~> 0.2", only: [:dev, :test]},
       {:gen_state_machine, "~> 3.0"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:assert_eventually, "~> 1.0", only: :test},
       {:mimic, "~> 2.0", only: :test},
       {:mix_audit, ">= 0.0.0", only: [:dev, :test], runtime: false},
       {:recode, "~> 0.8", only: [:dev], runtime: false},

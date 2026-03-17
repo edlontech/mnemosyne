@@ -343,14 +343,9 @@ defmodule Mnemosyne.Session do
 
   @doc false
   def ready({:call, from}, :commit, data) do
-    case MemoryStore.apply_changeset(data.memory_store, data.changeset) do
-      :ok ->
-        emit_transition(data, :ready, :idle)
-        {:next_state, :idle, %{data | episode: nil, changeset: nil}, [{:reply, from, :ok}]}
-
-      {:error, _} = error ->
-        {:keep_state_and_data, [{:reply, from, error}]}
-    end
+    MemoryStore.apply_changeset(data.memory_store, data.changeset)
+    emit_transition(data, :ready, :idle)
+    {:next_state, :idle, %{data | episode: nil, changeset: nil}, [{:reply, from, :ok}]}
   end
 
   def ready({:call, from}, :discard, data) do

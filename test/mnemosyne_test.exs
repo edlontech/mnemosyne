@@ -1,5 +1,6 @@
 defmodule MnemosyneTest do
   use ExUnit.Case, async: false
+  use AssertEventually, timeout: 500, interval: 10
 
   import Mimic
 
@@ -154,8 +155,7 @@ defmodule MnemosyneTest do
       assert :ok = Mnemosyne.append(session_id, "saw something", "did something")
       assert :ok = Mnemosyne.close_and_commit(session_id)
 
-      graph = Mnemosyne.get_graph(repo)
-      assert map_size(graph.nodes) > 0
+      assert_eventually(map_size(Mnemosyne.get_graph(repo).nodes) > 0)
     end
   end
 
@@ -174,6 +174,7 @@ defmodule MnemosyneTest do
       changeset = Changeset.add_node(Changeset.new(), node)
       :ok = Mnemosyne.apply_changeset(repo, changeset)
 
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["s1"] != nil)
       assert {:ok, %ReasonedMemory{}} = Mnemosyne.recall(repo, "what is elixir?")
     end
 
@@ -303,6 +304,8 @@ defmodule MnemosyneTest do
       changeset = Changeset.add_node(Changeset.new(), node)
       :ok = Mnemosyne.apply_changeset(repo, changeset)
 
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["ctx-1"] != nil)
+
       {:ok, session_id} = Mnemosyne.start_session("learn elixir", repo: repo)
       :ok = Mnemosyne.append(session_id, "read about pattern matching", "took notes")
 
@@ -382,8 +385,7 @@ defmodule MnemosyneTest do
       changeset = Changeset.add_node(Changeset.new(), node)
       assert :ok = Mnemosyne.apply_changeset(repo, changeset)
 
-      graph = Mnemosyne.get_graph(repo)
-      assert graph.nodes["mgmt-1"] != nil
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["mgmt-1"] != nil)
     end
 
     test "delete_nodes removes nodes from graph", %{tmp_dir: tmp_dir} do
@@ -399,9 +401,11 @@ defmodule MnemosyneTest do
       changeset = Changeset.add_node(Changeset.new(), node)
       :ok = Mnemosyne.apply_changeset(repo, changeset)
 
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["del-1"] != nil)
+
       assert :ok = Mnemosyne.delete_nodes(repo, ["del-1"])
-      graph = Mnemosyne.get_graph(repo)
-      assert graph.nodes["del-1"] == nil
+
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["del-1"] == nil)
     end
 
     test "apply_changeset returns error when repo does not exist", %{tmp_dir: tmp_dir} do
@@ -428,11 +432,11 @@ defmodule MnemosyneTest do
   end
 
   describe "consolidate_semantics/2" do
-    test "delegates to MemoryStore", %{tmp_dir: tmp_dir} do
+    test "accepts request without error", %{tmp_dir: tmp_dir} do
       start_supervisor(tmp_dir)
       repo = open_test_repo(tmp_dir)
 
-      assert {:ok, %{deleted: 0, checked: 0}} = Mnemosyne.consolidate_semantics(repo)
+      assert :ok = Mnemosyne.consolidate_semantics(repo)
     end
 
     test "returns error when repo does not exist", %{tmp_dir: tmp_dir} do
@@ -444,11 +448,11 @@ defmodule MnemosyneTest do
   end
 
   describe "decay_nodes/2" do
-    test "delegates to MemoryStore", %{tmp_dir: tmp_dir} do
+    test "accepts request without error", %{tmp_dir: tmp_dir} do
       start_supervisor(tmp_dir)
       repo = open_test_repo(tmp_dir)
 
-      assert {:ok, %{deleted: 0, checked: 0}} = Mnemosyne.decay_nodes(repo)
+      assert :ok = Mnemosyne.decay_nodes(repo)
     end
 
     test "returns error when repo does not exist", %{tmp_dir: tmp_dir} do

@@ -1,5 +1,6 @@
 defmodule Mnemosyne.NotifierIntegrationTest do
   use ExUnit.Case, async: true
+  use AssertEventually, timeout: 500, interval: 10
 
   alias Mnemosyne.Config
   alias Mnemosyne.Graph.Changeset
@@ -69,10 +70,12 @@ defmodule Mnemosyne.NotifierIntegrationTest do
 
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
-      events = TestNotifier.events(repo_id)
-
-      assert [changeset_applied: %Changeset{}] =
-               Enum.map(events, fn e -> {elem(e, 0), elem(e, 1)} end)
+      assert_eventually(
+        Enum.any?(TestNotifier.events(repo_id), fn
+          {:changeset_applied, %Changeset{}} -> true
+          _ -> false
+        end)
+      )
     end
   end
 
@@ -84,10 +87,15 @@ defmodule Mnemosyne.NotifierIntegrationTest do
       changeset = Changeset.add_node(Changeset.new(), node)
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
+      assert_eventually(
+        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _}, &1))
+      )
+
       :ok = MemoryStore.delete_nodes(pid, ["del-1"])
 
-      events = TestNotifier.events(repo_id)
-      assert Enum.any?(events, &match?({:nodes_deleted, ["del-1"]}, &1))
+      assert_eventually(
+        Enum.any?(TestNotifier.events(repo_id), &match?({:nodes_deleted, ["del-1"]}, &1))
+      )
     end
   end
 
@@ -130,14 +138,18 @@ defmodule Mnemosyne.NotifierIntegrationTest do
 
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
-      {:ok, _} = MemoryStore.consolidate_semantics(pid)
+      assert_eventually(
+        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _}, &1))
+      )
 
-      events = TestNotifier.events(repo_id)
+      :ok = MemoryStore.consolidate_semantics(pid)
 
-      assert Enum.any?(events, fn
-               {:consolidation_completed, %{checked: _, deleted: _, deleted_ids: _}} -> true
-               _ -> false
-             end)
+      assert_eventually(
+        Enum.any?(TestNotifier.events(repo_id), fn
+          {:consolidation_completed, %{checked: _, deleted: _, deleted_ids: _}} -> true
+          _ -> false
+        end)
+      )
     end
   end
 
@@ -159,14 +171,18 @@ defmodule Mnemosyne.NotifierIntegrationTest do
 
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
-      {:ok, _} = MemoryStore.decay_nodes(pid)
+      assert_eventually(
+        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _}, &1))
+      )
 
-      events = TestNotifier.events(repo_id)
+      :ok = MemoryStore.decay_nodes(pid)
 
-      assert Enum.any?(events, fn
-               {:decay_completed, %{checked: _, deleted: _, deleted_ids: _}} -> true
-               _ -> false
-             end)
+      assert_eventually(
+        Enum.any?(TestNotifier.events(repo_id), fn
+          {:decay_completed, %{checked: _, deleted: _, deleted_ids: _}} -> true
+          _ -> false
+        end)
+      )
     end
   end
 end
@@ -493,6 +509,7 @@ end
 
 defmodule Mnemosyne.NotifierRecallIntegrationTest do
   use ExUnit.Case, async: false
+  use AssertEventually, timeout: 500, interval: 10
 
   import Mimic
 
@@ -581,6 +598,10 @@ defmodule Mnemosyne.NotifierRecallIntegrationTest do
         |> Changeset.add_node(tag)
 
       :ok = MemoryStore.apply_changeset(pid, changeset)
+
+      assert_eventually(
+        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _}, &1))
+      )
 
       {:ok, _} = MemoryStore.recall(pid, "what is elixir?")
 

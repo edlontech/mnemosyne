@@ -33,6 +33,11 @@ defmodule Mnemosyne.Telemetry do
   - `[:mnemosyne, :repo, :open, :start | :stop | :exception]`
   - `[:mnemosyne, :repo, :close, :start | :stop | :exception]`
 
+  ### Queue
+  - `[:mnemosyne, :memory_store, :queue]` — emitted on every queue state change
+    - Measurements: `write_queue_size`, `write_active`, `maintenance_active`, `pending_recalls`
+    - Metadata: `repo_id`, `event` (`:enqueue`, `:dispatch`, `:maintenance_start`, `:maintenance_complete`)
+
   ### Storage / Graph
   - `[:mnemosyne, :graph, :apply_changeset, :start | :stop | :exception]`
   - `[:mnemosyne, :storage, :persist, :start | :stop | :exception]`
@@ -56,6 +61,7 @@ defmodule Mnemosyne.Telemetry do
     @prefix ++ [:session, :transition],
     @prefix ++ [:repo, :open],
     @prefix ++ [:repo, :close],
+    @prefix ++ [:memory_store, :queue],
     @prefix ++ [:graph, :apply_changeset],
     @prefix ++ [:storage, :persist],
     @prefix ++ [:storage, :load]

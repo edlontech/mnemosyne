@@ -274,9 +274,10 @@ defmodule Mnemosyne do
   @doc """
   Commits the extracted changeset to the MemoryStore.
 
-  Applies the knowledge graph changeset produced by the extraction pipeline
-  to the repo's `MemoryStore`, making the new nodes and links available for
-  future recall queries. The session must be in the `:ready` state.
+  Enqueues the knowledge graph changeset produced by the extraction pipeline
+  for application to the repo's `MemoryStore`. The session must be in the
+  `:ready` state. The changeset is applied asynchronously via the write lane;
+  subscribe to Notifier events (`:changeset_applied`) to observe completion.
 
   After committing, the session transitions back to `:idle` and can start
   a new episode.
@@ -446,14 +447,14 @@ defmodule Mnemosyne do
   end
 
   @doc """
-  Applies a changeset to the knowledge graph.
+  Applies a changeset to the knowledge graph asynchronously.
 
-  Adds nodes and links from the changeset to the graph and persists the
-  updated graph to storage. This is the low-level mutation interface;
-  prefer the session-based write path for normal operation.
+  Enqueues the changeset for application via the MemoryStore write lane.
+  Returns immediately; the actual mutation happens in the background.
+  Subscribe to Notifier events (`:changeset_applied`) to observe completion.
   """
   @spec apply_changeset(String.t(), Mnemosyne.Graph.Changeset.t(), keyword()) ::
-          :ok | {:error, Mnemosyne.Errors.error()}
+          :ok | {:error, NotFoundError.t()}
   def apply_changeset(repo_id, changeset, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.apply_changeset(pid, changeset)
@@ -461,13 +462,14 @@ defmodule Mnemosyne do
   end
 
   @doc """
-  Deletes nodes from the knowledge graph by their IDs.
+  Deletes nodes from the knowledge graph by their IDs asynchronously.
 
-  Removes the specified nodes and any links referencing them, then persists
-  the updated graph to storage.
+  Enqueues the deletion via the MemoryStore write lane. Returns immediately;
+  the actual removal happens in the background. Subscribe to Notifier events
+  (`:nodes_deleted`) to observe completion.
   """
   @spec delete_nodes(String.t(), [String.t()], keyword()) ::
-          :ok | {:error, Mnemosyne.Errors.error()}
+          :ok | {:error, NotFoundError.t()}
   def delete_nodes(repo_id, node_ids, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.delete_nodes(pid, node_ids)
@@ -475,18 +477,19 @@ defmodule Mnemosyne do
   end
 
   @doc """
-  Consolidates near-duplicate semantic nodes in the repo's graph.
+  Consolidates near-duplicate semantic nodes in the repo's graph asynchronously.
 
   Discovers semantically similar nodes via tag-neighbor similarity and
-  deletes the lower-scored one.
+  deletes the lower-scored one. Returns immediately; the consolidation runs
+  in the background. Subscribe to Notifier events (`:consolidation_completed`)
+  to observe results.
 
   ## Options
 
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
   """
   @spec consolidate_semantics(String.t(), keyword()) ::
-          {:ok, %{deleted: non_neg_integer(), checked: non_neg_integer()}}
-          | {:error, Mnemosyne.Errors.error()}
+          :ok | {:error, NotFoundError.t()}
   def consolidate_semantics(repo_id, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.consolidate_semantics(pid, opts)
@@ -494,18 +497,19 @@ defmodule Mnemosyne do
   end
 
   @doc """
-  Prunes low-utility nodes from the repo's graph via decay scoring.
+  Prunes low-utility nodes from the repo's graph via decay scoring asynchronously.
 
   Scores nodes on recency, frequency, and reward signals and removes those
-  below the threshold. Cleans up orphaned Tags/Intents after deletion.
+  below the threshold. Cleans up orphaned Tags/Intents after deletion. Returns
+  immediately; pruning runs in the background. Subscribe to Notifier events
+  (`:decay_completed`) to observe results.
 
   ## Options
 
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
   """
   @spec decay_nodes(String.t(), keyword()) ::
-          {:ok, %{deleted: non_neg_integer(), checked: non_neg_integer()}}
-          | {:error, Mnemosyne.Errors.error()}
+          :ok | {:error, NotFoundError.t()}
   def decay_nodes(repo_id, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.decay_nodes(pid, opts)
