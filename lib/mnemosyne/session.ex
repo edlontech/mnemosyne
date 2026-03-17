@@ -38,7 +38,14 @@ defmodule Mnemosyne.Session do
           extraction_task: reference() | nil,
           append_task: reference() | nil,
           append_caller: append_caller() | nil,
-          append_queue: :queue.queue()
+          append_queue: :queue.queue(),
+          prev_trajectory_id: String.t() | nil,
+          flush_timer: reference() | nil,
+          session_timer: reference() | nil,
+          trajectory_tasks: %{reference() => String.t()},
+          committed_trajectory_ids: MapSet.t(String.t()),
+          flush_triggered: %{String.t() => true},
+          stopping: boolean()
         }
 
   defstruct [
@@ -56,7 +63,14 @@ defmodule Mnemosyne.Session do
     :extraction_task,
     :append_task,
     :append_caller,
-    append_queue: :queue.new()
+    :prev_trajectory_id,
+    :flush_timer,
+    :session_timer,
+    append_queue: :queue.new(),
+    trajectory_tasks: %{},
+    committed_trajectory_ids: MapSet.new(),
+    flush_triggered: %{},
+    stopping: false
   ]
 
   # -- Client API --
@@ -194,7 +208,8 @@ defmodule Mnemosyne.Session do
   def idle({:call, from}, {:start_episode, goal}, data) do
     episode = Episode.new(goal)
     emit_transition(data, :idle, :collecting)
-    {:next_state, :collecting, %{data | episode: episode}, [{:reply, from, :ok}]}
+    data = %{data | episode: episode}
+    {:next_state, :collecting, start_timers(data), [{:reply, from, :ok}]}
   end
 
   def idle({:call, from}, :get_state, _data), do: {:keep_state_and_data, [{:reply, from, :idle}]}
@@ -253,26 +268,21 @@ defmodule Mnemosyne.Session do
       "session #{data.id} close requested, task=#{inspect(data.append_task)}, queue_size=#{:queue.len(data.append_queue)}"
     )
 
-    if data.append_task do
-      Logger.warning(
-        "session #{data.id} close rejected: append task #{inspect(data.append_task)} still running"
-      )
+    cond do
+      data.append_task != nil ->
+        Logger.warning(
+          "session #{data.id} close rejected: append task #{inspect(data.append_task)} still running"
+        )
 
-      {:keep_state_and_data,
-       [{:reply, from, {:error, SessionError.exception(reason: :append_in_progress)}}]}
-    else
-      case Episode.close(data.episode) do
-        {:ok, closed_episode} ->
-          new_data = %{data | episode: closed_episode}
-          task = spawn_extraction(new_data)
-          emit_transition(data, :collecting, :extracting)
+        {:keep_state_and_data,
+         [{:reply, from, {:error, SessionError.exception(reason: :append_in_progress)}}]}
 
-          {:next_state, :extracting, %{new_data | extraction_task: task.ref},
-           [{:reply, from, :ok}]}
+      map_size(data.trajectory_tasks) > 0 ->
+        {:keep_state_and_data,
+         [{:reply, from, {:error, SessionError.exception(reason: :extraction_in_progress)}}]}
 
-        {:error, _} = error ->
-          {:keep_state_and_data, [{:reply, from, error}]}
-      end
+      true ->
+        handle_close(data, from)
     end
   end
 
@@ -308,7 +318,26 @@ defmodule Mnemosyne.Session do
 
     Process.demonitor(ref, [:flush])
     notify_append_caller(data.append_caller, :ok)
-    data = %{data | episode: episode, append_task: nil, append_caller: nil}
+
+    prev_traj_id = data.prev_trajectory_id
+    new_traj_id = episode.current_trajectory_id
+
+    data = %{
+      data
+      | episode: episode,
+        append_task: nil,
+        append_caller: nil,
+        prev_trajectory_id: nil
+    }
+
+    data =
+      if auto_commit_enabled?(data) and prev_traj_id != nil and prev_traj_id != new_traj_id do
+        maybe_spawn_trajectory_extraction(data, prev_traj_id)
+      else
+        data
+      end
+
+    data = reset_timers(data)
     {:keep_state, dispatch_append(data)}
   end
 
@@ -332,6 +361,79 @@ defmodule Mnemosyne.Session do
     notify_append_caller(data.append_caller, error)
     data = %{data | append_task: nil, append_caller: nil}
     {:keep_state, dispatch_append(data)}
+  end
+
+  def collecting(:info, {ref, {:ok, %Changeset{} = cs}}, data)
+      when is_map_key(data.trajectory_tasks, ref) do
+    Process.demonitor(ref, [:flush])
+    traj_id = data.trajectory_tasks[ref]
+
+    apply_changeset_with_logging(data, cs, traj_id)
+
+    event =
+      if Map.has_key?(data.flush_triggered, traj_id) do
+        {:trajectory_flushed, data.id, traj_id, %{node_count: length(cs.additions)}}
+      else
+        {:trajectory_committed, data.id, traj_id, %{node_count: length(cs.additions)}}
+      end
+
+    Notifier.safe_notify(data.notifier, data.repo_id, event)
+
+    trajectory_tasks = Map.delete(data.trajectory_tasks, ref)
+    committed = MapSet.put(data.committed_trajectory_ids, traj_id)
+    flush_triggered = Map.delete(data.flush_triggered, traj_id)
+
+    data = %{
+      data
+      | trajectory_tasks: trajectory_tasks,
+        committed_trajectory_ids: committed,
+        flush_triggered: flush_triggered
+    }
+
+    if data.stopping and map_size(data.trajectory_tasks) == 0 do
+      Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id})
+      {:stop, :normal, data}
+    else
+      {:keep_state, data}
+    end
+  end
+
+  def collecting(:info, {ref, {:error, reason}}, data)
+      when is_map_key(data.trajectory_tasks, ref) do
+    Process.demonitor(ref, [:flush])
+    handle_trajectory_extraction_failure(data, ref, reason)
+  end
+
+  def collecting(:info, {:DOWN, ref, :process, _pid, reason}, data)
+      when is_map_key(data.trajectory_tasks, ref) do
+    handle_trajectory_extraction_failure(data, ref, reason)
+  end
+
+  def collecting(:info, :flush_timeout, data) do
+    if data.append_task != nil or map_size(data.trajectory_tasks) > 0 do
+      flush_ref = schedule_timer(:flush_timeout, data.config.session.flush_timeout_ms)
+      {:keep_state, %{data | flush_timer: flush_ref}}
+    else
+      {:keep_state, flush_current_trajectory(data)}
+    end
+  end
+
+  def collecting(:info, :session_timeout, data) do
+    if data.append_task != nil or map_size(data.trajectory_tasks) > 0 do
+      session_ref = schedule_timer(:session_timeout, 1_000)
+      {:keep_state, %{data | session_timer: session_ref}}
+    else
+      case uncommitted_current_steps(data) do
+        [] ->
+          Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id})
+          {:stop, :normal, data}
+
+        steps ->
+          trajectory = Episode.build_trajectory_from_steps(steps)
+          data = spawn_trajectory_extraction(data, trajectory)
+          {:keep_state, %{data | stopping: true, session_timer: nil}}
+      end
+    end
   end
 
   def collecting(:info, _msg, _data), do: :keep_state_and_data
@@ -361,8 +463,15 @@ defmodule Mnemosyne.Session do
 
   def extracting(:info, {ref, {:ok, %Changeset{} = changeset}}, %{extraction_task: ref} = data) do
     Process.demonitor(ref, [:flush])
-    emit_transition(data, :extracting, :ready)
-    {:next_state, :ready, %{data | changeset: changeset, extraction_task: nil}}
+
+    if auto_commit_enabled?(data) do
+      apply_changeset_with_logging(data, changeset, "close")
+      emit_transition(data, :extracting, :idle)
+      {:next_state, :idle, reset_session_data(data)}
+    else
+      emit_transition(data, :extracting, :ready)
+      {:next_state, :ready, %{data | changeset: changeset, extraction_task: nil}}
+    end
   end
 
   def extracting(:info, {ref, {:error, reason}}, %{extraction_task: ref} = data) do
@@ -453,6 +562,7 @@ defmodule Mnemosyne.Session do
 
   defp spawn_append(data, observation, action, caller) do
     Logger.debug("session #{data.id} spawning append task on #{inspect(data.task_supervisor)}")
+    prev_traj_id = data.episode.current_trajectory_id
     episode = data.episode
 
     opts = [
@@ -471,7 +581,7 @@ defmodule Mnemosyne.Session do
         result
       end)
 
-    %{data | append_task: task.ref, append_caller: caller}
+    %{data | append_task: task.ref, append_caller: caller, prev_trajectory_id: prev_traj_id}
   end
 
   defp dispatch_append(%{append_queue: queue} = data) do
@@ -527,6 +637,185 @@ defmodule Mnemosyne.Session do
 
   defp generate_id do
     "session_#{:crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)}"
+  end
+
+  defp handle_close(data, from) do
+    data = cancel_timers(data)
+
+    if auto_commit_enabled?(data) do
+      handle_auto_commit_close(data, from)
+    else
+      case Episode.close(data.episode) do
+        {:ok, closed_episode} ->
+          new_data = %{data | episode: closed_episode}
+          task = spawn_extraction(new_data)
+          emit_transition(data, :collecting, :extracting)
+
+          {:next_state, :extracting, %{new_data | extraction_task: task.ref},
+           [{:reply, from, :ok}]}
+
+        {:error, _} = error ->
+          {:keep_state_and_data, [{:reply, from, error}]}
+      end
+    end
+  end
+
+  defp auto_commit_enabled?(data) do
+    data.config.session != nil and data.config.session.auto_commit
+  end
+
+  defp reset_timers(data) do
+    data
+    |> cancel_timers()
+    |> start_timers()
+  end
+
+  defp cancel_timers(data) do
+    cancel_and_flush_timer(data.flush_timer, :flush_timeout)
+    cancel_and_flush_timer(data.session_timer, :session_timeout)
+    %{data | flush_timer: nil, session_timer: nil}
+  end
+
+  defp handle_trajectory_extraction_failure(data, ref, reason) do
+    traj_id = data.trajectory_tasks[ref]
+
+    Logger.warning("trajectory extraction failed for #{traj_id}: #{inspect(reason)}")
+
+    Notifier.safe_notify(
+      data.notifier,
+      data.repo_id,
+      {:trajectory_extraction_failed, data.id, traj_id, reason}
+    )
+
+    trajectory_tasks = Map.delete(data.trajectory_tasks, ref)
+    data = %{data | trajectory_tasks: trajectory_tasks}
+
+    if data.stopping and map_size(data.trajectory_tasks) == 0 do
+      Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id})
+      {:stop, :normal, data}
+    else
+      {:keep_state, data}
+    end
+  end
+
+  defp apply_changeset_with_logging(data, changeset, context) do
+    case MemoryStore.apply_changeset(data.memory_store, changeset) do
+      :ok ->
+        :ok
+
+      other ->
+        Logger.warning(
+          "session #{data.id} changeset apply failed for #{context}: #{inspect(other)}"
+        )
+
+        other
+    end
+  end
+
+  defp cancel_and_flush_timer(nil, _msg), do: :ok
+
+  defp cancel_and_flush_timer(ref, msg) do
+    Process.cancel_timer(ref)
+    receive do: (^msg -> :ok), after: (0 -> :ok)
+  end
+
+  defp start_timers(data) do
+    if auto_commit_enabled?(data) do
+      flush_ref = schedule_timer(:flush_timeout, data.config.session.flush_timeout_ms)
+      session_ref = schedule_timer(:session_timeout, data.config.session.session_timeout_ms)
+      %{data | flush_timer: flush_ref, session_timer: session_ref}
+    else
+      data
+    end
+  end
+
+  defp schedule_timer(_msg, :infinity), do: nil
+  defp schedule_timer(msg, ms) when is_integer(ms), do: Process.send_after(self(), msg, ms)
+
+  defp uncommitted_current_steps(data) do
+    current_traj_id = data.episode.current_trajectory_id
+
+    if MapSet.member?(data.committed_trajectory_ids, current_traj_id) do
+      []
+    else
+      Enum.filter(data.episode.steps, &(&1.trajectory_id == current_traj_id))
+    end
+  end
+
+  defp flush_current_trajectory(data) do
+    case uncommitted_current_steps(data) do
+      [] ->
+        %{data | flush_timer: nil}
+
+      steps ->
+        trajectory = Episode.build_trajectory_from_steps(steps)
+        data = spawn_trajectory_extraction(data, trajectory)
+        flush_triggered = Map.put(data.flush_triggered, trajectory.id, true)
+        %{data | flush_triggered: flush_triggered, flush_timer: nil}
+    end
+  end
+
+  defp handle_auto_commit_close(data, from) do
+    case uncommitted_current_steps(data) do
+      [] ->
+        emit_transition(data, :collecting, :idle)
+        {:next_state, :idle, reset_session_data(data), [{:reply, from, :ok}]}
+
+      steps ->
+        trajectory = Episode.build_trajectory_from_steps(steps)
+        task = spawn_trajectory_task(data, trajectory)
+        emit_transition(data, :collecting, :extracting)
+        {:next_state, :extracting, %{data | extraction_task: task.ref}, [{:reply, from, :ok}]}
+    end
+  end
+
+  defp maybe_spawn_trajectory_extraction(data, trajectory_id) do
+    steps = Enum.filter(data.episode.steps, &(&1.trajectory_id == trajectory_id))
+
+    if steps == [] do
+      data
+    else
+      trajectory = Episode.build_trajectory_from_steps(steps)
+      spawn_trajectory_extraction(data, trajectory)
+    end
+  end
+
+  defp spawn_trajectory_extraction(data, trajectory) do
+    task = spawn_trajectory_task(data, trajectory)
+    trajectory_tasks = Map.put(data.trajectory_tasks, task.ref, trajectory.id)
+    %{data | trajectory_tasks: trajectory_tasks}
+  end
+
+  defp spawn_trajectory_task(data, trajectory) do
+    goal = data.episode.goal
+    episode_id = data.episode.id
+
+    opts = [
+      repo_id: data.repo_id,
+      llm: data.llm,
+      embedding: data.embedding,
+      config: data.config,
+      episode_id: episode_id
+    ]
+
+    Task.Supervisor.async_nolink(data.task_supervisor, fn ->
+      Structuring.extract_trajectory(trajectory, goal, opts)
+    end)
+  end
+
+  defp reset_session_data(data) do
+    data = cancel_timers(data)
+
+    %{
+      data
+      | episode: nil,
+        changeset: nil,
+        trajectory_tasks: %{},
+        committed_trajectory_ids: MapSet.new(),
+        flush_triggered: %{},
+        prev_trajectory_id: nil,
+        stopping: false
+    }
   end
 
   defp emit_transition(data, from_state, to_state) do

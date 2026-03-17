@@ -540,6 +540,76 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
     end
   end
 
+  describe "extract_trajectory/3" do
+    test "extracts knowledge from a single trajectory into a changeset" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      trajectory = hd(episode.trajectories)
+      opts = @default_opts ++ [episode_id: episode.id]
+
+      assert {:ok, %Changeset{} = cs} =
+               Structuring.extract_trajectory(trajectory, episode.goal, opts)
+
+      assert [_ | _] = cs.additions
+      assert [_ | _] = cs.links
+
+      types = Enum.map(cs.additions, &struct_type/1) |> Enum.uniq() |> Enum.sort()
+      assert :episodic in types
+      assert :source in types
+      assert :subgoal in types
+      assert :semantic in types
+      assert :tag in types
+      assert :intent in types
+      assert :procedural in types
+    end
+
+    test "uses generated fallback episode_id when not provided" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      trajectory = hd(episode.trajectories)
+
+      assert {:ok, %Changeset{} = cs} =
+               Structuring.extract_trajectory(trajectory, episode.goal, @default_opts)
+
+      source_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Source{}, &1))
+      assert [_ | _] = source_nodes
+      assert Enum.all?(source_nodes, &(&1.episode_id != nil))
+    end
+
+    test "uses provided episode_id in source nodes" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      trajectory = hd(episode.trajectories)
+      opts = @default_opts ++ [episode_id: "custom_ep_id"]
+
+      assert {:ok, %Changeset{} = cs} =
+               Structuring.extract_trajectory(trajectory, episode.goal, opts)
+
+      source_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Source{}, &1))
+      assert Enum.all?(source_nodes, &(&1.episode_id == "custom_ep_id"))
+    end
+
+    test "propagates LLM errors" do
+      episode = build_closed_episode()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat, fn _messages, _opts -> {:error, :extraction_failed} end)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts -> {:error, :extraction_failed} end)
+
+      stub_default_embedding()
+
+      trajectory = hd(episode.trajectories)
+
+      assert {:error, :extraction_failed} =
+               Structuring.extract_trajectory(trajectory, episode.goal, @default_opts)
+    end
+  end
+
   defp node_id(%{id: id}), do: id
 
   defp struct_type(%Mnemosyne.Graph.Node.Episodic{}), do: :episodic

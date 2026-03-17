@@ -17,7 +17,8 @@ defmodule Mnemosyne.SessionTelemetryTest do
     {:ok, config} =
       Zoi.parse(Config.t(), %{
         llm: %{model: "test-model", opts: %{}},
-        embedding: %{model: "test-embed", opts: %{}}
+        embedding: %{model: "test-embed", opts: %{}},
+        session: %{auto_commit: false, flush_timeout_ms: :infinity, session_timeout_ms: :infinity}
       })
 
     config

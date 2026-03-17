@@ -179,6 +179,40 @@ defmodule Mnemosyne.ConfigTest do
     end
   end
 
+  describe "session config" do
+    test "defaults session fields when not provided" do
+      {:ok, config} = Zoi.parse(Config.t(), @valid_config)
+
+      assert config.session.auto_commit == true
+      assert config.session.flush_timeout_ms == 120_000
+      assert config.session.session_timeout_ms == 600_000
+    end
+
+    test "accepts :infinity for timeout fields" do
+      input =
+        Map.put(@valid_config, :session, %{
+          flush_timeout_ms: :infinity,
+          session_timeout_ms: :infinity
+        })
+
+      {:ok, config} = Zoi.parse(Config.t(), input)
+
+      assert config.session.auto_commit == true
+      assert config.session.flush_timeout_ms == :infinity
+      assert config.session.session_timeout_ms == :infinity
+    end
+
+    test "accepts auto_commit: false" do
+      input = Map.put(@valid_config, :session, %{auto_commit: false})
+
+      {:ok, config} = Zoi.parse(Config.t(), input)
+
+      assert config.session.auto_commit == false
+      assert config.session.flush_timeout_ms == 120_000
+      assert config.session.session_timeout_ms == 600_000
+    end
+  end
+
   describe "resolve_value_function/2" do
     test "returns correct params for known node types" do
       {:ok, config} = Zoi.parse(Config.t(), @valid_config)

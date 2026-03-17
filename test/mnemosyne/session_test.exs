@@ -1,5 +1,6 @@
 defmodule Mnemosyne.SessionTest do
   use ExUnit.Case, async: false
+  use AssertEventually, timeout: 1000, interval: 25
 
   import Mimic
 
@@ -19,7 +20,8 @@ defmodule Mnemosyne.SessionTest do
     {:ok, config} =
       Zoi.parse(Config.t(), %{
         llm: %{model: "test-model", opts: %{}},
-        embedding: %{model: "test-embed", opts: %{}}
+        embedding: %{model: "test-embed", opts: %{}},
+        session: %{auto_commit: false, flush_timeout_ms: :infinity, session_timeout_ms: :infinity}
       })
 
     config
@@ -207,8 +209,7 @@ defmodule Mnemosyne.SessionTest do
       assert :ok = Session.close(pid)
       assert Session.state(pid) == :extracting
 
-      Process.sleep(200)
-      assert Session.state(pid) == :ready
+      assert_eventually(Session.state(pid) == :ready)
     end
 
     test "transitions to failed on extraction error", %{tmp_dir: tmp_dir} do
@@ -229,8 +230,7 @@ defmodule Mnemosyne.SessionTest do
 
       assert :ok = Session.close(pid)
 
-      Process.sleep(200)
-      assert Session.state(pid) == :failed
+      assert_eventually(Session.state(pid) == :failed)
     end
 
     test "rejects operations during extracting", %{tmp_dir: tmp_dir} do
@@ -270,8 +270,7 @@ defmodule Mnemosyne.SessionTest do
       :ok = Session.append(pid, "saw something", "did something")
       :ok = Session.close(pid)
 
-      Process.sleep(200)
-      assert Session.state(pid) == :ready
+      assert_eventually(Session.state(pid) == :ready)
 
       assert :ok = Session.commit(pid)
       assert Session.state(pid) == :idle
@@ -294,15 +293,13 @@ defmodule Mnemosyne.SessionTest do
       end)
 
       :ok = Session.close(pid)
-      Process.sleep(200)
-      assert Session.state(pid) == :failed
+      assert_eventually(Session.state(pid) == :failed)
 
       stub_extraction_success()
       assert :ok = Session.commit(pid)
       assert Session.state(pid) == :extracting
 
-      Process.sleep(200)
-      assert Session.state(pid) == :ready
+      assert_eventually(Session.state(pid) == :ready)
     end
 
     test "rejects commit when idle", %{tmp_dir: tmp_dir} do
@@ -323,8 +320,7 @@ defmodule Mnemosyne.SessionTest do
       :ok = Session.append(pid, "saw something", "did something")
       :ok = Session.close(pid)
 
-      Process.sleep(200)
-      assert Session.state(pid) == :ready
+      assert_eventually(Session.state(pid) == :ready)
 
       assert :ok = Session.discard(pid)
       assert Session.state(pid) == :idle
@@ -343,8 +339,7 @@ defmodule Mnemosyne.SessionTest do
       end)
 
       :ok = Session.close(pid)
-      Process.sleep(200)
-      assert Session.state(pid) == :failed
+      assert_eventually(Session.state(pid) == :failed)
 
       assert :ok = Session.discard(pid)
       assert Session.state(pid) == :idle
@@ -430,6 +425,455 @@ defmodule Mnemosyne.SessionTest do
     end
   end
 
+  defp build_config_with_timeouts(auto_commit, flush_ms, session_ms) do
+    {:ok, config} =
+      Zoi.parse(Config.t(), %{
+        llm: %{model: "test-model", opts: %{}},
+        embedding: %{model: "test-embed", opts: %{}},
+        session: %{
+          auto_commit: auto_commit,
+          flush_timeout_ms: flush_ms,
+          session_timeout_ms: session_ms
+        }
+      })
+
+    config
+  end
+
+  defp start_infra_with_auto_commit(tmp_dir, auto_commit) do
+    start_infra_with_timeouts(tmp_dir, auto_commit)
+  end
+
+  defp start_infra_with_timeouts(
+         tmp_dir,
+         auto_commit,
+         flush_ms \\ :infinity,
+         session_ms \\ :infinity
+       ) do
+    config = build_config_with_timeouts(auto_commit, flush_ms, session_ms)
+    registry = :"registry_#{System.unique_integer([:positive])}"
+    task_sup = :"task_sup_#{System.unique_integer([:positive])}"
+    store_name = :"store_#{System.unique_integer([:positive])}"
+    dets_path = Path.join(tmp_dir, "session_test_timeout.dets")
+
+    start_supervised!({Registry, keys: :unique, name: registry})
+    start_supervised!({Task.Supervisor, name: task_sup})
+
+    persistence = {PersistenceDETS, path: dets_path}
+
+    store_opts = [
+      name: store_name,
+      backend: {Mnemosyne.GraphBackends.InMemory, persistence: persistence},
+      config: config,
+      llm: Mnemosyne.MockLLM,
+      embedding: Mnemosyne.MockEmbedding,
+      task_supervisor: task_sup
+    ]
+
+    start_supervised!({MemoryStore, store_opts}, id: store_name)
+
+    %{
+      registry: registry,
+      task_supervisor: task_sup,
+      memory_store: store_name,
+      config: config
+    }
+  end
+
+  defp stub_llm_for_episode_with_boundary do
+    call_count = :counters.new(1, [:atomics])
+
+    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+      {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
+      count = :counters.get(call_count, 1)
+      :counters.add(call_count, 1, 1)
+      embedding = boundary_embedding(count)
+      {:ok, %Embedding.Response{vectors: [embedding], model: "test", usage: %{}}}
+    end)
+  end
+
+  defp boundary_embedding(count) when count < 1, do: List.duplicate(0.1, 128)
+
+  defp boundary_embedding(_count) do
+    for i <- 1..128, do: if(rem(i, 2) == 0, do: 0.9, else: -0.9)
+  end
+
+  defp alternating_embedding(count) when rem(count, 2) == 0, do: List.duplicate(0.1, 128)
+
+  defp alternating_embedding(_count) do
+    for i <- 1..128, do: if(rem(i, 2) == 0, do: 0.9, else: -0.9)
+  end
+
+  defp stub_trajectory_extraction_success do
+    stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+      system_content =
+        messages
+        |> Enum.find(%{content: ""}, &(&1.role == :system))
+        |> Map.get(:content, "")
+
+      content =
+        cond do
+          String.contains?(system_content, "factual knowledge") ->
+            %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
+
+          String.contains?(system_content, "actionable instructions") ->
+            %{
+              instructions: [
+                %{
+                  intent: "goal",
+                  condition: "condition",
+                  instruction: "action",
+                  expected_outcome: "outcome"
+                }
+              ]
+            }
+
+          true ->
+            %{}
+        end
+
+      {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+      vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+    end)
+  end
+
+  describe "auto-commit on trajectory boundary" do
+    test "triggers background extraction and commits to MemoryStore", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode_with_boundary()
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "first obs", "first act")
+      :ok = Session.append(pid, "second obs", "second act")
+
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+      assert Session.state(pid) == :collecting
+    end
+
+    test "does NOT trigger extraction without trajectory boundary", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "first obs", "first act")
+      :ok = Session.append(pid, "second obs", "second act")
+
+      assert_eventually(Session.state(pid) == :collecting)
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) == 0
+    end
+
+    test "auto_commit: false preserves manual mode behavior", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode_with_boundary()
+
+      infra = start_infra_with_auto_commit(tmp_dir, false)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "first obs", "first act")
+      :ok = Session.append(pid, "second obs", "second act")
+
+      assert_eventually(Session.state(pid) == :collecting)
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) == 0
+    end
+
+    test "failed trajectory extraction keeps session in :collecting", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode_with_boundary()
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:error, :extraction_failed}
+      end)
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "first obs", "first act")
+      :ok = Session.append(pid, "second obs", "second act")
+
+      assert_eventually(Session.state(pid) == :collecting)
+    end
+
+    test "trajectory extraction crash keeps session in :collecting", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode_with_boundary()
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        raise "crash during extraction"
+      end)
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "first obs", "first act")
+      :ok = Session.append(pid, "second obs", "second act")
+
+      assert_eventually(Session.state(pid) == :collecting)
+    end
+
+    test "stopping flag with failed extraction terminates session", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:error, :extraction_failed}
+      end)
+
+      infra = start_infra_with_timeouts(tmp_dir, true, 50, 100)
+      pid = start_session(infra)
+      mon_ref = Process.monitor(pid)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "saw something", "did something")
+
+      assert_receive {:DOWN, ^mon_ref, :process, ^pid, :normal}, 2_000
+    end
+  end
+
+  describe "close/1 with auto-commit" do
+    test "rejects close when trajectory extraction is in-flight", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode_with_boundary()
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        Process.sleep(500)
+        {:ok, %LLM.Response{content: %{facts: []}, model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+      end)
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "first obs", "first act")
+      :ok = Session.append(pid, "second obs", "second act")
+
+      Process.sleep(50)
+
+      assert {:error, %SessionError{reason: :extraction_in_progress}} = Session.close(pid)
+    end
+
+    test "goes straight to idle when everything already committed", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode_with_boundary()
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "first obs", "first act")
+      :ok = Session.append(pid, "second obs", "second act")
+
+      # Wait for auto-commit of first trajectory
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+
+      assert :ok = Session.close(pid)
+
+      assert_eventually(Session.state(pid) == :idle)
+    end
+
+    test "extracts only uncommitted trajectory on close", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode_with_boundary()
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "first obs", "first act")
+      :ok = Session.append(pid, "second obs", "second act")
+
+      # Wait for auto-commit
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+
+      assert :ok = Session.close(pid)
+
+      assert_eventually(Session.state(pid) == :idle)
+    end
+  end
+
+  describe "flush timeout" do
+    test "extracts current trajectory after idle period", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_timeouts(tmp_dir, true, 50, :infinity)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+      assert Session.state(pid) == :collecting
+    end
+
+    test "reschedules when append is in progress", %{tmp_dir: tmp_dir} do
+      slow_append = :counters.new(1, [:atomics])
+
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        if :counters.get(slow_append, 1) > 0 do
+          Process.sleep(200)
+        end
+
+        {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
+      end)
+
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_timeouts(tmp_dir, true, 50, :infinity)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      :counters.add(slow_append, 1, 1)
+      Session.append_async(pid, "obs2", "act2")
+      Process.sleep(80)
+
+      assert Session.state(pid) == :collecting
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) == 0
+    end
+
+    test "does not fire with :infinity timeout", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+
+      infra = start_infra_with_timeouts(tmp_dir, true, :infinity, :infinity)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      Process.sleep(100)
+
+      assert Session.state(pid) == :collecting
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) == 0
+    end
+  end
+
+  describe "session timeout" do
+    test "terminates process after longer idle", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_timeouts(tmp_dir, true, 50, 150)
+      pid = start_session(infra)
+      monitor_ref = Process.monitor(pid)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      assert_receive {:DOWN, ^monitor_ref, :process, ^pid, :normal}, 1000
+    end
+
+    test "waits for in-flight extraction before stopping", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        Process.sleep(200)
+
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
+
+        content =
+          cond do
+            String.contains?(system_content, "factual knowledge") ->
+              %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
+
+            String.contains?(system_content, "actionable instructions") ->
+              %{
+                instructions: [
+                  %{
+                    intent: "goal",
+                    condition: "condition",
+                    instruction: "action",
+                    expected_outcome: "outcome"
+                  }
+                ]
+              }
+
+            true ->
+              %{}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+      end)
+
+      infra = start_infra_with_timeouts(tmp_dir, true, 50, 100)
+      pid = start_session(infra)
+      monitor_ref = Process.monitor(pid)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      # Flush should fire at ~50ms, session timeout at ~100ms
+      # Session timeout should wait for flush extraction to complete before stopping
+      assert_receive {:DOWN, ^monitor_ref, :process, ^pid, :normal}, 2000
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0
+    end
+  end
+
+  describe "timer reset on append" do
+    test "appending resets timers so flush does not fire prematurely", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+
+      infra = start_infra_with_timeouts(tmp_dir, true, 80, :infinity)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      Process.sleep(50)
+      :ok = Session.append(pid, "obs2", "act2")
+
+      Process.sleep(50)
+
+      assert Session.state(pid) == :collecting
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) == 0
+    end
+  end
+
+  describe "no timers when auto_commit is false" do
+    test "no timers fire when auto_commit is disabled", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+
+      infra = start_infra_with_timeouts(tmp_dir, false, 50, 100)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      Process.sleep(200)
+
+      assert Process.alive?(pid)
+      assert Session.state(pid) == :collecting
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) == 0
+    end
+  end
+
   describe "catch-all for unhandled events" do
     test "idle returns invalid_operation for unknown calls", %{tmp_dir: tmp_dir} do
       infra = start_infra(tmp_dir)
@@ -448,5 +892,266 @@ defmodule Mnemosyne.SessionTest do
       assert {:error, %SessionError{reason: :invalid_operation}} =
                GenStateMachine.call(pid, :something_weird)
     end
+  end
+
+  # -- Integration Tests --
+
+  defp stub_extraction_with_boundary_control do
+    call_count = :counters.new(1, [:atomics])
+
+    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+      {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
+      count = :counters.get(call_count, 1)
+      :counters.add(call_count, 1, 1)
+      embedding = alternating_embedding(count)
+      {:ok, %Embedding.Response{vectors: [embedding], model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+      system_content =
+        messages
+        |> Enum.find(%{content: ""}, &(&1.role == :system))
+        |> Map.get(:content, "")
+
+      content =
+        cond do
+          String.contains?(system_content, "factual knowledge") ->
+            %{facts: [%{proposition: "extracted fact", concepts: ["concept_a", "concept_b"]}]}
+
+          String.contains?(system_content, "actionable instructions") ->
+            %{
+              instructions: [
+                %{
+                  intent: "do something",
+                  condition: "when needed",
+                  instruction: "run this",
+                  expected_outcome: "it works"
+                }
+              ]
+            }
+
+          true ->
+            %{}
+        end
+
+      {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+      vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+    end)
+
+    call_count
+  end
+
+  describe "integration: full auto-commit lifecycle" do
+    test "first trajectory auto-committed, second extracted on close", %{tmp_dir: tmp_dir} do
+      stub_extraction_with_boundary_control()
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "integration test goal")
+
+      :ok = Session.append(pid, "obs1", "act1")
+      :ok = Session.append(pid, "obs2", "act2")
+      :ok = Session.append(pid, "obs3", "act3")
+
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+      assert Session.state(pid) == :collecting
+
+      nodes_before_close = map_size(MemoryStore.get_graph(infra.memory_store).nodes)
+      assert nodes_before_close > 0
+
+      :ok = Session.close(pid)
+      assert_eventually(Session.state(pid) == :idle)
+
+      nodes_after_close = map_size(MemoryStore.get_graph(infra.memory_store).nodes)
+      assert nodes_after_close >= nodes_before_close
+    end
+  end
+
+  describe "integration: timeout lifecycle" do
+    test "flush timeout extracts trajectory, session timeout terminates", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_timeouts(tmp_dir, true, 50, 200)
+      pid = start_session(infra)
+      monitor_ref = Process.monitor(pid)
+
+      :ok = Session.start_episode(pid, "timeout test")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+
+      assert_receive {:DOWN, ^monitor_ref, :process, ^pid, :normal}, 2000
+    end
+  end
+
+  describe "integration: manual mode backward compatibility" do
+    test "auto_commit false preserves full manual flow", %{tmp_dir: tmp_dir} do
+      stub_extraction_success()
+
+      infra = start_infra_with_auto_commit(tmp_dir, false)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "manual test")
+      :ok = Session.append(pid, "obs1", "act1")
+      :ok = Session.append(pid, "obs2", "act2")
+
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) == 0
+
+      :ok = Session.close(pid)
+      assert Session.state(pid) == :extracting
+
+      assert_eventually(Session.state(pid) == :ready)
+
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) == 0
+
+      :ok = Session.commit(pid)
+      assert Session.state(pid) == :idle
+
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+    end
+  end
+
+  describe "integration: close_and_commit with auto-commit" do
+    test "succeeds when close goes straight to idle (all committed)", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode_with_boundary()
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+      :ok = Session.append(pid, "obs2", "act2")
+
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+
+      assert :ok = close_and_commit_direct(pid)
+      assert Session.state(pid) == :idle
+    end
+
+    test "succeeds when close triggers extraction for remaining trajectory", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      :ok = Session.close(pid)
+      assert_eventually(Session.state(pid) == :idle)
+
+      assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0
+    end
+  end
+
+  describe "integration: rapid appends with boundaries" do
+    test "multiple boundaries handled without race conditions", %{tmp_dir: tmp_dir} do
+      call_count = :counters.new(1, [:atomics])
+
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        embedding =
+          if rem(count, 3) == 2 do
+            for i <- 1..128, do: if(rem(i, 2) == 0, do: 0.9, else: -0.9)
+          else
+            List.duplicate(0.1, 128)
+          end
+
+        {:ok, %Embedding.Response{vectors: [embedding], model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
+
+        content =
+          cond do
+            String.contains?(system_content, "factual knowledge") ->
+              %{facts: [%{proposition: "rapid fact", concepts: ["rapid_concept"]}]}
+
+            String.contains?(system_content, "actionable instructions") ->
+              %{
+                instructions: [
+                  %{
+                    intent: "rapid intent",
+                    condition: "cond",
+                    instruction: "instr",
+                    expected_outcome: "outcome"
+                  }
+                ]
+              }
+
+            true ->
+              %{}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+      end)
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "rapid test")
+      :ok = Session.append(pid, "obs1", "act1")
+      :ok = Session.append(pid, "obs2", "act2")
+      :ok = Session.append(pid, "obs3", "act3")
+      :ok = Session.append(pid, "obs4", "act4")
+      :ok = Session.append(pid, "obs5", "act5")
+
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+
+      assert Session.state(pid) == :collecting
+
+      :ok = Session.close(pid)
+      assert_eventually(Session.state(pid) == :idle)
+
+      final_nodes = map_size(MemoryStore.get_graph(infra.memory_store).nodes)
+      assert final_nodes > 0
+    end
+  end
+
+  defp close_and_commit_direct(server) do
+    :ok = Session.close(server)
+
+    Enum.reduce_while(1..200, :timeout, fn _, _ ->
+      case Session.state(server) do
+        :extracting ->
+          Process.sleep(50)
+          {:cont, :timeout}
+
+        :ready ->
+          {:halt, Session.commit(server)}
+
+        :idle ->
+          {:halt, :ok}
+
+        _other ->
+          {:halt, {:error, :unexpected_state}}
+      end
+    end)
   end
 end

@@ -169,15 +169,26 @@ defmodule Mnemosyne.Pipeline.Episode do
     end
   end
 
+  @doc "Builds a trajectory struct from a list of steps sharing the same trajectory_id."
+  @spec build_trajectory_from_steps([step()]) :: trajectory()
+  def build_trajectory_from_steps([]) do
+    raise ArgumentError, "cannot build trajectory from empty steps"
+  end
+
+  def build_trajectory_from_steps(steps) do
+    sorted = Enum.sort_by(steps, & &1.index)
+
+    %{
+      id: hd(sorted).trajectory_id,
+      steps: sorted,
+      subgoal: List.last(sorted).subgoal
+    }
+  end
+
   defp build_trajectories(episode) do
     episode.steps
     |> Enum.group_by(& &1.trajectory_id)
-    |> Enum.map(fn {traj_id, steps} ->
-      sorted_steps = Enum.sort_by(steps, & &1.index)
-      subgoal = List.last(sorted_steps).subgoal
-
-      %{id: traj_id, steps: sorted_steps, subgoal: subgoal}
-    end)
+    |> Enum.map(fn {_traj_id, steps} -> build_trajectory_from_steps(steps) end)
     |> Enum.sort_by(fn traj -> hd(traj.steps).index end)
   end
 

@@ -565,6 +565,9 @@ defmodule Mnemosyne do
       :ready ->
         Session.commit(pid)
 
+      :idle ->
+        :ok
+
       :failed when retries_remaining > 0 ->
         case Session.commit(pid) do
           :ok -> await_and_commit(pid, retries_remaining - 1, poll_opts)
@@ -594,6 +597,9 @@ defmodule Mnemosyne do
 
         :failed ->
           {:halt, :failed}
+
+        :idle ->
+          {:halt, :idle}
 
         _other ->
           {:halt, :timeout}

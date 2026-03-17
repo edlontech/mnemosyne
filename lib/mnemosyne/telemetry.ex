@@ -18,6 +18,7 @@ defmodule Mnemosyne.Telemetry do
   ### Pipeline
   - `[:mnemosyne, :episode, :append, :start | :stop | :exception]`
   - `[:mnemosyne, :structuring, :extract, :start | :stop | :exception]`
+  - `[:mnemosyne, :structuring, :extract_trajectory, :start | :stop | :exception]`
   - `[:mnemosyne, :retrieval, :retrieve, :start | :stop | :exception]`
   - `[:mnemosyne, :reasoning, :reason, :start | :stop | :exception]`
 
@@ -53,6 +54,7 @@ defmodule Mnemosyne.Telemetry do
     @prefix ++ [:embedding, :embed_batch],
     @prefix ++ [:episode, :append],
     @prefix ++ [:structuring, :extract],
+    @prefix ++ [:structuring, :extract_trajectory],
     @prefix ++ [:retrieval, :retrieve],
     @prefix ++ [:reasoning, :reason],
     @prefix ++ [:decay, :prune],

@@ -26,6 +26,13 @@ defmodule Mnemosyne.Notifier do
           | {:session_transition, session_id :: String.t(), old_state :: atom(),
              new_state :: atom()}
           | {:recall_executed, query :: String.t(), results :: term()}
+          | {:trajectory_committed, session_id :: String.t(), trajectory_id :: String.t(),
+             %{node_count: non_neg_integer()}}
+          | {:trajectory_flushed, session_id :: String.t(), trajectory_id :: String.t(),
+             %{node_count: non_neg_integer()}}
+          | {:session_expired, session_id :: String.t()}
+          | {:trajectory_extraction_failed, session_id :: String.t(), trajectory_id :: String.t(),
+             reason :: term()}
 
   @callback notify(repo_id :: String.t(), event()) :: :ok
 

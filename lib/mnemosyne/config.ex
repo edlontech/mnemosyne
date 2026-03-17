@@ -107,6 +107,33 @@ defmodule Mnemosyne.Config do
                    )
                    |> Zoi.default(%{})
 
+  @session_schema Zoi.default(
+                    Zoi.object(
+                      %{
+                        auto_commit:
+                          Zoi.default(Zoi.boolean(), true,
+                            description:
+                              "Enable auto-commit on trajectory boundaries and idle timeouts"
+                          ),
+                        flush_timeout_ms:
+                          Zoi.default(
+                            Zoi.Types.Union.new([Zoi.integer(), Zoi.literal(:infinity)], []),
+                            120_000,
+                            description:
+                              "Idle time before flushing current trajectory (ms or :infinity)"
+                          ),
+                        session_timeout_ms:
+                          Zoi.default(
+                            Zoi.Types.Union.new([Zoi.integer(), Zoi.literal(:infinity)], []),
+                            600_000,
+                            description: "Idle time before terminating session (ms or :infinity)"
+                          )
+                      },
+                      description: "Session auto-commit and timeout configuration"
+                    ),
+                    %{auto_commit: true, flush_timeout_ms: 120_000, session_timeout_ms: 600_000}
+                  )
+
   @config_schema Zoi.object(%{
                    llm: @llm_schema,
                    embedding: @embedding_schema,
@@ -122,7 +149,8 @@ defmodule Mnemosyne.Config do
                      Zoi.default(Zoi.float(), 0.95,
                        description:
                          "Cosine similarity threshold above which incoming intents are silently deduplicated"
-                     )
+                     ),
+                   session: @session_schema
                  })
 
   defstruct(
@@ -140,7 +168,8 @@ defmodule Mnemosyne.Config do
       Zoi.default(Zoi.float(), 0.95,
         description:
           "Cosine similarity threshold above which incoming intents are silently deduplicated"
-      )
+      ),
+    session: @session_schema
   )
 
   @moduledoc """

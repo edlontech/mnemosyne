@@ -37,17 +37,16 @@ defmodule Mnemosyne.Pipeline.Structuring do
       [:structuring, :extract],
       %{episode_id: episode.id, repo_id: Keyword.get(opts, :repo_id)},
       fn ->
-        llm = Keyword.fetch!(opts, :llm)
-        embedding = Keyword.fetch!(opts, :embedding)
-        llm_opts = Keyword.get(opts, :llm_opts, [])
-        config = Keyword.get(opts, :config)
-
         changesets =
           episode.trajectories
           |> Enum.map(fn trajectory ->
             Logger.debug("extracting trajectory #{trajectory.id}")
 
-            extract_trajectory(episode, trajectory, llm, embedding, llm_opts, config)
+            extract_trajectory(
+              trajectory,
+              episode.goal,
+              Keyword.put(opts, :episode_id, episode.id)
+            )
           end)
           |> collect_results()
 
@@ -69,17 +68,43 @@ defmodule Mnemosyne.Pipeline.Structuring do
     )
   end
 
-  defp extract_trajectory(episode, trajectory, llm, embedding, llm_opts, config) do
+  @doc "Extracts knowledge nodes from a single trajectory into a changeset."
+  @spec extract_trajectory(Episode.trajectory(), String.t(), keyword()) ::
+          {:ok, Changeset.t()} | {:error, Mnemosyne.Errors.error()}
+  def extract_trajectory(trajectory, goal, opts) do
+    llm = Keyword.fetch!(opts, :llm)
+    embedding = Keyword.fetch!(opts, :embedding)
+    llm_opts = Keyword.get(opts, :llm_opts, [])
+    config = Keyword.get(opts, :config)
+
+    Mnemosyne.Telemetry.span(
+      [:structuring, :extract_trajectory],
+      %{trajectory_id: trajectory.id, repo_id: Keyword.get(opts, :repo_id)},
+      fn ->
+        episode_id = Keyword.get_lazy(opts, :episode_id, fn -> generate_id("ep") end)
+
+        case do_extract_trajectory(trajectory, goal, episode_id, llm, embedding, llm_opts, config) do
+          {:ok, cs} ->
+            {{:ok, cs}, %{nodes_created: length(cs.additions), links_created: length(cs.links)}}
+
+          {:error, _} = err ->
+            {err, %{}}
+        end
+      end
+    )
+  end
+
+  defp do_extract_trajectory(trajectory, goal, episode_id, llm, embedding, llm_opts, config) do
     avg_reward = trajectory_avg_reward(trajectory)
 
     extraction_tasks = [
       Task.async(fn ->
-        extract_semantic(trajectory, episode.goal, llm, embedding, llm_opts, config, avg_reward)
+        extract_semantic(trajectory, goal, llm, embedding, llm_opts, config, avg_reward)
       end),
       Task.async(fn ->
-        extract_procedural(trajectory, episode.goal, llm, embedding, llm_opts, config, avg_reward)
+        extract_procedural(trajectory, goal, llm, embedding, llm_opts, config, avg_reward)
       end),
-      Task.async(fn -> compute_return(trajectory, episode.goal, llm, llm_opts, config) end)
+      Task.async(fn -> compute_return(trajectory, goal, llm, llm_opts, config) end)
     ]
 
     [semantic_result, procedural_result, return_result] =
@@ -95,7 +120,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
     with {:ok, semantic_cs} <- tag_result(semantic_result, :semantic),
          {:ok, procedural_cs} <- tag_result(procedural_result, :procedural),
          {:ok, return_value} <- tag_result(return_result, :return) do
-      base_cs = build_base_changeset(episode, trajectory, return_value)
+      base_cs = build_base_changeset(goal, episode_id, trajectory, return_value)
 
       {:ok,
        base_cs
@@ -111,11 +136,11 @@ defmodule Mnemosyne.Pipeline.Structuring do
     total / length(steps)
   end
 
-  defp build_base_changeset(episode, trajectory, _return_value) do
+  defp build_base_changeset(goal, episode_id, trajectory, _return_value) do
     subgoal_node = %Subgoal{
       id: generate_id("sg"),
       description: trajectory.subgoal,
-      parent_goal: episode.goal
+      parent_goal: goal
     }
 
     cs =
@@ -139,7 +164,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
       source_node = %Source{
         id: source_id,
-        episode_id: episode.id,
+        episode_id: episode_id,
         step_index: step.index
       }
 

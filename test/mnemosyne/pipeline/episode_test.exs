@@ -112,6 +112,74 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     end
   end
 
+  describe "build_trajectory_from_steps/1" do
+    test "raises on empty list" do
+      assert_raise ArgumentError, "cannot build trajectory from empty steps", fn ->
+        Episode.build_trajectory_from_steps([])
+      end
+    end
+
+    test "builds trajectory from a single step" do
+      step = %{
+        index: 0,
+        observation: "obs",
+        action: "act",
+        subgoal: "do thing",
+        state: "state",
+        reward: 0.5,
+        embedding: [0.1, 0.2],
+        trajectory_id: "traj_abc"
+      }
+
+      traj = Episode.build_trajectory_from_steps([step])
+
+      assert traj.id == "traj_abc"
+      assert traj.steps == [step]
+      assert traj.subgoal == "do thing"
+    end
+
+    test "sorts steps by index and uses last step's subgoal" do
+      step1 = %{
+        index: 2,
+        observation: "obs2",
+        action: "act2",
+        subgoal: "second goal",
+        state: "state2",
+        reward: 0.7,
+        embedding: [0.3, 0.4],
+        trajectory_id: "traj_xyz"
+      }
+
+      step0 = %{
+        index: 0,
+        observation: "obs0",
+        action: "act0",
+        subgoal: "first goal",
+        state: "state0",
+        reward: 0.3,
+        embedding: [0.1, 0.2],
+        trajectory_id: "traj_xyz"
+      }
+
+      step_mid = %{
+        index: 1,
+        observation: "obs1",
+        action: "act1",
+        subgoal: "mid goal",
+        state: "state1",
+        reward: 0.5,
+        embedding: [0.2, 0.3],
+        trajectory_id: "traj_xyz"
+      }
+
+      traj = Episode.build_trajectory_from_steps([step1, step0, step_mid])
+
+      assert traj.id == "traj_xyz"
+      assert [%{index: 0}, %{index: 1}, %{index: 2}] = traj.steps
+      assert traj.subgoal == "second goal"
+    end
+  end
+
   describe "close/1" do
     test "closes episode and builds trajectories" do
       stub_append_cycle()
