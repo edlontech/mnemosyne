@@ -20,6 +20,8 @@ defmodule Mnemosyne.Errors.Framework.SessionError do
   defp format_reason(:not_discardable), do: "nothing to discard in current state"
   defp format_reason(:invalid_operation), do: "operation not valid in current state"
   defp format_reason(:extraction_in_progress), do: "extraction is still running"
+  defp format_reason(:append_in_progress), do: "an append operation is still running"
+  defp format_reason(:append_crashed), do: "append task crashed unexpectedly"
   defp format_reason(:session_failed), do: "session is in failed state"
   defp format_reason(reason), do: inspect(reason)
 end
