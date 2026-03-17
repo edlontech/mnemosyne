@@ -107,6 +107,18 @@ defmodule Mnemosyne.MemoryStore do
     GenServer.call(server, {:get_linked_nodes, node_ids})
   end
 
+  @doc """
+  Fetches the most recently created nodes of the given types, sorted by creation time.
+
+  Returns up to `top_k` nodes paired with their metadata, newest first.
+  Defaults to semantic and procedural node types.
+  """
+  @spec latest(GenServer.server(), pos_integer(), keyword()) ::
+          {:ok, [{struct(), Mnemosyne.NodeMetadata.t()}]} | {:error, term()}
+  def latest(server, top_k, opts \\ []) do
+    GenServer.call(server, {:latest, top_k, opts})
+  end
+
   @doc "Returns the config, llm, embedding, notifier, and repo_id for session creation."
   @spec get_session_defaults(GenServer.server()) :: %{
           config: term(),
@@ -227,6 +239,24 @@ defmodule Mnemosyne.MemoryStore do
     case backend_mod.get_linked_nodes(node_ids, backend_state) do
       {:ok, nodes, _bs} -> {:reply, {:ok, nodes}, state}
       {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:latest, top_k, opts}, _from, state) do
+    types = Keyword.get(opts, :types, [:semantic, :procedural])
+
+    case fetch_nodes_with_metadata(types, state.backend) do
+      {:ok, pairs} ->
+        result =
+          pairs
+          |> Enum.sort_by(fn {_node, meta} -> meta.created_at end, {:desc, DateTime})
+          |> Enum.take(top_k)
+
+        {:reply, {:ok, result}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
     end
   end
 
@@ -608,6 +638,19 @@ defmodule Mnemosyne.MemoryStore do
         {:ok, reasoned, trace}
       end
     end)
+  end
+
+  defp fetch_nodes_with_metadata(types, {backend_mod, backend_state}) do
+    with {:ok, nodes, _bs} <- backend_mod.get_nodes_by_type(types, backend_state),
+         node_ids = Enum.map(nodes, &Mnemosyne.Graph.Node.id/1),
+         {:ok, metadata_map, _bs} <- backend_mod.get_metadata(node_ids, backend_state) do
+      pairs =
+        nodes
+        |> Enum.map(fn node -> {node, Map.get(metadata_map, Mnemosyne.Graph.Node.id(node))} end)
+        |> Enum.filter(fn {_node, meta} -> meta != nil end)
+
+      {:ok, pairs}
+    end
   end
 
   defp maybe_update_metadata(_backend_mod, metadata, bs) when map_size(metadata) == 0,

@@ -474,6 +474,30 @@ defmodule Mnemosyne do
   end
 
   @doc """
+  Fetches the most recently created memories from the repo, sorted newest first.
+
+  Returns up to `top_k` nodes paired with their metadata. By default fetches
+  semantic and procedural nodes.
+
+  ## Options
+
+    * `:types` - Node types to fetch. Defaults to `[:semantic, :procedural]`.
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+
+  ## Examples
+
+      {:ok, memories} = Mnemosyne.latest("my-repo", 10)
+      {:ok, memories} = Mnemosyne.latest("my-repo", 5, types: [:semantic])
+  """
+  @spec latest(String.t(), pos_integer(), keyword()) ::
+          {:ok, [{struct(), Mnemosyne.NodeMetadata.t()}]} | {:error, term()}
+  def latest(repo_id, top_k, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.latest(pid, top_k, opts)
+    end
+  end
+
+  @doc """
   Applies a changeset to the knowledge graph asynchronously.
 
   Enqueues the changeset for application via the MemoryStore write lane.

@@ -8,10 +8,12 @@ defmodule MnemosyneTest do
   alias Mnemosyne.Errors.Framework.NotFoundError
   alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Graph.Changeset
+  alias Mnemosyne.Graph.Node.Procedural
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.GraphBackends.InMemory
   alias Mnemosyne.GraphBackends.Persistence.DETS
   alias Mnemosyne.LLM
+  alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
 
   @moduletag :tmp_dir
@@ -461,6 +463,141 @@ defmodule MnemosyneTest do
 
       assert {:error, %NotFoundError{resource: :repo}} =
                Mnemosyne.decay_nodes("nonexistent")
+    end
+  end
+
+  describe "latest/3" do
+    test "returns nodes sorted by created_at descending", %{tmp_dir: tmp_dir} do
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      old_time = ~U[2025-01-01 00:00:00Z]
+      mid_time = ~U[2025-06-01 00:00:00Z]
+      new_time = ~U[2026-01-01 00:00:00Z]
+
+      nodes = [
+        %Semantic{id: "s-old", proposition: "Old fact", confidence: 0.9},
+        %Semantic{id: "s-mid", proposition: "Mid fact", confidence: 0.9},
+        %Semantic{id: "s-new", proposition: "New fact", confidence: 0.9}
+      ]
+
+      changeset =
+        nodes
+        |> Enum.zip([old_time, mid_time, new_time])
+        |> Enum.reduce(Changeset.new(), fn {node, ts}, cs ->
+          cs
+          |> Changeset.add_node(node)
+          |> Changeset.put_metadata(node.id, NodeMetadata.new(created_at: ts))
+        end)
+
+      :ok = Mnemosyne.apply_changeset(repo, changeset)
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["s-old"] != nil)
+
+      assert {:ok, results} = Mnemosyne.latest(repo, 10)
+
+      ids = Enum.map(results, fn {node, _meta} -> node.id end)
+      assert ids == ["s-new", "s-mid", "s-old"]
+    end
+
+    test "respects top_k limit", %{tmp_dir: tmp_dir} do
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      changeset =
+        Enum.reduce(1..5, Changeset.new(), fn i, cs ->
+          node = %Semantic{id: "s-#{i}", proposition: "Fact #{i}", confidence: 0.9}
+          ts = DateTime.add(~U[2025-01-01 00:00:00Z], i, :day)
+
+          cs
+          |> Changeset.add_node(node)
+          |> Changeset.put_metadata(node.id, NodeMetadata.new(created_at: ts))
+        end)
+
+      :ok = Mnemosyne.apply_changeset(repo, changeset)
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["s-5"] != nil)
+
+      assert {:ok, results} = Mnemosyne.latest(repo, 2)
+      assert length(results) == 2
+    end
+
+    test "returns both semantic and procedural nodes by default", %{tmp_dir: tmp_dir} do
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      sem = %Semantic{id: "sem-1", proposition: "A fact", confidence: 0.9}
+
+      proc = %Procedural{
+        id: "proc-1",
+        instruction: "Do this",
+        condition: "When that",
+        expected_outcome: "Then result"
+      }
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(sem)
+        |> Changeset.put_metadata("sem-1", NodeMetadata.new(created_at: ~U[2025-01-01 00:00:00Z]))
+        |> Changeset.add_node(proc)
+        |> Changeset.put_metadata(
+          "proc-1",
+          NodeMetadata.new(created_at: ~U[2025-06-01 00:00:00Z])
+        )
+
+      :ok = Mnemosyne.apply_changeset(repo, changeset)
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["proc-1"] != nil)
+
+      assert {:ok, results} = Mnemosyne.latest(repo, 10)
+      types = Enum.map(results, fn {node, _meta} -> Mnemosyne.Graph.Node.node_type(node) end)
+      assert :semantic in types
+      assert :procedural in types
+    end
+
+    test "filters by custom types", %{tmp_dir: tmp_dir} do
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      sem = %Semantic{id: "sem-2", proposition: "A fact", confidence: 0.9}
+
+      proc = %Procedural{
+        id: "proc-2",
+        instruction: "Do this",
+        condition: "When that",
+        expected_outcome: "Then result"
+      }
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(sem)
+        |> Changeset.put_metadata("sem-2", NodeMetadata.new(created_at: ~U[2025-01-01 00:00:00Z]))
+        |> Changeset.add_node(proc)
+        |> Changeset.put_metadata(
+          "proc-2",
+          NodeMetadata.new(created_at: ~U[2025-06-01 00:00:00Z])
+        )
+
+      :ok = Mnemosyne.apply_changeset(repo, changeset)
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["sem-2"] != nil)
+
+      assert {:ok, results} = Mnemosyne.latest(repo, 10, types: [:procedural])
+
+      assert [{"proc-2", :procedural}] ==
+               Enum.map(results, fn {node, _} ->
+                 {node.id, Mnemosyne.Graph.Node.node_type(node)}
+               end)
+    end
+
+    test "returns empty list for empty repo", %{tmp_dir: tmp_dir} do
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      assert {:ok, []} = Mnemosyne.latest(repo, 10)
+    end
+
+    test "returns error when repo does not exist", %{tmp_dir: tmp_dir} do
+      start_supervisor(tmp_dir)
+
+      assert {:error, %NotFoundError{resource: :repo}} =
+               Mnemosyne.latest("nonexistent", 10)
     end
   end
 end
