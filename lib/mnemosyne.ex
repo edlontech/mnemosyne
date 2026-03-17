@@ -253,6 +253,28 @@ defmodule Mnemosyne do
   end
 
   @doc """
+  Like `append/4` but returns immediately. Accepts an optional callback that
+  receives `:ok` or `{:error, reason}` when the append finishes.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec append_async(
+          String.t(),
+          String.t(),
+          String.t(),
+          (Session.append_result() -> any()) | nil,
+          keyword()
+        ) ::
+          :ok | {:error, Mnemosyne.Errors.error()}
+  def append_async(session_id, observation, action, callback \\ nil, opts \\ []) do
+    with {:ok, pid} <- lookup_session(session_id, opts) do
+      Session.append_async(pid, observation, action, callback)
+    end
+  end
+
+  @doc """
   Closes the current episode, triggering asynchronous knowledge extraction.
 
   Moves the session from `:collecting` to `:extracting`. The extraction

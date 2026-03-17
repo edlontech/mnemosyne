@@ -20,6 +20,8 @@ defmodule Mnemosyne.Session do
   alias Mnemosyne.Pipeline.Structuring
 
   @type state :: :idle | :collecting | :extracting | :ready | :failed
+  @type append_caller :: {:reply, GenServer.from()} | {:callback, (append_result() -> any())}
+  @type append_result :: :ok | {:error, Mnemosyne.Errors.error()}
 
   @type t :: %__MODULE__{
           id: String.t() | nil,
@@ -33,7 +35,10 @@ defmodule Mnemosyne.Session do
           notifier: module() | nil,
           memory_store: GenServer.server() | nil,
           task_supervisor: module() | nil,
-          extraction_task: reference() | nil
+          extraction_task: reference() | nil,
+          append_task: reference() | nil,
+          append_caller: append_caller() | nil,
+          append_queue: :queue.queue()
         }
 
   defstruct [
@@ -48,7 +53,10 @@ defmodule Mnemosyne.Session do
     :notifier,
     :memory_store,
     :task_supervisor,
-    :extraction_task
+    :extraction_task,
+    :append_task,
+    :append_caller,
+    append_queue: :queue.new()
   ]
 
   # -- Client API --
@@ -72,11 +80,22 @@ defmodule Mnemosyne.Session do
 
   @doc """
   Appends an observation-action pair to the current episode.
+  Blocks until the append completes or the timeout expires.
   """
   @spec append(GenServer.server(), String.t(), String.t()) ::
           :ok | {:error, Mnemosyne.Errors.error()}
   def append(server, observation, action) do
     GenStateMachine.call(server, {:append, observation, action}, :timer.seconds(60))
+  end
+
+  @doc """
+  Like `append/3` but returns immediately. Accepts an optional callback that
+  receives `:ok` or `{:error, reason}` when the append finishes.
+  """
+  @spec append_async(GenServer.server(), String.t(), String.t(), (append_result() -> any()) | nil) ::
+          :ok
+  def append_async(server, observation, action, callback \\ nil) do
+    GenStateMachine.cast(server, {:append_async, observation, action, callback})
   end
 
   @doc """
@@ -213,32 +232,31 @@ defmodule Mnemosyne.Session do
 
   @doc false
   def collecting({:call, from}, {:append, observation, action}, data) do
-    opts = [
-      repo_id: data.repo_id,
-      llm: data.llm,
-      embedding: data.embedding,
-      config: data.config
-    ]
+    enqueue_or_dispatch_append(data, observation, action, {:reply, from})
+  end
 
-    case Episode.append(data.episode, observation, action, opts) do
-      {:ok, episode} ->
-        {:keep_state, %{data | episode: episode}, [{:reply, from, :ok}]}
-
-      {:error, _} = error ->
-        {:keep_state_and_data, [{:reply, from, error}]}
-    end
+  def collecting(:cast, {:append_async, observation, action, callback}, data) do
+    caller = if callback, do: {:callback, callback}, else: nil
+    enqueue_or_dispatch_append(data, observation, action, caller)
   end
 
   def collecting({:call, from}, :close, data) do
-    case Episode.close(data.episode) do
-      {:ok, closed_episode} ->
-        new_data = %{data | episode: closed_episode}
-        task = spawn_extraction(new_data)
-        emit_transition(data, :collecting, :extracting)
-        {:next_state, :extracting, %{new_data | extraction_task: task.ref}, [{:reply, from, :ok}]}
+    if data.append_task do
+      {:keep_state_and_data,
+       [{:reply, from, {:error, SessionError.exception(reason: :append_in_progress)}}]}
+    else
+      case Episode.close(data.episode) do
+        {:ok, closed_episode} ->
+          new_data = %{data | episode: closed_episode}
+          task = spawn_extraction(new_data)
+          emit_transition(data, :collecting, :extracting)
 
-      {:error, _} = error ->
-        {:keep_state_and_data, [{:reply, from, error}]}
+          {:next_state, :extracting, %{new_data | extraction_task: task.ref},
+           [{:reply, from, :ok}]}
+
+        {:error, _} = error ->
+          {:keep_state_and_data, [{:reply, from, error}]}
+      end
     end
   end
 
@@ -266,6 +284,30 @@ defmodule Mnemosyne.Session do
   def collecting({:call, from}, :get_context, data) do
     {:keep_state_and_data, [{:reply, from, build_context(data)}]}
   end
+
+  def collecting(:info, {ref, {:ok, episode}}, %{append_task: ref} = data) do
+    Process.demonitor(ref, [:flush])
+    notify_append_caller(data.append_caller, :ok)
+    data = %{data | episode: episode, append_task: nil, append_caller: nil}
+    {:keep_state, dispatch_append(data)}
+  end
+
+  def collecting(:info, {ref, {:error, _} = error}, %{append_task: ref} = data) do
+    Process.demonitor(ref, [:flush])
+    notify_append_caller(data.append_caller, error)
+    data = %{data | append_task: nil, append_caller: nil}
+    {:keep_state, dispatch_append(data)}
+  end
+
+  def collecting(:info, {:DOWN, ref, :process, _pid, reason}, %{append_task: ref} = data) do
+    Logger.error("Append task crashed for session #{data.id}: #{inspect(reason)}")
+    error = {:error, SessionError.exception(reason: :append_crashed)}
+    notify_append_caller(data.append_caller, error)
+    data = %{data | append_task: nil, append_caller: nil}
+    {:keep_state, dispatch_append(data)}
+  end
+
+  def collecting(:info, _msg, _data), do: :keep_state_and_data
 
   def collecting({:call, from}, _request, _data),
     do:
@@ -367,6 +409,47 @@ defmodule Mnemosyne.Session do
   end
 
   # -- Private --
+
+  defp enqueue_or_dispatch_append(data, observation, action, caller) do
+    if data.append_task do
+      queue = :queue.in({observation, action, caller}, data.append_queue)
+      {:keep_state, %{data | append_queue: queue}}
+    else
+      {:keep_state, spawn_append(data, observation, action, caller)}
+    end
+  end
+
+  defp spawn_append(data, observation, action, caller) do
+    episode = data.episode
+
+    opts = [
+      repo_id: data.repo_id,
+      llm: data.llm,
+      embedding: data.embedding,
+      config: data.config
+    ]
+
+    task =
+      Task.Supervisor.async_nolink(data.task_supervisor, fn ->
+        Episode.append(episode, observation, action, opts)
+      end)
+
+    %{data | append_task: task.ref, append_caller: caller}
+  end
+
+  defp dispatch_append(%{append_queue: queue} = data) do
+    case :queue.out(queue) do
+      {{:value, {observation, action, caller}}, rest} ->
+        spawn_append(%{data | append_queue: rest}, observation, action, caller)
+
+      {:empty, _} ->
+        data
+    end
+  end
+
+  defp notify_append_caller(nil, _result), do: :ok
+  defp notify_append_caller({:reply, from}, result), do: GenStateMachine.reply(from, result)
+  defp notify_append_caller({:callback, fun}, result), do: fun.(result)
 
   defp spawn_extraction(data) do
     episode = data.episode
