@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.0...mnemosyne-v0.1.1) (2026-03-17)
+
+
+### Features
+
+* add two-lane async queue to MemoryStore for concurrent writes and maintenance ([14eedd4](https://github.com/edlontech/mnemosyne/commit/14eedd4c436445a193fe9cc35a609932446476ae))
+
+
+### Bug Fixes
+
+* Fixed dialyzer and silent errors ([268dc69](https://github.com/edlontech/mnemosyne/commit/268dc69dbaa4dc257dd8c9ed0479fa34b1521374))
+
 ## [0.1.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.0.1...mnemosyne-v0.1.0) (2026-03-15)
 
 
