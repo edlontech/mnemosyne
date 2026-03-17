@@ -23,10 +23,14 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
   defp build_closed_episode do
     stub_append_cycle()
     episode = Episode.new("Optimize the database")
-    {:ok, episode} = Episode.append(episode, "Slow query found", "Added index", @default_opts)
+
+    {:ok, episode, _trace} =
+      Episode.append(episode, "Slow query found", "Added index", @default_opts)
 
     stub_append_cycle("Continue optimization", "0.9")
-    {:ok, episode} = Episode.append(episode, "Index applied", "Run benchmark", @default_opts)
+
+    {:ok, episode, _trace} =
+      Episode.append(episode, "Index applied", "Run benchmark", @default_opts)
 
     {:ok, closed} = Episode.close(episode)
     closed
@@ -599,7 +603,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       trajectory = hd(episode.trajectories)
       opts = @default_opts ++ [episode_id: episode.id]
 
-      assert {:ok, %Changeset{} = cs} =
+      assert {:ok, %Changeset{} = cs, _trace} =
                Structuring.extract_trajectory(trajectory, episode.goal, opts)
 
       assert [_ | _] = cs.additions
@@ -621,7 +625,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
       trajectory = hd(episode.trajectories)
 
-      assert {:ok, %Changeset{} = cs} =
+      assert {:ok, %Changeset{} = cs, _trace} =
                Structuring.extract_trajectory(trajectory, episode.goal, @default_opts)
 
       source_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Source{}, &1))
@@ -636,7 +640,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       trajectory = hd(episode.trajectories)
       opts = @default_opts ++ [episode_id: "custom_ep_id"]
 
-      assert {:ok, %Changeset{} = cs} =
+      assert {:ok, %Changeset{} = cs, _trace} =
                Structuring.extract_trajectory(trajectory, episode.goal, opts)
 
       source_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Source{}, &1))

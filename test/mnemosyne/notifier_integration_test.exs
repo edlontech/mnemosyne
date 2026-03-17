@@ -62,7 +62,7 @@ defmodule Mnemosyne.NotifierIntegrationTest do
   end
 
   describe "apply_changeset notification" do
-    test "emits {:changeset_applied, changeset} on success", %{tmp_dir: tmp_dir} do
+    test "emits {:changeset_applied, changeset, metadata} on success", %{tmp_dir: tmp_dir} do
       repo_id = unique_repo_id()
       pid = start_store(tmp_dir, repo_id: repo_id)
       node = make_semantic("s1", "Test fact")
@@ -72,7 +72,7 @@ defmodule Mnemosyne.NotifierIntegrationTest do
 
       assert_eventually(
         Enum.any?(TestNotifier.events(repo_id), fn
-          {:changeset_applied, %Changeset{}} -> true
+          {:changeset_applied, %Changeset{}, %{}} -> true
           _ -> false
         end)
       )
@@ -80,7 +80,7 @@ defmodule Mnemosyne.NotifierIntegrationTest do
   end
 
   describe "delete_nodes notification" do
-    test "emits {:nodes_deleted, node_ids} on success", %{tmp_dir: tmp_dir} do
+    test "emits {:nodes_deleted, node_ids, metadata} on success", %{tmp_dir: tmp_dir} do
       repo_id = unique_repo_id()
       pid = start_store(tmp_dir, repo_id: repo_id)
       node = make_semantic("del-1", "To delete")
@@ -88,19 +88,19 @@ defmodule Mnemosyne.NotifierIntegrationTest do
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
       assert_eventually(
-        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _}, &1))
+        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _, %{}}, &1))
       )
 
       :ok = MemoryStore.delete_nodes(pid, ["del-1"])
 
       assert_eventually(
-        Enum.any?(TestNotifier.events(repo_id), &match?({:nodes_deleted, ["del-1"]}, &1))
+        Enum.any?(TestNotifier.events(repo_id), &match?({:nodes_deleted, ["del-1"], %{}}, &1))
       )
     end
   end
 
   describe "consolidate_semantics notification" do
-    test "emits {:consolidation_completed, stats} on success", %{tmp_dir: tmp_dir} do
+    test "emits {:consolidation_completed, stats, metadata} on success", %{tmp_dir: tmp_dir} do
       repo_id = unique_repo_id()
       pid = start_store(tmp_dir, repo_id: repo_id)
 
@@ -139,14 +139,14 @@ defmodule Mnemosyne.NotifierIntegrationTest do
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
       assert_eventually(
-        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _}, &1))
+        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _, %{}}, &1))
       )
 
       :ok = MemoryStore.consolidate_semantics(pid)
 
       assert_eventually(
         Enum.any?(TestNotifier.events(repo_id), fn
-          {:consolidation_completed, %{checked: _, deleted: _, deleted_ids: _}} -> true
+          {:consolidation_completed, %{checked: _, deleted: _, deleted_ids: _}, %{}} -> true
           _ -> false
         end)
       )
@@ -154,7 +154,7 @@ defmodule Mnemosyne.NotifierIntegrationTest do
   end
 
   describe "decay_nodes notification" do
-    test "emits {:decay_completed, stats} on success", %{tmp_dir: tmp_dir} do
+    test "emits {:decay_completed, stats, metadata} on success", %{tmp_dir: tmp_dir} do
       repo_id = unique_repo_id()
       pid = start_store(tmp_dir, repo_id: repo_id)
 
@@ -172,14 +172,14 @@ defmodule Mnemosyne.NotifierIntegrationTest do
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
       assert_eventually(
-        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _}, &1))
+        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _, %{}}, &1))
       )
 
       :ok = MemoryStore.decay_nodes(pid)
 
       assert_eventually(
         Enum.any?(TestNotifier.events(repo_id), fn
-          {:decay_completed, %{checked: _, deleted: _, deleted_ids: _}} -> true
+          {:decay_completed, %{checked: _, deleted: _, deleted_ids: _}, %{}} -> true
           _ -> false
         end)
       )
@@ -338,7 +338,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       events = TestNotifier.events(infra.repo_id)
 
       assert Enum.any?(events, fn
-               {:session_transition, ^session_id, :idle, :collecting} -> true
+               {:session_transition, ^session_id, :idle, :collecting, %{}} -> true
                _ -> false
              end)
     end
@@ -359,12 +359,12 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       events = TestNotifier.events(infra.repo_id)
 
       assert Enum.any?(events, fn
-               {:session_transition, ^session_id, :collecting, :extracting} -> true
+               {:session_transition, ^session_id, :collecting, :extracting, %{}} -> true
                _ -> false
              end)
 
       assert Enum.any?(events, fn
-               {:session_transition, ^session_id, :extracting, :ready} -> true
+               {:session_transition, ^session_id, :extracting, :ready, %{}} -> true
                _ -> false
              end)
     end
@@ -387,7 +387,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       events = TestNotifier.events(infra.repo_id)
 
       assert Enum.any?(events, fn
-               {:session_transition, ^session_id, :ready, :idle} -> true
+               {:session_transition, ^session_id, :ready, :idle, %{}} -> true
                _ -> false
              end)
     end
@@ -417,7 +417,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       events = TestNotifier.events(infra.repo_id)
 
       assert Enum.any?(events, fn
-               {:session_transition, ^session_id, :extracting, :failed} -> true
+               {:session_transition, ^session_id, :extracting, :failed, %{}} -> true
                _ -> false
              end)
     end
@@ -445,7 +445,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       events = TestNotifier.events(infra.repo_id)
 
       assert Enum.any?(events, fn
-               {:session_transition, ^session_id, :failed, :idle} -> true
+               {:session_transition, ^session_id, :failed, :idle, %{}} -> true
                _ -> false
              end)
     end
@@ -468,8 +468,30 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       events = TestNotifier.events(infra.repo_id)
 
       assert Enum.any?(events, fn
-               {:session_transition, ^session_id, :ready, :idle} -> true
+               {:session_transition, ^session_id, :ready, :idle, %{}} -> true
                _ -> false
+             end)
+    end
+
+    test "emits step_appended on append with trace", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+      session_id = Session.id(pid)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "saw something", "did something")
+
+      events = TestNotifier.events(infra.repo_id)
+
+      assert Enum.any?(events, fn
+               {:step_appended, ^session_id,
+                %{step_index: 0, trajectory_id: _, boundary_detected: false},
+                %{trace: %Mnemosyne.Notifier.Trace.Episode{}}} ->
+                 true
+
+               _ ->
+                 false
              end)
     end
 
@@ -501,7 +523,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       events = TestNotifier.events(infra.repo_id)
 
       assert Enum.any?(events, fn
-               {:session_transition, ^session_id, :failed, :extracting} -> true
+               {:session_transition, ^session_id, :failed, :extracting, %{}} -> true
                _ -> false
              end)
     end
@@ -573,7 +595,7 @@ defmodule Mnemosyne.NotifierRecallIntegrationTest do
   end
 
   describe "recall notification" do
-    test "emits {:recall_executed, query, result} on success", %{tmp_dir: tmp_dir} do
+    test "emits {:recall_executed, query, result, metadata} on success", %{tmp_dir: tmp_dir} do
       stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
         {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
       end)
@@ -601,7 +623,7 @@ defmodule Mnemosyne.NotifierRecallIntegrationTest do
       :ok = MemoryStore.apply_changeset(pid, changeset)
 
       assert_eventually(
-        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _}, &1))
+        Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _, %{}}, &1))
       )
 
       {:ok, _} = MemoryStore.recall(pid, "what is elixir?")
@@ -609,7 +631,37 @@ defmodule Mnemosyne.NotifierRecallIntegrationTest do
       events = TestNotifier.events(repo_id)
 
       assert Enum.any?(events, fn
-               {:recall_executed, "what is elixir?", {:ok, _}} -> true
+               {:recall_executed, "what is elixir?", {:ok, _},
+                %{trace: %Mnemosyne.Notifier.Trace.Recall{}}} ->
+                 true
+
+               _ ->
+                 false
+             end)
+    end
+
+    test "emits {:recall_failed, query, reason, metadata} on failure", %{tmp_dir: tmp_dir} do
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        {:error, :llm_unavailable}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
+        {:error, :embed_unavailable}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn _texts, _opts ->
+        {:error, :embed_unavailable}
+      end)
+
+      repo_id = unique_repo_id()
+      pid = start_store(tmp_dir, repo_id: repo_id)
+
+      {:error, _} = MemoryStore.recall(pid, "failing query")
+
+      events = TestNotifier.events(repo_id)
+
+      assert Enum.any?(events, fn
+               {:recall_failed, "failing query", _reason, %{}} -> true
                _ -> false
              end)
     end

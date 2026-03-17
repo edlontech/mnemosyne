@@ -8,31 +8,43 @@ defmodule Mnemosyne.Notifier do
 
   require Logger
 
+  @type metadata :: %{
+          optional(:session_id) => String.t() | nil,
+          optional(:trace) => struct() | nil
+        }
+
   @type event ::
-          {:changeset_applied, Mnemosyne.Graph.Changeset.t()}
-          | {:nodes_deleted, [String.t()]}
+          {:changeset_applied, Mnemosyne.Graph.Changeset.t(), metadata()}
+          | {:nodes_deleted, [String.t()], metadata()}
           | {:decay_completed,
              %{
                checked: non_neg_integer(),
                deleted: non_neg_integer(),
                deleted_ids: [String.t()]
-             }}
+             }, metadata()}
           | {:consolidation_completed,
              %{
                checked: non_neg_integer(),
                deleted: non_neg_integer(),
                deleted_ids: [String.t()]
-             }}
+             }, metadata()}
           | {:session_transition, session_id :: String.t(), old_state :: atom(),
-             new_state :: atom()}
-          | {:recall_executed, query :: String.t(), results :: term()}
+             new_state :: atom(), metadata()}
+          | {:recall_executed, query :: String.t(), results :: term(), metadata()}
+          | {:recall_failed, query :: String.t(), reason :: term(), metadata()}
+          | {:step_appended, session_id :: String.t(),
+             %{
+               step_index: non_neg_integer(),
+               trajectory_id: String.t(),
+               boundary_detected: boolean()
+             }, metadata()}
           | {:trajectory_committed, session_id :: String.t(), trajectory_id :: String.t(),
-             %{node_count: non_neg_integer()}}
+             %{node_count: non_neg_integer()}, metadata()}
           | {:trajectory_flushed, session_id :: String.t(), trajectory_id :: String.t(),
-             %{node_count: non_neg_integer()}}
-          | {:session_expired, session_id :: String.t()}
+             %{node_count: non_neg_integer()}, metadata()}
+          | {:session_expired, session_id :: String.t(), metadata()}
           | {:trajectory_extraction_failed, session_id :: String.t(), trajectory_id :: String.t(),
-             reason :: term()}
+             reason :: term(), metadata()}
 
   @callback notify(repo_id :: String.t(), event()) :: :ok
 

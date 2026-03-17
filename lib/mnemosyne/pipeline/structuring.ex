@@ -21,6 +21,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
   alias Mnemosyne.NodeMetadata
+  alias Mnemosyne.Notifier.Trace.Structuring, as: StructuringTrace
   alias Mnemosyne.Pipeline.Episode
   alias Mnemosyne.Pipeline.Prompts.GetProcedural, as: ProceduralPrompt
   alias Mnemosyne.Pipeline.Prompts.GetReturn
@@ -35,7 +36,11 @@ defmodule Mnemosyne.Pipeline.Structuring do
   def extract(%Episode{} = episode, opts) do
     Mnemosyne.Telemetry.span(
       [:structuring, :extract],
-      %{episode_id: episode.id, repo_id: Keyword.get(opts, :repo_id)},
+      %{
+        episode_id: episode.id,
+        repo_id: Keyword.get(opts, :repo_id),
+        session_id: Keyword.get(opts, :session_id)
+      },
       fn ->
         changesets =
           episode.trajectories
@@ -79,13 +84,18 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
     Mnemosyne.Telemetry.span(
       [:structuring, :extract_trajectory],
-      %{trajectory_id: trajectory.id, repo_id: Keyword.get(opts, :repo_id)},
+      %{
+        trajectory_id: trajectory.id,
+        repo_id: Keyword.get(opts, :repo_id),
+        session_id: Keyword.get(opts, :session_id)
+      },
       fn ->
         episode_id = Keyword.get_lazy(opts, :episode_id, fn -> generate_id("ep") end)
 
         case do_extract_trajectory(trajectory, goal, episode_id, llm, embedding, llm_opts, config) do
-          {:ok, cs} ->
-            {{:ok, cs}, %{nodes_created: length(cs.additions), links_created: length(cs.links)}}
+          {:ok, cs, trace} ->
+            {{:ok, cs, trace},
+             %{nodes_created: length(cs.additions), links_created: length(cs.links)}}
 
           {:error, _} = err ->
             {err, %{}}
@@ -95,6 +105,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
   end
 
   defp do_extract_trajectory(trajectory, goal, episode_id, llm, embedding, llm_opts, config) do
+    start_time = System.monotonic_time(:microsecond)
     avg_reward = trajectory_avg_reward(trajectory)
     episodic_ids = Enum.map(trajectory.steps, fn _step -> generate_id("ep_node") end)
 
@@ -141,10 +152,25 @@ defmodule Mnemosyne.Pipeline.Structuring do
          {:ok, return_value} <- tag_result(return_result, :return) do
       base_cs = build_base_changeset(goal, episode_id, trajectory, return_value, episodic_ids)
 
-      {:ok,
-       base_cs
-       |> Changeset.merge(semantic_cs)
-       |> Changeset.merge(procedural_cs)}
+      cs =
+        base_cs
+        |> Changeset.merge(semantic_cs)
+        |> Changeset.merge(procedural_cs)
+
+      duration_us = System.monotonic_time(:microsecond) - start_time
+      verbosity = if config, do: config.trace_verbosity, else: :summary
+
+      trace = %StructuringTrace{
+        verbosity: verbosity,
+        trajectory_id: trajectory.id,
+        semantic_count: count_nodes_of_type(cs, Semantic),
+        procedural_count: count_nodes_of_type(cs, Procedural),
+        tag_count: count_nodes_of_type(cs, Tag),
+        intent_count: count_nodes_of_type(cs, Intent),
+        duration_us: duration_us
+      }
+
+      {:ok, cs, trace}
     end
   end
 
@@ -356,7 +382,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
   defp collect_results(results) do
     Enum.reduce_while(results, {:ok, []}, fn
-      {:ok, cs}, {:ok, acc} -> {:cont, {:ok, [cs | acc]}}
+      {:ok, cs, _trace}, {:ok, acc} -> {:cont, {:ok, [cs | acc]}}
       {:error, _} = err, _acc -> {:halt, err}
     end)
     |> case do
@@ -419,6 +445,10 @@ defmodule Mnemosyne.Pipeline.Structuring do
   defp pairs([]), do: []
   defp pairs([_]), do: []
   defp pairs([h | t]), do: Enum.map(t, &{h, &1}) ++ pairs(t)
+
+  defp count_nodes_of_type(cs, mod) do
+    Enum.count(cs.additions, &is_struct(&1, mod))
+  end
 
   defp generate_id(prefix) do
     "#{prefix}_#{:crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)}"

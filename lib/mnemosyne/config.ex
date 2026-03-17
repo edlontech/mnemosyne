@@ -150,7 +150,14 @@ defmodule Mnemosyne.Config do
                        description:
                          "Cosine similarity threshold above which incoming intents are silently deduplicated"
                      ),
-                   session: @session_schema
+                   session: @session_schema,
+                   trace_verbosity:
+                     Zoi.default(
+                       Zoi.Types.Union.new([Zoi.literal(:summary), Zoi.literal(:detailed)], []),
+                       :summary,
+                       description:
+                         "Verbosity level for pipeline trace data in notifications (:summary or :detailed)"
+                     )
                  })
 
   defstruct(
@@ -169,7 +176,14 @@ defmodule Mnemosyne.Config do
         description:
           "Cosine similarity threshold above which incoming intents are silently deduplicated"
       ),
-    session: @session_schema
+    session: @session_schema,
+    trace_verbosity:
+      Zoi.default(
+        Zoi.Types.Union.new([Zoi.literal(:summary), Zoi.literal(:detailed)], []),
+        :summary,
+        description:
+          "Verbosity level for pipeline trace data in notifications (:summary or :detailed)"
+      )
   )
 
   @moduledoc """

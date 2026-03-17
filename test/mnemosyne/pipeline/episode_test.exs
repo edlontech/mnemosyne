@@ -65,7 +65,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       stub_append_cycle()
       episode = Episode.new("Test goal")
 
-      assert {:ok, episode} =
+      assert {:ok, episode, _trace} =
                Episode.append(episode, "saw something", "did something", @default_opts)
 
       assert [step] = episode.steps
@@ -97,7 +97,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       episode = Episode.new("Test goal")
       opts = @default_opts ++ [config: @test_config]
 
-      assert {:ok, _episode} =
+      assert {:ok, _episode, _trace} =
                Episode.append(episode, "saw something", "did something", opts)
     end
 
@@ -184,10 +184,10 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     test "closes episode and builds trajectories" do
       stub_append_cycle()
       episode = Episode.new("Test goal")
-      {:ok, episode} = Episode.append(episode, "obs1", "act1", @default_opts)
+      {:ok, episode, _trace} = Episode.append(episode, "obs1", "act1", @default_opts)
 
       stub_append_cycle("Same subgoal", "0.9")
-      {:ok, episode} = Episode.append(episode, "obs2", "act2", @default_opts)
+      {:ok, episode, _trace} = Episode.append(episode, "obs2", "act2", @default_opts)
 
       {:ok, closed} = Episode.close(episode)
 

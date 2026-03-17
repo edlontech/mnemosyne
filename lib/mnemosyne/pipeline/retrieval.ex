@@ -13,6 +13,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   alias Mnemosyne.Embedding
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Similarity
+  alias Mnemosyne.Notifier.Trace.Recall, as: RecallTrace
   alias Mnemosyne.Pipeline.Prompts.GetMode
   alias Mnemosyne.Pipeline.Prompts.GetPlan
 
@@ -45,11 +46,12 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     - `:config` - Config struct for per-step model overrides
     - `:max_hops` - Maximum traversal hops (default: 2)
   """
-  @spec retrieve(String.t(), keyword()) :: {:ok, Result.t()} | {:error, Mnemosyne.Errors.error()}
+  @spec retrieve(String.t(), keyword()) ::
+          {:ok, Result.t(), RecallTrace.t()} | {:error, Mnemosyne.Errors.error()}
   def retrieve(query, opts) do
     Mnemosyne.Telemetry.span(
       [:retrieval, :retrieve],
-      %{repo_id: Keyword.get(opts, :repo_id)},
+      %{repo_id: Keyword.get(opts, :repo_id), session_id: Keyword.get(opts, :session_id)},
       fn ->
         llm = Keyword.fetch!(opts, :llm)
         embedding = Keyword.fetch!(opts, :embedding)
@@ -58,6 +60,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         llm_opts = Keyword.get(opts, :llm_opts, [])
         config = Keyword.get(opts, :config)
         max_hops = Keyword.get(opts, :max_hops, @default_max_hops)
+        verbosity = if config, do: config.trace_verbosity, else: :summary
+        start_time = System.monotonic_time(:microsecond)
 
         with {:ok, mode} <- classify_mode(query, llm, llm_opts, config),
              {:ok, tags} <- generate_plan(query, mode, llm, llm_opts, config),
@@ -78,8 +82,20 @@ defmodule Mnemosyne.Pipeline.Retrieval do
           total_candidates =
             candidates |> Map.values() |> List.flatten() |> length()
 
-          {{:ok, %Result{mode: mode, tags: tags, candidates: candidates}},
-           %{candidates_found: total_candidates}}
+          duration_us = System.monotonic_time(:microsecond) - start_time
+
+          trace = %RecallTrace{
+            verbosity: verbosity,
+            mode: mode,
+            tags: tags,
+            candidate_count: total_candidates,
+            hops: max_hops,
+            result_count: total_candidates,
+            duration_us: duration_us
+          }
+
+          result = %Result{mode: mode, tags: tags, candidates: candidates}
+          {{:ok, result, trace}, %{candidates_found: total_candidates}}
         else
           error -> {error, %{}}
         end

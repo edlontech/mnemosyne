@@ -141,7 +141,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
       attach_telemetry([:mnemosyne, :episode, :append, :stop])
 
       episode = Episode.new("Test goal")
-      {:ok, _updated} = Episode.append(episode, "obs", "act", @default_opts)
+      {:ok, _updated, _trace} = Episode.append(episode, "obs", "act", @default_opts)
 
       assert_received {:telemetry, [:mnemosyne, :episode, :append, :start], start_measurements,
                        %{episode_id: _}}
@@ -176,7 +176,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
       attach_telemetry([:mnemosyne, :structuring, :extract, :stop])
 
       episode = Episode.new("Test goal")
-      {:ok, episode} = Episode.append(episode, "obs", "act", @default_opts)
+      {:ok, episode, _trace} = Episode.append(episode, "obs", "act", @default_opts)
       {:ok, closed} = Episode.close(episode)
 
       stub_extraction_llm()
@@ -241,7 +241,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
             }
           ]
 
-      {:ok, _result} = Retrieval.retrieve("Tell me about Elixir", opts)
+      {:ok, _result, _trace} = Retrieval.retrieve("Tell me about Elixir", opts)
 
       assert_received {:telemetry, [:mnemosyne, :retrieval, :retrieve, :start], _, %{}}
 

@@ -296,7 +296,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("semantic", "pooling\nperformance")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve(
           "How does connection pooling work?",
           retrieval_opts(graph, max_hops: 2)
@@ -315,7 +315,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("procedural", "scale database")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("How to scale database?", retrieval_opts(graph, max_hops: 2))
 
       assert result.mode == :procedural
@@ -330,7 +330,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("episodic", "server crash\nstability")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve(
           "What happened when server crashed?",
           retrieval_opts(graph, max_hops: 2)
@@ -347,7 +347,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("semantic", "pooling")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("pooling facts", retrieval_opts(graph, max_hops: 2))
 
       semantic_nodes =
@@ -373,7 +373,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("procedural", "scale database")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("how to scale", retrieval_opts(graph, max_hops: 2))
 
       procedural_nodes =
@@ -492,7 +492,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         {:ok, %Embedding.Response{vectors: vectors, model: "mock", usage: %{}}}
       end)
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("Find related facts", retrieval_opts(graph, max_hops: 2))
 
       all_ids =
@@ -561,7 +561,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
          %Embedding.Response{vectors: Enum.map(ts, fn _ -> query_vec end), model: "m", usage: %{}}}
       end)
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("Everything", retrieval_opts(graph, max_hops: 2))
 
       all_ids =
@@ -579,7 +579,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("semantic", "deployment")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("deployment", retrieval_opts(graph, max_hops: 2))
 
       all_types =
@@ -599,7 +599,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm()
       stub_default_embedding()
 
-      assert {:ok, %Retrieval.Result{} = result} =
+      assert {:ok, %Retrieval.Result{} = result, %Mnemosyne.Notifier.Trace.Recall{}} =
                Retrieval.retrieve("Tell me about Elixir", retrieval_opts(graph))
 
       assert result.mode == :semantic
@@ -612,7 +612,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("semantic")
       stub_default_embedding()
 
-      {:ok, result} = Retrieval.retrieve("What is BEAM?", retrieval_opts(graph))
+      {:ok, result, _trace} = Retrieval.retrieve("What is BEAM?", retrieval_opts(graph))
 
       assert result.mode == :semantic
       candidate_types = Map.keys(result.candidates)
@@ -625,7 +625,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("episodic", "server crash\nservice recovery")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("What happened during the outage?", retrieval_opts(graph))
 
       assert result.mode == :episodic
@@ -638,7 +638,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("procedural", "deployment\nmigrations")
       stub_default_embedding()
 
-      {:ok, result} = Retrieval.retrieve("How do I deploy?", retrieval_opts(graph))
+      {:ok, result, _trace} = Retrieval.retrieve("How do I deploy?", retrieval_opts(graph))
 
       assert result.mode == :procedural
       candidate_types = Map.keys(result.candidates)
@@ -650,7 +650,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("mixed", "Elixir\ndeployment")
       stub_default_embedding()
 
-      {:ok, result} = Retrieval.retrieve("Tell me everything", retrieval_opts(graph))
+      {:ok, result, _trace} = Retrieval.retrieve("Tell me everything", retrieval_opts(graph))
 
       assert result.mode == :mixed
     end
@@ -660,7 +660,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("semantic")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("Elixir facts", retrieval_opts(graph, max_hops: 0))
 
       all_ids =
@@ -679,7 +679,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("episodic", "server crash")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("What happened?", retrieval_opts(graph, max_hops: 2))
 
       all_candidates =
@@ -696,7 +696,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm()
       stub_default_embedding()
 
-      {:ok, result} = Retrieval.retrieve("anything", retrieval_opts(graph))
+      {:ok, result, _trace} = Retrieval.retrieve("anything", retrieval_opts(graph))
 
       total_candidates =
         result.candidates
@@ -763,7 +763,9 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       end)
 
       opts = retrieval_opts(graph, config: config)
-      assert {:ok, %Retrieval.Result{}} = Retrieval.retrieve("test", opts)
+
+      assert {:ok, %Retrieval.Result{}, %Mnemosyne.Notifier.Trace.Recall{}} =
+               Retrieval.retrieve("test", opts)
     end
 
     test "procedural mode discovers prescriptions through intent nodes" do
@@ -771,7 +773,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("procedural", "deploy safely")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("How do I deploy safely?", retrieval_opts(graph, max_hops: 2))
 
       all_ids =
@@ -789,7 +791,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm("semantic", "deployment")
       stub_default_embedding()
 
-      {:ok, result} =
+      {:ok, result, _trace} =
         Retrieval.retrieve("What about deployment?", retrieval_opts(graph, max_hops: 2))
 
       all_ids =
@@ -807,7 +809,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_retrieval_llm()
       stub_default_embedding()
 
-      {:ok, result} = Retrieval.retrieve("Elixir BEAM", retrieval_opts(graph))
+      {:ok, result, _trace} = Retrieval.retrieve("Elixir BEAM", retrieval_opts(graph))
 
       result.candidates
       |> Map.values()

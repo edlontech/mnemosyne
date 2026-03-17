@@ -44,7 +44,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   def reason(%Retrieval.Result{candidates: candidates}, opts) do
     Mnemosyne.Telemetry.span(
       [:reasoning, :reason],
-      %{repo_id: Keyword.get(opts, :repo_id)},
+      %{repo_id: Keyword.get(opts, :repo_id), session_id: Keyword.get(opts, :session_id)},
       fn ->
         do_reason(candidates, opts)
       end

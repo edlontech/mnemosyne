@@ -413,7 +413,12 @@ defmodule Mnemosyne do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       case lookup_session(session_id, opts) do
         {:ok, session_pid} ->
-          MemoryStore.recall_in_context(pid, session_pid, query, opts)
+          MemoryStore.recall_in_context(
+            pid,
+            session_pid,
+            query,
+            Keyword.put(opts, :session_id, session_id)
+          )
 
         {:error, %NotFoundError{}} ->
           MemoryStore.recall(pid, query, opts)

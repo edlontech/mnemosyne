@@ -245,16 +245,18 @@ defmodule Mnemosyne.MemoryStore do
 
   @impl true
   def handle_call({:recall, query, opts}, from, state) do
+    session_id = Keyword.get(opts, :session_id)
     task = spawn_recall_task(state, query, opts)
-    pending = Map.put(state.pending_recalls, task.ref, {from, query})
+    pending = Map.put(state.pending_recalls, task.ref, {from, query, session_id})
     {:noreply, %{state | pending_recalls: pending}}
   end
 
   @impl true
   def handle_call({:recall_in_context, session_id, query, opts}, from, state) do
     augmented_query = augment_query_with_context(session_id, query)
+    opts_session_id = Keyword.get(opts, :session_id, session_id)
     task = spawn_recall_task(state, augmented_query, opts)
-    pending = Map.put(state.pending_recalls, task.ref, {from, augmented_query})
+    pending = Map.put(state.pending_recalls, task.ref, {from, augmented_query, opts_session_id})
     {:noreply, %{state | pending_recalls: pending}}
   end
 
@@ -391,7 +393,7 @@ defmodule Mnemosyne.MemoryStore do
 
     with {:ok, new_bs} <- backend_mod.apply_changeset(merged_cs, backend_state),
          {:ok, final_bs} <- maybe_update_metadata(backend_mod, merged_cs.metadata, new_bs) do
-      Notifier.safe_notify(state.notifier, state.repo_id, {:changeset_applied, merged_cs})
+      Notifier.safe_notify(state.notifier, state.repo_id, {:changeset_applied, merged_cs, %{}})
       if from, do: GenServer.reply(from, :ok)
       {:noreply, dispatch_write(%{state | backend: {backend_mod, final_bs}})}
     else
@@ -404,7 +406,7 @@ defmodule Mnemosyne.MemoryStore do
 
     case backend_mod.delete_nodes(node_ids, backend_state) do
       {:ok, new_bs} ->
-        Notifier.safe_notify(state.notifier, state.repo_id, {:nodes_deleted, node_ids})
+        Notifier.safe_notify(state.notifier, state.repo_id, {:nodes_deleted, node_ids, %{}})
         if from, do: GenServer.reply(from, :ok)
         {:noreply, dispatch_write(%{state | backend: {backend_mod, new_bs}})}
 
@@ -517,7 +519,7 @@ defmodule Mnemosyne.MemoryStore do
       state.notifier,
       state.repo_id,
       {:consolidation_completed,
-       %{checked: result.checked, deleted: result.deleted, deleted_ids: result.deleted_ids}}
+       %{checked: result.checked, deleted: result.deleted, deleted_ids: result.deleted_ids}, %{}}
     )
   end
 
@@ -526,30 +528,46 @@ defmodule Mnemosyne.MemoryStore do
       state.notifier,
       state.repo_id,
       {:decay_completed,
-       %{checked: result.checked, deleted: result.deleted, deleted_ids: result.deleted_ids}}
+       %{checked: result.checked, deleted: result.deleted, deleted_ids: result.deleted_ids}, %{}}
     )
   end
 
   # -- Private: Recall Lane --
 
   defp handle_recall_complete(ref, result, state) do
-    {{from, query}, pending} = Map.pop(state.pending_recalls, ref)
+    {{from, query, session_id}, pending} = Map.pop(state.pending_recalls, ref)
     Process.demonitor(ref, [:flush])
+    metadata = %{session_id: session_id}
 
     case result do
-      {:ok, _} ->
-        Notifier.safe_notify(state.notifier, state.repo_id, {:recall_executed, query, result})
+      {:ok, reasoned, trace} ->
+        metadata = Map.put(metadata, :trace, trace)
+
+        Notifier.safe_notify(
+          state.notifier,
+          state.repo_id,
+          {:recall_executed, query, {:ok, reasoned}, metadata}
+        )
+
+        GenServer.reply(from, {:ok, reasoned})
 
       {:error, reason} ->
         Logger.warning("Recall failed for query #{inspect(query)}: #{inspect(reason)}")
+
+        Notifier.safe_notify(
+          state.notifier,
+          state.repo_id,
+          {:recall_failed, query, reason, metadata}
+        )
+
+        GenServer.reply(from, {:error, reason})
     end
 
-    GenServer.reply(from, result)
     {:noreply, %{state | pending_recalls: pending}}
   end
 
   defp handle_recall_crash(ref, reason, state) do
-    {{from, _query}, pending} = Map.pop(state.pending_recalls, ref)
+    {{from, _query, _session_id}, pending} = Map.pop(state.pending_recalls, ref)
     GenServer.reply(from, {:error, PipelineError.exception(reason: {:task_crashed, reason})})
     {:noreply, %{state | pending_recalls: pending}}
   end
@@ -562,12 +580,14 @@ defmodule Mnemosyne.MemoryStore do
     embedding = state.embedding
     value_fn = config.value_function
     max_hops = Keyword.get(opts, :max_hops, 2)
+    session_id = Keyword.get(opts, :session_id)
     backend = state.backend
     repo_id = state.repo_id
 
     Task.Supervisor.async_nolink(state.task_supervisor, fn ->
       retrieval_opts = [
         repo_id: repo_id,
+        session_id: session_id,
         llm: llm,
         embedding: embedding,
         backend: backend,
@@ -576,8 +596,16 @@ defmodule Mnemosyne.MemoryStore do
         max_hops: max_hops
       ]
 
-      with {:ok, result} <- Retrieval.retrieve(query, retrieval_opts) do
-        Reasoning.reason(result, repo_id: repo_id, llm: llm, query: query, config: config)
+      with {:ok, result, trace} <- Retrieval.retrieve(query, retrieval_opts),
+           {:ok, reasoned} <-
+             Reasoning.reason(result,
+               repo_id: repo_id,
+               session_id: session_id,
+               llm: llm,
+               query: query,
+               config: config
+             ) do
+        {:ok, reasoned, trace}
       end
     end)
   end

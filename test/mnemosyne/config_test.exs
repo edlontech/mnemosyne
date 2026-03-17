@@ -213,6 +213,30 @@ defmodule Mnemosyne.ConfigTest do
     end
   end
 
+  describe "trace_verbosity config" do
+    test "defaults to :summary when not provided" do
+      {:ok, config} = Zoi.parse(Config.t(), @valid_config)
+      assert config.trace_verbosity == :summary
+    end
+
+    test "accepts :detailed" do
+      input = Map.put(@valid_config, :trace_verbosity, :detailed)
+      {:ok, config} = Zoi.parse(Config.t(), input)
+      assert config.trace_verbosity == :detailed
+    end
+
+    test "accepts :summary explicitly" do
+      input = Map.put(@valid_config, :trace_verbosity, :summary)
+      {:ok, config} = Zoi.parse(Config.t(), input)
+      assert config.trace_verbosity == :summary
+    end
+
+    test "rejects invalid values" do
+      input = Map.put(@valid_config, :trace_verbosity, :verbose)
+      assert {:error, _} = Zoi.parse(Config.t(), input)
+    end
+  end
+
   describe "resolve_value_function/2" do
     test "returns correct params for known node types" do
       {:ok, config} = Zoi.parse(Config.t(), @valid_config)

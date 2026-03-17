@@ -311,7 +311,7 @@ defmodule Mnemosyne.Session do
     {:keep_state_and_data, [{:reply, from, build_context(data)}]}
   end
 
-  def collecting(:info, {ref, {:ok, episode}}, %{append_task: ref} = data) do
+  def collecting(:info, {ref, {:ok, episode, trace}}, %{append_task: ref} = data) do
     Logger.debug(
       "session #{data.id} append task completed ok, queue_size=#{:queue.len(data.append_queue)}"
     )
@@ -330,8 +330,22 @@ defmodule Mnemosyne.Session do
         prev_trajectory_id: nil
     }
 
+    step = List.last(episode.steps)
+    boundary_detected = prev_traj_id != nil and prev_traj_id != new_traj_id
+
+    Notifier.safe_notify(
+      data.notifier,
+      data.repo_id,
+      {:step_appended, data.id,
+       %{
+         step_index: step.index,
+         trajectory_id: step.trajectory_id,
+         boundary_detected: boundary_detected
+       }, %{trace: trace}}
+    )
+
     data =
-      if auto_commit_enabled?(data) and prev_traj_id != nil and prev_traj_id != new_traj_id do
+      if auto_commit_enabled?(data) and boundary_detected do
         maybe_spawn_trajectory_extraction(data, prev_traj_id)
       else
         data
@@ -363,18 +377,20 @@ defmodule Mnemosyne.Session do
     {:keep_state, dispatch_append(data)}
   end
 
-  def collecting(:info, {ref, {:ok, %Changeset{} = cs}}, data)
+  def collecting(:info, {ref, {:ok, %Changeset{} = cs, trace}}, data)
       when is_map_key(data.trajectory_tasks, ref) do
     Process.demonitor(ref, [:flush])
     traj_id = data.trajectory_tasks[ref]
 
     MemoryStore.apply_changeset(data.memory_store, cs)
 
+    metadata = %{trace: trace}
+
     event =
       if Map.has_key?(data.flush_triggered, traj_id) do
-        {:trajectory_flushed, data.id, traj_id, %{node_count: length(cs.additions)}}
+        {:trajectory_flushed, data.id, traj_id, %{node_count: length(cs.additions)}, metadata}
       else
-        {:trajectory_committed, data.id, traj_id, %{node_count: length(cs.additions)}}
+        {:trajectory_committed, data.id, traj_id, %{node_count: length(cs.additions)}, metadata}
       end
 
     Notifier.safe_notify(data.notifier, data.repo_id, event)
@@ -391,7 +407,7 @@ defmodule Mnemosyne.Session do
     }
 
     if data.stopping and map_size(data.trajectory_tasks) == 0 do
-      Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id})
+      Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id, %{}})
       {:stop, :normal, data}
     else
       {:keep_state, data}
@@ -425,7 +441,7 @@ defmodule Mnemosyne.Session do
     else
       case uncommitted_current_steps(data) do
         [] ->
-          Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id})
+          Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id, %{}})
           {:stop, :normal, data}
 
         steps ->
@@ -459,6 +475,23 @@ defmodule Mnemosyne.Session do
   def extracting({:call, from}, _request, _data) do
     {:keep_state_and_data,
      [{:reply, from, {:error, SessionError.exception(reason: :extraction_in_progress)}}]}
+  end
+
+  def extracting(
+        :info,
+        {ref, {:ok, %Changeset{} = changeset, _trace}},
+        %{extraction_task: ref} = data
+      ) do
+    Process.demonitor(ref, [:flush])
+
+    if auto_commit_enabled?(data) do
+      MemoryStore.apply_changeset(data.memory_store, changeset)
+      emit_transition(data, :extracting, :idle)
+      {:next_state, :idle, reset_session_data(data)}
+    else
+      emit_transition(data, :extracting, :ready)
+      {:next_state, :ready, %{data | changeset: changeset, extraction_task: nil}}
+    end
   end
 
   def extracting(:info, {ref, {:ok, %Changeset{} = changeset}}, %{extraction_task: ref} = data) do
@@ -567,6 +600,7 @@ defmodule Mnemosyne.Session do
 
     opts = [
       repo_id: data.repo_id,
+      session_id: data.id,
       llm: data.llm,
       embedding: data.embedding,
       config: data.config
@@ -608,6 +642,7 @@ defmodule Mnemosyne.Session do
 
     opts = [
       repo_id: data.repo_id,
+      session_id: data.id,
       llm: data.llm,
       embedding: data.embedding,
       config: data.config
@@ -684,14 +719,14 @@ defmodule Mnemosyne.Session do
     Notifier.safe_notify(
       data.notifier,
       data.repo_id,
-      {:trajectory_extraction_failed, data.id, traj_id, reason}
+      {:trajectory_extraction_failed, data.id, traj_id, reason, %{}}
     )
 
     trajectory_tasks = Map.delete(data.trajectory_tasks, ref)
     data = %{data | trajectory_tasks: trajectory_tasks}
 
     if data.stopping and map_size(data.trajectory_tasks) == 0 do
-      Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id})
+      Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id, %{}})
       {:stop, :normal, data}
     else
       {:keep_state, data}
@@ -778,6 +813,7 @@ defmodule Mnemosyne.Session do
 
     opts = [
       repo_id: data.repo_id,
+      session_id: data.id,
       llm: data.llm,
       embedding: data.embedding,
       config: data.config,
@@ -816,7 +852,7 @@ defmodule Mnemosyne.Session do
     Notifier.safe_notify(
       data.notifier,
       data.repo_id,
-      {:session_transition, data.id, from_state, to_state}
+      {:session_transition, data.id, from_state, to_state, %{}}
     )
   end
 end

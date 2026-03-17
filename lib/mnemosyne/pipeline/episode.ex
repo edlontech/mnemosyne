@@ -14,6 +14,7 @@ defmodule Mnemosyne.Pipeline.Episode do
   alias Mnemosyne.Embedding
   alias Mnemosyne.Errors.Invalid.EpisodeError
   alias Mnemosyne.Graph.Similarity
+  alias Mnemosyne.Notifier.Trace.Episode, as: EpisodeTrace
   alias Mnemosyne.Pipeline.Prompts.GetReward
   alias Mnemosyne.Pipeline.Prompts.GetState
   alias Mnemosyne.Pipeline.Prompts.GetSubgoal
@@ -62,19 +63,25 @@ defmodule Mnemosyne.Pipeline.Episode do
 
   @doc "Appends an observation-action step, inferring subgoal, reward, and state via LLM."
   @spec append(t(), String.t(), String.t(), keyword()) ::
-          {:ok, t()} | {:error, Mnemosyne.Errors.error()}
+          {:ok, t(), EpisodeTrace.t()} | {:error, Mnemosyne.Errors.error()}
   def append(%__MODULE__{closed: true}, _observation, _action, _opts),
     do: {:error, EpisodeError.exception(reason: :episode_closed)}
 
   def append(%__MODULE__{} = episode, observation, action, opts) do
     Telemetry.span(
       [:episode, :append],
-      %{episode_id: episode.id, repo_id: Keyword.get(opts, :repo_id)},
+      %{
+        episode_id: episode.id,
+        repo_id: Keyword.get(opts, :repo_id),
+        session_id: Keyword.get(opts, :session_id)
+      },
       fn ->
         llm = Keyword.fetch!(opts, :llm)
         embedding = Keyword.fetch!(opts, :embedding)
         llm_opts = Keyword.get(opts, :llm_opts, [])
         config = Keyword.get(opts, :config)
+        verbosity = if config, do: config.trace_verbosity, else: :summary
+        start_time = System.monotonic_time(:microsecond)
 
         with {:ok, subgoal} <-
                infer_subgoal(llm, observation, action, episode.goal, config, llm_opts),
@@ -94,7 +101,7 @@ defmodule Mnemosyne.Pipeline.Episode do
           }
 
           prev_trajectory_id = episode.current_trajectory_id
-          episode = maybe_segment_trajectory(episode, subgoal_embedding)
+          {episode, similarity} = maybe_segment_trajectory(episode, subgoal_embedding)
           step = %{step | trajectory_id: episode.current_trajectory_id}
 
           updated =
@@ -105,8 +112,24 @@ defmodule Mnemosyne.Pipeline.Episode do
             }
 
           new_trajectory = updated.current_trajectory_id != prev_trajectory_id
+          duration_us = System.monotonic_time(:microsecond) - start_time
 
-          {{:ok, updated}, %{step_count: length(updated.steps), new_trajectory: new_trajectory}}
+          trace = %EpisodeTrace{
+            verbosity: verbosity,
+            step_index: step.index,
+            trajectory_id: step.trajectory_id,
+            boundary_detected: new_trajectory,
+            reward: reward,
+            duration_us: duration_us,
+            subgoal: if(verbosity == :detailed, do: subgoal),
+            similarity_score: if(verbosity == :detailed, do: similarity),
+            similarity_threshold:
+              if(verbosity == :detailed, do: @trajectory_similarity_threshold),
+            state_summary: if(verbosity == :detailed, do: state)
+          }
+
+          {{:ok, updated, trace},
+           %{step_count: length(updated.steps), new_trajectory: new_trajectory}}
         else
           error -> {error, %{}}
         end
@@ -153,7 +176,7 @@ defmodule Mnemosyne.Pipeline.Episode do
   end
 
   defp maybe_segment_trajectory(%{current_subgoal_embedding: nil} = episode, _new_embedding),
-    do: episode
+    do: {episode, nil}
 
   defp maybe_segment_trajectory(episode, new_embedding) do
     similarity = Similarity.cosine_similarity(episode.current_subgoal_embedding, new_embedding)
@@ -163,9 +186,9 @@ defmodule Mnemosyne.Pipeline.Episode do
         "trajectory boundary detected (similarity=#{similarity} threshold=#{@trajectory_similarity_threshold})"
       )
 
-      %{episode | current_trajectory_id: generate_id("traj")}
+      {%{episode | current_trajectory_id: generate_id("traj")}, similarity}
     else
-      episode
+      {episode, similarity}
     end
   end
 
