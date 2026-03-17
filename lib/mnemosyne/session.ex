@@ -232,16 +232,32 @@ defmodule Mnemosyne.Session do
 
   @doc false
   def collecting({:call, from}, {:append, observation, action}, data) do
+    Logger.debug(
+      "session #{data.id} sync append received, task=#{inspect(data.append_task)}, queue_size=#{:queue.len(data.append_queue)}"
+    )
+
     enqueue_or_dispatch_append(data, observation, action, {:reply, from})
   end
 
   def collecting(:cast, {:append_async, observation, action, callback}, data) do
+    Logger.debug(
+      "session #{data.id} async append received, task=#{inspect(data.append_task)}, queue_size=#{:queue.len(data.append_queue)}"
+    )
+
     caller = if callback, do: {:callback, callback}, else: nil
     enqueue_or_dispatch_append(data, observation, action, caller)
   end
 
   def collecting({:call, from}, :close, data) do
+    Logger.debug(
+      "session #{data.id} close requested, task=#{inspect(data.append_task)}, queue_size=#{:queue.len(data.append_queue)}"
+    )
+
     if data.append_task do
+      Logger.warning(
+        "session #{data.id} close rejected: append task #{inspect(data.append_task)} still running"
+      )
+
       {:keep_state_and_data,
        [{:reply, from, {:error, SessionError.exception(reason: :append_in_progress)}}]}
     else
@@ -286,6 +302,10 @@ defmodule Mnemosyne.Session do
   end
 
   def collecting(:info, {ref, {:ok, episode}}, %{append_task: ref} = data) do
+    Logger.debug(
+      "session #{data.id} append task completed ok, queue_size=#{:queue.len(data.append_queue)}"
+    )
+
     Process.demonitor(ref, [:flush])
     notify_append_caller(data.append_caller, :ok)
     data = %{data | episode: episode, append_task: nil, append_caller: nil}
@@ -293,6 +313,10 @@ defmodule Mnemosyne.Session do
   end
 
   def collecting(:info, {ref, {:error, _} = error}, %{append_task: ref} = data) do
+    Logger.debug(
+      "session #{data.id} append task failed: #{inspect(error)}, queue_size=#{:queue.len(data.append_queue)}"
+    )
+
     Process.demonitor(ref, [:flush])
     notify_append_caller(data.append_caller, error)
     data = %{data | append_task: nil, append_caller: nil}
@@ -300,7 +324,10 @@ defmodule Mnemosyne.Session do
   end
 
   def collecting(:info, {:DOWN, ref, :process, _pid, reason}, %{append_task: ref} = data) do
-    Logger.error("Append task crashed for session #{data.id}: #{inspect(reason)}")
+    Logger.error(
+      "session #{data.id} append task crashed: #{inspect(reason)}, queue_size=#{:queue.len(data.append_queue)}"
+    )
+
     error = {:error, SessionError.exception(reason: :append_crashed)}
     notify_append_caller(data.append_caller, error)
     data = %{data | append_task: nil, append_caller: nil}
@@ -412,14 +439,20 @@ defmodule Mnemosyne.Session do
 
   defp enqueue_or_dispatch_append(data, observation, action, caller) do
     if data.append_task do
+      Logger.debug(
+        "session #{data.id} enqueuing append (task busy), new queue_size=#{:queue.len(data.append_queue) + 1}"
+      )
+
       queue = :queue.in({observation, action, caller}, data.append_queue)
       {:keep_state, %{data | append_queue: queue}}
     else
+      Logger.debug("session #{data.id} dispatching append immediately")
       {:keep_state, spawn_append(data, observation, action, caller)}
     end
   end
 
   defp spawn_append(data, observation, action, caller) do
+    Logger.debug("session #{data.id} spawning append task on #{inspect(data.task_supervisor)}")
     episode = data.episode
 
     opts = [
@@ -431,7 +464,11 @@ defmodule Mnemosyne.Session do
 
     task =
       Task.Supervisor.async_nolink(data.task_supervisor, fn ->
-        Episode.append(episode, observation, action, opts)
+        start = System.monotonic_time(:millisecond)
+        result = Episode.append(episode, observation, action, opts)
+        elapsed = System.monotonic_time(:millisecond) - start
+        Logger.debug("session #{data.id} Episode.append took #{elapsed}ms")
+        result
       end)
 
     %{data | append_task: task.ref, append_caller: caller}
@@ -440,9 +477,14 @@ defmodule Mnemosyne.Session do
   defp dispatch_append(%{append_queue: queue} = data) do
     case :queue.out(queue) do
       {{:value, {observation, action, caller}}, rest} ->
+        Logger.debug(
+          "session #{data.id} dispatching next from queue, remaining=#{:queue.len(rest)}"
+        )
+
         spawn_append(%{data | append_queue: rest}, observation, action, caller)
 
       {:empty, _} ->
+        Logger.debug("session #{data.id} append queue empty, all done")
         data
     end
   end
