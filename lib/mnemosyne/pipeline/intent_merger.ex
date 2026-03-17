@@ -29,7 +29,7 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
   - `:config` - `%Config{}` with threshold settings
   - `:value_function` - value function config map (`:module` + `:params`) for candidate scoring
   """
-  @spec merge(Changeset.t(), keyword()) :: {:ok, Changeset.t()}
+  @spec merge(Changeset.t(), keyword()) :: {:ok, Changeset.t()} | {:error, term()}
   def merge(%Changeset{} = changeset, opts) do
     {intents, other_nodes} = Enum.split_with(changeset.additions, &match?(%Intent{}, &1))
 

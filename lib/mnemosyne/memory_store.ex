@@ -271,6 +271,7 @@ defmodule Mnemosyne.MemoryStore do
         handle_recall_complete(ref, result, state)
 
       true ->
+        Logger.warning("Received result for unknown task ref: #{inspect(ref)}")
         {:noreply, state}
     end
   end
@@ -288,12 +289,19 @@ defmodule Mnemosyne.MemoryStore do
         handle_recall_crash(ref, reason, state)
 
       true ->
+        Logger.warning(
+          "Received DOWN for unknown task ref: #{inspect(ref)}, reason: #{inspect(reason)}"
+        )
+
         {:noreply, state}
     end
   end
 
   @impl true
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_info(msg, state) do
+    Logger.debug("MemoryStore received unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
 
   # -- Private: Write Lane --
 
@@ -368,39 +376,46 @@ defmodule Mnemosyne.MemoryStore do
 
     case {result, operation} do
       {{:ok, {:apply_changeset, merged_cs}}, {:apply_changeset, from}} ->
-        {backend_mod, backend_state} = state.backend
-
-        with {:ok, new_bs} <- backend_mod.apply_changeset(merged_cs, backend_state),
-             {:ok, final_bs} <- maybe_update_metadata(backend_mod, merged_cs.metadata, new_bs) do
-          Notifier.safe_notify(state.notifier, state.repo_id, {:changeset_applied, merged_cs})
-          if from, do: GenServer.reply(from, :ok)
-          state = %{state | backend: {backend_mod, final_bs}}
-          {:noreply, dispatch_write(state)}
-        else
-          {:error, _} = error ->
-            if from, do: GenServer.reply(from, error)
-            {:noreply, dispatch_write(%{state | write_active: nil})}
-        end
+        apply_changeset_to_backend(merged_cs, from, state)
 
       {{:ok, {:delete_nodes, node_ids}}, {:delete_nodes, from}} ->
-        {backend_mod, backend_state} = state.backend
-
-        case backend_mod.delete_nodes(node_ids, backend_state) do
-          {:ok, new_bs} ->
-            Notifier.safe_notify(state.notifier, state.repo_id, {:nodes_deleted, node_ids})
-            if from, do: GenServer.reply(from, :ok)
-            state = %{state | backend: {backend_mod, new_bs}}
-            {:noreply, dispatch_write(state)}
-
-          {:error, _} = error ->
-            if from, do: GenServer.reply(from, error)
-            {:noreply, dispatch_write(%{state | write_active: nil})}
-        end
+        delete_nodes_from_backend(node_ids, from, state)
 
       {{:error, _} = error, {_op_type, from}} ->
-        if from, do: GenServer.reply(from, error)
-        {:noreply, dispatch_write(%{state | write_active: nil})}
+        reply_and_dispatch(from, error, state)
     end
+  end
+
+  defp apply_changeset_to_backend(merged_cs, from, state) do
+    {backend_mod, backend_state} = state.backend
+
+    with {:ok, new_bs} <- backend_mod.apply_changeset(merged_cs, backend_state),
+         {:ok, final_bs} <- maybe_update_metadata(backend_mod, merged_cs.metadata, new_bs) do
+      Notifier.safe_notify(state.notifier, state.repo_id, {:changeset_applied, merged_cs})
+      if from, do: GenServer.reply(from, :ok)
+      {:noreply, dispatch_write(%{state | backend: {backend_mod, final_bs}})}
+    else
+      {:error, _} = error -> reply_and_dispatch(from, error, state)
+    end
+  end
+
+  defp delete_nodes_from_backend(node_ids, from, state) do
+    {backend_mod, backend_state} = state.backend
+
+    case backend_mod.delete_nodes(node_ids, backend_state) do
+      {:ok, new_bs} ->
+        Notifier.safe_notify(state.notifier, state.repo_id, {:nodes_deleted, node_ids})
+        if from, do: GenServer.reply(from, :ok)
+        {:noreply, dispatch_write(%{state | backend: {backend_mod, new_bs}})}
+
+      {:error, _} = error ->
+        reply_and_dispatch(from, error, state)
+    end
+  end
+
+  defp reply_and_dispatch(from, error, state) do
+    if from, do: GenServer.reply(from, error)
+    {:noreply, dispatch_write(%{state | write_active: nil})}
   end
 
   defp handle_write_crash(ref, reason, state) do
@@ -428,14 +443,7 @@ defmodule Mnemosyne.MemoryStore do
         consolidation_opts = Keyword.merge(opts, backend: backend, config: config)
 
         Telemetry.span([:consolidator, :consolidate], %{repo_id: repo_id}, fn ->
-          case SemanticConsolidator.consolidate(consolidation_opts) do
-            {:ok, result, updated_backend} ->
-              {{:ok, result, updated_backend},
-               %{checked: result.checked, deleted: result.deleted}}
-
-            {:error, _} = error ->
-              {error, %{}}
-          end
+          run_maintenance(&SemanticConsolidator.consolidate/1, consolidation_opts)
         end)
       end)
 
@@ -452,18 +460,21 @@ defmodule Mnemosyne.MemoryStore do
         decay_opts = Keyword.merge(opts, backend: backend, config: config)
 
         Telemetry.span([:decay, :prune], %{repo_id: repo_id}, fn ->
-          case Decay.decay(decay_opts) do
-            {:ok, result, updated_backend} ->
-              {{:ok, result, updated_backend},
-               %{checked: result.checked, deleted: result.deleted}}
-
-            {:error, _} = error ->
-              {error, %{}}
-          end
+          run_maintenance(&Decay.decay/1, decay_opts)
         end)
       end)
 
     {task.ref, {:decay_nodes, from}}
+  end
+
+  defp run_maintenance(fun, opts) do
+    case fun.(opts) do
+      {:ok, result, updated_backend} ->
+        {{:ok, result, updated_backend}, %{checked: result.checked, deleted: result.deleted}}
+
+      {:error, _} = error ->
+        {error, %{}}
+    end
   end
 
   defp handle_maintenance_complete(ref, result, state) do
@@ -529,8 +540,8 @@ defmodule Mnemosyne.MemoryStore do
       {:ok, _} ->
         Notifier.safe_notify(state.notifier, state.repo_id, {:recall_executed, query, result})
 
-      _ ->
-        :ok
+      {:error, reason} ->
+        Logger.warning("Recall failed for query #{inspect(query)}: #{inspect(reason)}")
     end
 
     GenServer.reply(from, result)
