@@ -368,7 +368,7 @@ defmodule Mnemosyne.Session do
     Process.demonitor(ref, [:flush])
     traj_id = data.trajectory_tasks[ref]
 
-    apply_changeset_with_logging(data, cs, traj_id)
+    MemoryStore.apply_changeset(data.memory_store, cs)
 
     event =
       if Map.has_key?(data.flush_triggered, traj_id) do
@@ -465,7 +465,7 @@ defmodule Mnemosyne.Session do
     Process.demonitor(ref, [:flush])
 
     if auto_commit_enabled?(data) do
-      apply_changeset_with_logging(data, changeset, "close")
+      MemoryStore.apply_changeset(data.memory_store, changeset)
       emit_transition(data, :extracting, :idle)
       {:next_state, :idle, reset_session_data(data)}
     else
@@ -695,20 +695,6 @@ defmodule Mnemosyne.Session do
       {:stop, :normal, data}
     else
       {:keep_state, data}
-    end
-  end
-
-  defp apply_changeset_with_logging(data, changeset, context) do
-    case MemoryStore.apply_changeset(data.memory_store, changeset) do
-      :ok ->
-        :ok
-
-      other ->
-        Logger.warning(
-          "session #{data.id} changeset apply failed for #{context}: #{inspect(other)}"
-        )
-
-        other
     end
   end
 
