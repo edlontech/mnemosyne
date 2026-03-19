@@ -396,6 +396,58 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
              end)
     end
 
+    test "emits extracting->idle with node_ids on auto-commit", %{tmp_dir: tmp_dir} do
+      stub_extraction_success()
+      infra = start_infra(tmp_dir)
+
+      {:ok, auto_config} =
+        Zoi.parse(Config.t(), %{
+          llm: %{model: "test-model", opts: %{}},
+          embedding: %{model: "test-embed", opts: %{}},
+          session: %{
+            auto_commit: true,
+            flush_timeout_ms: :infinity,
+            session_timeout_ms: :infinity
+          }
+        })
+
+      session_opts = [
+        registry: infra.registry,
+        task_supervisor: infra.task_supervisor,
+        memory_store: infra.memory_store,
+        config: auto_config,
+        repo_id: infra.repo_id,
+        llm: Mnemosyne.MockLLM,
+        embedding: Mnemosyne.MockEmbedding,
+        notifier: TestNotifier
+      ]
+
+      pid =
+        start_supervised!({Session, session_opts},
+          id: :"session_auto_#{System.unique_integer([:positive])}"
+        )
+
+      session_id = Session.id(pid)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "saw something", "did something")
+      :ok = Session.close(pid)
+
+      Process.sleep(300)
+      assert Session.state(pid) == :idle
+
+      events = TestNotifier.events(infra.repo_id)
+
+      assert Enum.any?(events, fn
+               {:session_transition, ^session_id, :extracting, :idle, %{node_ids: node_ids}}
+               when is_list(node_ids) and node_ids != [] ->
+                 true
+
+               _ ->
+                 false
+             end)
+    end
+
     test "emits extracting->failed on extraction error", %{tmp_dir: tmp_dir} do
       stub_llm_for_episode()
       infra = start_infra(tmp_dir)

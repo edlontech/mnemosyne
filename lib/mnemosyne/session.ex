@@ -486,7 +486,8 @@ defmodule Mnemosyne.Session do
 
     if auto_commit_enabled?(data) do
       MemoryStore.apply_changeset(data.memory_store, changeset)
-      emit_transition(data, :extracting, :idle)
+      node_ids = Enum.map(changeset.additions, & &1.id)
+      emit_transition(data, :extracting, :idle, %{node_ids: node_ids})
       {:next_state, :idle, reset_session_data(data)}
     else
       emit_transition(data, :extracting, :ready)
@@ -499,8 +500,8 @@ defmodule Mnemosyne.Session do
 
     if auto_commit_enabled?(data) do
       MemoryStore.apply_changeset(data.memory_store, changeset)
-      emit_transition(data, :extracting, :idle)
-      {:next_state, :idle, reset_session_data(data)}
+      node_ids = Enum.map(changeset.additions, & &1.id)
+      emit_transition(data, :extracting, :idle, %{node_ids: node_ids})
     else
       emit_transition(data, :extracting, :ready)
       {:next_state, :ready, %{data | changeset: changeset, extraction_task: nil}}
