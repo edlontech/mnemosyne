@@ -10,7 +10,8 @@ defmodule Mnemosyne.Notifier do
 
   @type metadata :: %{
           optional(:session_id) => String.t() | nil,
-          optional(:trace) => struct() | nil
+          optional(:trace) => struct() | nil,
+          optional(:node_ids) => [String.t()]
         }
 
   @type event ::

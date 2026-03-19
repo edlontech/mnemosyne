@@ -369,7 +369,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
              end)
     end
 
-    test "emits ready->idle on commit", %{tmp_dir: tmp_dir} do
+    test "emits ready->idle on commit with node_ids", %{tmp_dir: tmp_dir} do
       stub_extraction_success()
       infra = start_infra(tmp_dir)
       pid = start_session(infra)
@@ -387,8 +387,12 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       events = TestNotifier.events(infra.repo_id)
 
       assert Enum.any?(events, fn
-               {:session_transition, ^session_id, :ready, :idle, %{}} -> true
-               _ -> false
+               {:session_transition, ^session_id, :ready, :idle, %{node_ids: node_ids}}
+               when is_list(node_ids) and node_ids != [] ->
+                 true
+
+               _ ->
+                 false
              end)
     end
 

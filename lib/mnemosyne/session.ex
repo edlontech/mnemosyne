@@ -555,7 +555,8 @@ defmodule Mnemosyne.Session do
   @doc false
   def ready({:call, from}, :commit, data) do
     MemoryStore.apply_changeset(data.memory_store, data.changeset)
-    emit_transition(data, :ready, :idle)
+    node_ids = Enum.map(data.changeset.additions, & &1.id)
+    emit_transition(data, :ready, :idle, %{node_ids: node_ids})
     {:next_state, :idle, %{data | episode: nil, changeset: nil}, [{:reply, from, :ok}]}
   end
 
@@ -840,7 +841,7 @@ defmodule Mnemosyne.Session do
     }
   end
 
-  defp emit_transition(data, from_state, to_state) do
+  defp emit_transition(data, from_state, to_state, extra_metadata \\ %{}) do
     Logger.debug("session #{data.id} transitioning #{from_state} -> #{to_state}")
 
     :telemetry.execute(
@@ -852,7 +853,7 @@ defmodule Mnemosyne.Session do
     Notifier.safe_notify(
       data.notifier,
       data.repo_id,
-      {:session_transition, data.id, from_state, to_state, %{}}
+      {:session_transition, data.id, from_state, to_state, extra_metadata}
     )
   end
 end
