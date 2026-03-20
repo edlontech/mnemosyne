@@ -18,6 +18,7 @@ defmodule Mnemosyne.MemoryStore do
 
   alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Graph
+  alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Notifier
   alias Mnemosyne.Pipeline.Decay
   alias Mnemosyne.Pipeline.IntentMerger
@@ -571,7 +572,7 @@ defmodule Mnemosyne.MemoryStore do
     metadata = %{session_id: session_id}
 
     case result do
-      {:ok, reasoned, trace} ->
+      {:ok, reasoned, candidates, trace} ->
         metadata = Map.put(metadata, :trace, trace)
 
         Notifier.safe_notify(
@@ -581,6 +582,9 @@ defmodule Mnemosyne.MemoryStore do
         )
 
         GenServer.reply(from, {:ok, reasoned})
+
+        backend = update_access_metadata(candidates, state.backend)
+        {:noreply, %{state | pending_recalls: pending, backend: backend}}
 
       {:error, reason} ->
         Logger.warning("Recall failed for query #{inspect(query)}: #{inspect(reason)}")
@@ -592,9 +596,8 @@ defmodule Mnemosyne.MemoryStore do
         )
 
         GenServer.reply(from, {:error, reason})
+        {:noreply, %{state | pending_recalls: pending}}
     end
-
-    {:noreply, %{state | pending_recalls: pending}}
   end
 
   defp handle_recall_crash(ref, reason, state) do
@@ -636,7 +639,7 @@ defmodule Mnemosyne.MemoryStore do
                query: query,
                config: config
              ) do
-        {:ok, reasoned, trace}
+        {:ok, reasoned, result.candidates, trace}
       end
     end)
   end
@@ -659,6 +662,40 @@ defmodule Mnemosyne.MemoryStore do
 
   defp maybe_update_metadata(backend_mod, metadata, bs),
     do: backend_mod.update_metadata(metadata, bs)
+
+  defp update_access_metadata(candidates, {backend_mod, backend_state}) do
+    node_ids =
+      candidates
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.map(fn {node, _score} -> Mnemosyne.Graph.Node.id(node) end)
+
+    case node_ids do
+      [] ->
+        {backend_mod, backend_state}
+
+      ids ->
+        with {:ok, current_meta, bs} <- backend_mod.get_metadata(ids, backend_state) do
+          updated_meta =
+            Map.new(current_meta, fn {id, meta} ->
+              {id, NodeMetadata.record_access(meta)}
+            end)
+
+          case backend_mod.update_metadata(updated_meta, bs) do
+            {:ok, bs} ->
+              {backend_mod, bs}
+
+            {:error, reason} ->
+              Logger.warning("Failed to update access metadata: #{inspect(reason)}")
+              {backend_mod, backend_state}
+          end
+        else
+          {:error, reason} ->
+            Logger.warning("Failed to fetch metadata for access update: #{inspect(reason)}")
+            {backend_mod, backend_state}
+        end
+    end
+  end
 
   defp emit_queue_telemetry(state, event) do
     :telemetry.execute(

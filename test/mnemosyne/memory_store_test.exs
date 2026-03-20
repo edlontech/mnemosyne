@@ -440,4 +440,48 @@ defmodule Mnemosyne.MemoryStoreTest do
       assert MapSet.member?(tag.links, "sem-2")
     end
   end
+
+  describe "recall updates access metadata" do
+    test "increments access_count for retrieved nodes", %{tmp_dir: tmp_dir} do
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+      end)
+
+      pid = start_store(tmp_dir)
+
+      node = make_semantic("s1", "Elixir is functional")
+      tag = %Tag{id: "t1", label: "elixir"}
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(node)
+        |> Changeset.add_node(tag)
+        |> Changeset.add_link("t1", "s1")
+        |> Changeset.put_metadata("s1", NodeMetadata.new())
+
+      :ok = MemoryStore.apply_changeset(pid, changeset)
+
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s1") != nil)
+
+      {:ok, %{}} = MemoryStore.get_metadata(pid, ["s1"])
+
+      assert {:ok, %ReasonedMemory{}} = MemoryStore.recall(pid, "what is elixir?")
+
+      assert_eventually(
+        match?(
+          {:ok, %{"s1" => %NodeMetadata{access_count: 1}}},
+          MemoryStore.get_metadata(pid, ["s1"])
+        )
+      )
+    end
+  end
 end
