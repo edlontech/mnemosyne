@@ -433,12 +433,15 @@ defmodule Mnemosyne.Session do
     MemoryStore.apply_changeset(data.memory_store, cs)
 
     metadata = %{trace: trace}
+    node_ids = Enum.map(cs.additions, & &1.id)
 
     event =
       if Map.has_key?(data.flush_triggered, traj_id) do
-        {:trajectory_flushed, data.id, traj_id, %{node_count: length(cs.additions)}, metadata}
+        {:trajectory_flushed, data.id, traj_id,
+         %{node_count: length(node_ids), node_ids: node_ids}, metadata}
       else
-        {:trajectory_committed, data.id, traj_id, %{node_count: length(cs.additions)}, metadata}
+        {:trajectory_committed, data.id, traj_id,
+         %{node_count: length(node_ids), node_ids: node_ids}, metadata}
       end
 
     Notifier.safe_notify(data.notifier, data.repo_id, event)

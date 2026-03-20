@@ -397,6 +397,112 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
              end)
     end
 
+    test "trajectory_committed event includes node_ids on boundary detection", %{
+      tmp_dir: tmp_dir
+    } do
+      call_count = :counters.new(1, [:atomics])
+
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
+
+        content =
+          cond do
+            String.contains?(system_content, "factual knowledge") ->
+              %{facts: [%{proposition: "some fact", concepts: ["concept1"]}]}
+
+            String.contains?(system_content, "actionable instructions") ->
+              %{
+                instructions: [
+                  %{
+                    intent: "goal",
+                    condition: "cond",
+                    instruction: "act",
+                    expected_outcome: "out"
+                  }
+                ]
+              }
+
+            true ->
+              %{}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
+        :counters.add(call_count, 1, 1)
+        count = :counters.get(call_count, 1)
+
+        vec =
+          if count == 1 do
+            List.duplicate(0.9, 128)
+          else
+            List.duplicate(-0.9, 128)
+          end
+
+        {:ok, %Embedding.Response{vectors: [vec], model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+      end)
+
+      {:ok, auto_config} =
+        Zoi.parse(Config.t(), %{
+          llm: %{model: "test-model", opts: %{}},
+          embedding: %{model: "test-embed", opts: %{}},
+          session: %{
+            auto_commit: true,
+            flush_timeout_ms: :infinity,
+            session_timeout_ms: :infinity
+          }
+        })
+
+      infra = start_infra(tmp_dir)
+
+      session_opts = [
+        registry: infra.registry,
+        task_supervisor: infra.task_supervisor,
+        memory_store: infra.memory_store,
+        config: auto_config,
+        repo_id: infra.repo_id,
+        llm: Mnemosyne.MockLLM,
+        embedding: Mnemosyne.MockEmbedding,
+        notifier: TestNotifier
+      ]
+
+      pid =
+        start_supervised!({Session, session_opts},
+          id: :"session_boundary_#{System.unique_integer([:positive])}"
+        )
+
+      session_id = Session.id(pid)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+      :ok = Session.append(pid, "obs2", "act2")
+
+      assert_eventually(
+        Enum.any?(TestNotifier.events(infra.repo_id), fn
+          {:trajectory_committed, ^session_id, _traj_id, %{node_count: count, node_ids: node_ids},
+           %{trace: _}}
+          when is_list(node_ids) and count == length(node_ids) and node_ids != [] ->
+            Enum.all?(node_ids, &is_binary/1)
+
+          _ ->
+            false
+        end)
+      )
+    end
+
     test "emits extracting->idle with node_ids on auto-commit", %{tmp_dir: tmp_dir} do
       stub_extraction_success()
       infra = start_infra(tmp_dir)
