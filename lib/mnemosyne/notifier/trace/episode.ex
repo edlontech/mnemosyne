@@ -17,6 +17,5 @@ defmodule Mnemosyne.Notifier.Trace.Episode do
     field :subgoal, String.t(), default: nil
     field :similarity_score, float(), default: nil
     field :similarity_threshold, float(), default: nil
-    field :state_summary, String.t(), default: nil
   end
 end

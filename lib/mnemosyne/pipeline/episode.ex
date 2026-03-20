@@ -16,7 +16,6 @@ defmodule Mnemosyne.Pipeline.Episode do
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.Notifier.Trace.Episode, as: EpisodeTrace
   alias Mnemosyne.Pipeline.Prompts.GetReward
-  alias Mnemosyne.Pipeline.Prompts.GetState
   alias Mnemosyne.Pipeline.Prompts.GetSubgoal
   alias Mnemosyne.Telemetry
 
@@ -38,7 +37,7 @@ defmodule Mnemosyne.Pipeline.Episode do
           observation: String.t(),
           action: String.t(),
           subgoal: String.t(),
-          state: String.t(),
+          state: String.t() | nil,
           reward: float(),
           embedding: [float()] | nil,
           trajectory_id: String.t()
@@ -87,14 +86,13 @@ defmodule Mnemosyne.Pipeline.Episode do
                infer_subgoal(llm, observation, action, episode.goal, config, llm_opts),
              {:ok, %Embedding.Response{vectors: [subgoal_embedding | _]}} <-
                embedding.embed(subgoal, Config.embedding_opts(config)),
-             {:ok, reward} <- evaluate_reward(llm, observation, action, subgoal, config, llm_opts),
-             {:ok, state} <- summarize_state(llm, episode, config, llm_opts) do
+             {:ok, reward} <- evaluate_reward(llm, observation, action, subgoal, config, llm_opts) do
           step = %{
             index: length(episode.steps),
             observation: observation,
             action: action,
             subgoal: subgoal,
-            state: state,
+            state: nil,
             reward: reward,
             embedding: subgoal_embedding,
             trajectory_id: episode.current_trajectory_id
@@ -123,9 +121,7 @@ defmodule Mnemosyne.Pipeline.Episode do
             duration_us: duration_us,
             subgoal: if(verbosity == :detailed, do: subgoal),
             similarity_score: if(verbosity == :detailed, do: similarity),
-            similarity_threshold:
-              if(verbosity == :detailed, do: @trajectory_similarity_threshold),
-            state_summary: if(verbosity == :detailed, do: state)
+            similarity_threshold: if(verbosity == :detailed, do: @trajectory_similarity_threshold)
           }
 
           {{:ok, updated, trace},
@@ -163,15 +159,6 @@ defmodule Mnemosyne.Pipeline.Episode do
     with {:ok, %{content: content}} <-
            llm.chat(messages, Config.llm_opts(config, :get_reward, llm_opts)) do
       GetReward.parse_response(content)
-    end
-  end
-
-  defp summarize_state(llm, episode, config, llm_opts) do
-    messages = GetState.build_messages(%{trajectory: episode.steps, goal: episode.goal})
-
-    with {:ok, %{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :get_state, llm_opts)) do
-      GetState.parse_response(content)
     end
   end
 

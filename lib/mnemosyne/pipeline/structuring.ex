@@ -26,6 +26,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
   alias Mnemosyne.Pipeline.Prompts.GetProcedural, as: ProceduralPrompt
   alias Mnemosyne.Pipeline.Prompts.GetReturn
   alias Mnemosyne.Pipeline.Prompts.GetSemantic, as: SemanticPrompt
+  alias Mnemosyne.Pipeline.Prompts.GetState
 
   @doc "Extracts knowledge nodes from a closed episode into a changeset."
   @spec extract(Episode.t(), keyword()) ::
@@ -106,6 +107,31 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
   defp do_extract_trajectory(trajectory, goal, episode_id, llm, embedding, llm_opts, config) do
     start_time = System.monotonic_time(:microsecond)
+
+    with {:ok, trajectory} <- derive_progressive_states(trajectory, llm, llm_opts, config) do
+      do_extract_trajectory_inner(
+        trajectory,
+        goal,
+        episode_id,
+        llm,
+        embedding,
+        llm_opts,
+        config,
+        start_time
+      )
+    end
+  end
+
+  defp do_extract_trajectory_inner(
+         trajectory,
+         goal,
+         episode_id,
+         llm,
+         embedding,
+         llm_opts,
+         config,
+         start_time
+       ) do
     avg_reward = trajectory_avg_reward(trajectory)
     episodic_ids = Enum.map(trajectory.steps, fn _step -> generate_id("ep_node") end)
 
@@ -171,6 +197,40 @@ defmodule Mnemosyne.Pipeline.Structuring do
       }
 
       {:ok, cs, trace}
+    end
+  end
+
+  defp derive_progressive_states(trajectory, llm, llm_opts, config) do
+    trajectory.steps
+    |> Enum.reduce_while({:ok, []}, fn step, {:ok, acc} ->
+      previous_state =
+        case acc do
+          [] -> nil
+          [prev | _] -> prev.state
+        end
+
+      messages =
+        GetState.build_messages(%{
+          previous_state: previous_state,
+          action: step.action,
+          observation: step.observation,
+          goal: trajectory.subgoal
+        })
+
+      with {:ok, %{content: content}} <-
+             llm.chat(messages, Config.llm_opts(config, :get_state, llm_opts)),
+           {:ok, state} <- GetState.parse_response(content) do
+        {:cont, {:ok, [%{step | state: state} | acc]}}
+      else
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, reversed_steps} ->
+        {:ok, %{trajectory | steps: Enum.reverse(reversed_steps)}}
+
+      {:error, _} = err ->
+        err
     end
   end
 

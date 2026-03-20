@@ -1,7 +1,9 @@
 defmodule Mnemosyne.Pipeline.Prompts.GetState do
   @moduledoc """
-  Prompt for summarizing the current environment state
-  from a trajectory of observation-action pairs.
+  Prompt for deriving progressive environment state from a single step.
+
+  Implements `s_t = f(s_{t-1}, a_{t-1}, o_t)` — each step's state is derived
+  from the previous state, the action taken, and the new observation.
   """
 
   @behaviour Mnemosyne.Prompt
@@ -9,21 +11,13 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
   alias Mnemosyne.Errors.Invalid.PromptError
 
   @impl true
-  def build_messages(%{trajectory: trajectory, goal: goal}) do
-    formatted_steps =
-      trajectory
-      |> Enum.with_index(1)
-      |> Enum.map_join("\n", fn {step, i} ->
-        "Step #{i}: Observed: #{step.observation} | Action: #{step.action}"
-      end)
-
+  def build_messages(%{previous_state: nil, action: action, observation: observation, goal: goal}) do
     [
       %{
         role: :system,
         content: """
-        You are an expert at summarizing environment state from agent trajectories.
-        Given a sequence of observation-action pairs and the agent's goal,
-        provide a concise summary of the current environment state.
+        You are an expert at deriving environment state from agent interactions.
+        Given an initial observation and the agent's first action, derive the current environment state.
 
         Respond with ONLY the state summary as a brief paragraph. No explanation.\
         """
@@ -33,10 +27,41 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
         content: """
         Goal: #{goal}
 
-        Trajectory:
-        #{formatted_steps}
+        Observation: #{observation}
+        Action: #{action}
 
-        Current environment state summary:\
+        Current environment state:\
+        """
+      }
+    ]
+  end
+
+  def build_messages(%{
+        previous_state: prev,
+        action: action,
+        observation: observation,
+        goal: goal
+      }) do
+    [
+      %{
+        role: :system,
+        content: """
+        You are an expert at deriving environment state from agent interactions.
+        Given the previous environment state, the action taken, and the new observation, derive the updated environment state.
+
+        Respond with ONLY the state summary as a brief paragraph. No explanation.\
+        """
+      },
+      %{
+        role: :user,
+        content: """
+        Goal: #{goal}
+
+        Previous state: #{prev}
+        Action: #{action}
+        Observation: #{observation}
+
+        Updated environment state:\
         """
       }
     ]

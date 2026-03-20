@@ -74,7 +74,6 @@ defmodule Mnemosyne.Notifier.TraceTest do
       assert trace.subgoal == nil
       assert trace.similarity_score == nil
       assert trace.similarity_threshold == nil
-      assert trace.state_summary == nil
     end
 
     test "detailed verbosity can populate all fields" do
@@ -87,8 +86,7 @@ defmodule Mnemosyne.Notifier.TraceTest do
         duration_us: 2000,
         subgoal: "find relevant docs",
         similarity_score: 0.72,
-        similarity_threshold: 0.75,
-        state_summary: "agent searched documentation"
+        similarity_threshold: 0.75
       }
 
       assert trace.verbosity == :detailed
@@ -96,7 +94,6 @@ defmodule Mnemosyne.Notifier.TraceTest do
       assert trace.trajectory_id == "traj-abc"
       assert trace.boundary_detected == true
       assert trace.similarity_score == 0.72
-      assert trace.state_summary == "agent searched documentation"
     end
   end
 

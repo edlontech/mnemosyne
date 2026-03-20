@@ -72,18 +72,36 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   end
 
   describe "GetState" do
-    test "build_messages formats trajectory steps" do
-      trajectory = [
-        %{observation: "Saw door", action: "Opened door"},
-        %{observation: "Entered room", action: "Looked around"}
-      ]
+    test "build_messages for first step with nil previous_state" do
+      messages =
+        GetState.build_messages(%{
+          previous_state: nil,
+          action: "Opened door",
+          observation: "Saw door",
+          goal: "Find the key"
+        })
 
-      messages = GetState.build_messages(%{trajectory: trajectory, goal: "Find the key"})
-
-      assert [%{role: :system}, %{role: :user, content: user}] = messages
-      assert user =~ "Step 1:"
-      assert user =~ "Step 2:"
+      assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
+      assert system =~ "initial observation"
       assert user =~ "Saw door"
+      assert user =~ "Opened door"
+      assert user =~ "Find the key"
+    end
+
+    test "build_messages for subsequent step with previous state" do
+      messages =
+        GetState.build_messages(%{
+          previous_state: "Agent is in a hallway",
+          action: "Looked around",
+          observation: "Entered room",
+          goal: "Find the key"
+        })
+
+      assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
+      assert system =~ "previous environment state"
+      assert user =~ "Agent is in a hallway"
+      assert user =~ "Looked around"
+      assert user =~ "Entered room"
       assert user =~ "Find the key"
     end
 

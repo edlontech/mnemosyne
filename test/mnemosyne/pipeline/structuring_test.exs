@@ -37,7 +37,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
   end
 
   defp stub_append_cycle(subgoal \\ "Optimize queries", reward \\ "0.8") do
-    stub_llm_responses([subgoal, reward, "Current state"])
+    stub_llm_responses([subgoal, reward])
     stub_default_embedding()
   end
 
@@ -70,6 +70,21 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
   defp stub_extraction_llm do
     Mnemosyne.MockLLM
+    |> stub(:chat, fn messages, _opts ->
+      system_content =
+        messages
+        |> Enum.find(%{content: ""}, &(&1.role == :system))
+        |> Map.get(:content)
+
+      content =
+        if system_content =~ "environment state" do
+          "Derived state"
+        else
+          "default"
+        end
+
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    end)
     |> stub(:chat_structured, fn messages, _schema, _opts ->
       system_content =
         messages
@@ -285,6 +300,20 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         Enum.each(intent_links, fn {_from, to} ->
           assert MapSet.member?(procedural_ids, to)
         end)
+      end)
+    end
+
+    test "derives progressive states before extraction" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      episodic_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Episodic{}, &1))
+
+      Enum.each(episodic_nodes, fn node ->
+        assert node.state != nil
+        assert is_binary(node.state)
       end)
     end
 

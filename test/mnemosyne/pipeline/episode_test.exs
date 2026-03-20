@@ -43,7 +43,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
   end
 
   defp stub_append_cycle(subgoal \\ "Navigate to config", reward \\ "0.8") do
-    stub_llm_responses([subgoal, reward, "Agent state summary"])
+    stub_llm_responses([subgoal, reward])
     stub_embedding()
   end
 
