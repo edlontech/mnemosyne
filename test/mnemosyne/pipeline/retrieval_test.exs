@@ -819,4 +819,150 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       end)
     end
   end
+
+  describe "query refinement" do
+    @orthogonal_vector List.duplicate(-0.1, 128)
+
+    defp build_low_similarity_graph do
+      Graph.new()
+      |> Graph.put_node(%Semantic{
+        id: "sem_weak",
+        proposition: "Barely related fact",
+        confidence: 0.5,
+        embedding: @orthogonal_vector
+      })
+      |> Graph.put_node(%Semantic{
+        id: "sem_refined",
+        proposition: "Actually relevant fact",
+        confidence: 0.9,
+        embedding: @alt_vector
+      })
+      |> Graph.put_node(%Tag{
+        id: "tag_weak",
+        label: "weak concept",
+        embedding: @orthogonal_vector
+      })
+      |> Graph.link("tag_weak", "sem_weak")
+    end
+
+    defp refinement_config(threshold) do
+      %Config{
+        llm: %{model: "test:model", opts: %{}},
+        embedding: %{model: "test:embed", opts: %{}},
+        value_function: %{module: Mnemosyne.ValueFunction.Default, params: %{}},
+        refinement_threshold: threshold
+      }
+    end
+
+    test "triggers refinement when best relevance is below threshold" do
+      graph = build_low_similarity_graph()
+      config = refinement_config(0.99)
+
+      stub_retrieval_llm("semantic", "weak concept")
+
+      Mnemosyne.MockEmbedding
+      |> stub(:embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+      end)
+      |> stub(:embed_batch, fn _texts, _opts ->
+        {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+      end)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok, %LLM.Response{content: %{tags: ["refined tag"]}, model: "mock:test", usage: %{}}}
+      end)
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve(
+          "Find something specific",
+          retrieval_opts(graph, config: config, max_hops: 1)
+        )
+
+      assert result.mode == :semantic
+    end
+
+    test "skips refinement when best relevance is above threshold" do
+      graph = build_test_graph()
+      config = refinement_config(0.1)
+
+      stub_retrieval_llm("semantic", "BEAM VM")
+
+      Mnemosyne.MockEmbedding
+      |> stub(:embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+      end)
+      |> stub(:embed_batch, fn _texts, _opts ->
+        {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+      end)
+
+      Mnemosyne.MockLLM
+      |> reject(:chat_structured, 3)
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve(
+          "Tell me about Elixir",
+          retrieval_opts(graph, config: config, max_hops: 1)
+        )
+
+      assert result.mode == :semantic
+    end
+
+    test "handles empty refined tags gracefully" do
+      graph = build_low_similarity_graph()
+      config = refinement_config(0.99)
+
+      stub_retrieval_llm("semantic", "weak concept")
+
+      Mnemosyne.MockEmbedding
+      |> stub(:embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+      end)
+      |> stub(:embed_batch, fn _texts, _opts ->
+        {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+      end)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok, %LLM.Response{content: %{tags: []}, model: "mock:test", usage: %{}}}
+      end)
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve(
+          "Find something",
+          retrieval_opts(graph, config: config, max_hops: 1)
+        )
+
+      assert result.mode == :semantic
+      assert is_map(result.candidates)
+    end
+
+    test "handles refinement LLM error gracefully" do
+      graph = build_low_similarity_graph()
+      config = refinement_config(0.99)
+
+      stub_retrieval_llm("semantic", "weak concept")
+
+      Mnemosyne.MockEmbedding
+      |> stub(:embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+      end)
+      |> stub(:embed_batch, fn _texts, _opts ->
+        {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+      end)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:error, :llm_unavailable}
+      end)
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve(
+          "Find something",
+          retrieval_opts(graph, config: config, max_hops: 1)
+        )
+
+      assert result.mode == :semantic
+    end
+  end
 end

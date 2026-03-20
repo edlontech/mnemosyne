@@ -16,6 +16,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   alias Mnemosyne.Notifier.Trace.Recall, as: RecallTrace
   alias Mnemosyne.Pipeline.Prompts.GetMode
   alias Mnemosyne.Pipeline.Prompts.GetPlan
+  alias Mnemosyne.Pipeline.Prompts.GetRefinedQuery
 
   use TypedStruct
 
@@ -73,9 +74,26 @@ defmodule Mnemosyne.Pipeline.Retrieval do
 
           target_types = types_for_mode(mode)
 
+          candidates = hop_0(backend, query_vector, tag_vectors, target_types, value_fns)
+
+          best_relevance = best_candidate_relevance(candidates, query_vector)
+          refinement_threshold = refinement_threshold(config)
+
+          refined_vectors =
+            maybe_refine_query(
+              query,
+              candidates,
+              best_relevance,
+              refinement_threshold,
+              llm,
+              embedding,
+              llm_opts,
+              config
+            )
+
           candidates =
-            hop_0(backend, query_vector, tag_vectors, target_types, value_fns)
-            |> multi_hop(backend, query_vector, value_fns, max_hops, mode)
+            candidates
+            |> multi_hop(backend, query_vector, value_fns, max_hops, mode, refined_vectors)
             |> maybe_expand_provenance(backend, mode)
             |> partition_by_type()
 
@@ -140,12 +158,158 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     candidates
   end
 
-  defp multi_hop(candidates, _backend, _query_vector, _value_fns, 0, _mode), do: candidates
+  defp best_candidate_relevance([], _query_vector), do: 0.0
 
-  defp multi_hop(candidates, backend, query_vector, value_fns, hops_remaining, mode) do
+  defp best_candidate_relevance(candidates, query_vector) do
+    candidates
+    |> Enum.map(fn {node, _score} ->
+      case NodeProtocol.embedding(node) do
+        nil -> 0.0
+        emb -> Similarity.cosine_similarity(query_vector, emb)
+      end
+    end)
+    |> Enum.max(fn -> 0.0 end)
+  end
+
+  defp refinement_threshold(nil), do: 0.6
+  defp refinement_threshold(config), do: config.refinement_threshold
+
+  defp inject_refined_candidates(
+         new_nodes,
+         nil,
+         _backend,
+         _query_vector,
+         _value_fns,
+         _mode,
+         _seen_ids
+       ),
+       do: new_nodes
+
+  defp inject_refined_candidates(
+         new_nodes,
+         refined_vectors,
+         backend,
+         query_vector,
+         value_fns,
+         mode,
+         seen_ids
+       ) do
+    {mod, bs} = backend
+    target_types = types_for_mode(mode)
+
+    case mod.find_candidates(target_types, query_vector, refined_vectors, value_fns, [], bs) do
+      {:ok, refined_candidates, _bs} ->
+        refined_new =
+          Enum.reject(refined_candidates, fn {node, _} ->
+            MapSet.member?(seen_ids, NodeProtocol.id(node))
+          end)
+
+        new_nodes ++ Enum.map(refined_new, fn {node, _} -> node end)
+
+      _ ->
+        new_nodes
+    end
+  end
+
+  defp maybe_refine_query(
+         _query,
+         _candidates,
+         best_relevance,
+         threshold,
+         _llm,
+         _embedding,
+         _llm_opts,
+         _config
+       )
+       when best_relevance >= threshold,
+       do: nil
+
+  defp maybe_refine_query(
+         query,
+         candidates,
+         _best_relevance,
+         _threshold,
+         llm,
+         embedding,
+         llm_opts,
+         config
+       ) do
+    summaries = summarize_candidates(candidates)
+    mode = infer_mode_from_candidates(candidates)
+
+    messages =
+      GetRefinedQuery.build_messages(%{
+        original_query: query,
+        mode: mode,
+        retrieved_so_far: summaries
+      })
+
+    with {:ok, %{content: content}} <-
+           llm.chat_structured(
+             messages,
+             GetRefinedQuery.schema(),
+             Config.llm_opts(config, :get_refined_query, llm_opts)
+           ),
+         {:ok, [_ | _] = tags} <- GetRefinedQuery.parse_response(content),
+         {:ok, %Embedding.Response{vectors: vectors}} <-
+           embedding.embed_batch(tags, Config.embedding_opts(config)) do
+      vectors
+    else
+      _ -> nil
+    end
+  end
+
+  defp summarize_candidates(candidates) do
+    Enum.map(candidates, fn {node, _score} ->
+      type = NodeProtocol.node_type(node)
+      content = node_content_summary(node)
+      %{type: type, content: content}
+    end)
+  end
+
+  defp node_content_summary(%{proposition: p}), do: p
+  defp node_content_summary(%{instruction: i}), do: i
+  defp node_content_summary(%{observation: o, action: a}), do: "#{o} -> #{a}"
+  defp node_content_summary(%{description: d}), do: d
+  defp node_content_summary(_), do: ""
+
+  defp infer_mode_from_candidates(candidates) do
+    types = Enum.map(candidates, fn {node, _} -> NodeProtocol.node_type(node) end) |> Enum.uniq()
+
+    cond do
+      :semantic in types and :procedural in types -> :mixed
+      :procedural in types -> :procedural
+      :episodic in types -> :episodic
+      true -> :semantic
+    end
+  end
+
+  defp multi_hop(candidates, _backend, _query_vector, _value_fns, 0, _mode, _refined_vectors),
+    do: candidates
+
+  defp multi_hop(
+         candidates,
+         backend,
+         query_vector,
+         value_fns,
+         hops_remaining,
+         mode,
+         refined_vectors
+       ) do
     seen_ids = MapSet.new(candidates, fn {node, _} -> NodeProtocol.id(node) end)
     routing_types = routing_types_for_mode(mode)
     new_nodes = expand_through_routing_nodes(candidates, backend, seen_ids, routing_types)
+
+    new_nodes =
+      inject_refined_candidates(
+        new_nodes,
+        refined_vectors,
+        backend,
+        query_vector,
+        value_fns,
+        mode,
+        seen_ids
+      )
 
     vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
 
@@ -165,7 +329,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       |> Enum.sort_by(&elem(&1, 1), :desc)
       |> Enum.take(@max_candidates_per_hop)
 
-    multi_hop(merged, backend, query_vector, value_fns, hops_remaining - 1, mode)
+    multi_hop(merged, backend, query_vector, value_fns, hops_remaining - 1, mode, nil)
   end
 
   @doc false

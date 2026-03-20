@@ -150,6 +150,11 @@ defmodule Mnemosyne.Config do
                        description:
                          "Cosine similarity threshold above which incoming intents are silently deduplicated"
                      ),
+                   refinement_threshold:
+                     Zoi.default(Zoi.float(), 0.6,
+                       description:
+                         "Cosine similarity threshold below which retrieval triggers per-hop query refinement"
+                     ),
                    session: @session_schema,
                    trace_verbosity:
                      Zoi.default(
@@ -175,6 +180,11 @@ defmodule Mnemosyne.Config do
       Zoi.default(Zoi.float(), 0.95,
         description:
           "Cosine similarity threshold above which incoming intents are silently deduplicated"
+      ),
+    refinement_threshold:
+      Zoi.default(Zoi.float(), 0.6,
+        description:
+          "Cosine similarity threshold below which retrieval triggers per-hop query refinement"
       ),
     session: @session_schema,
     trace_verbosity:

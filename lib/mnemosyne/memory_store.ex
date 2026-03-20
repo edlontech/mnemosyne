@@ -670,30 +670,24 @@ defmodule Mnemosyne.MemoryStore do
       |> List.flatten()
       |> Enum.map(fn {node, _score} -> Mnemosyne.Graph.Node.id(node) end)
 
-    case node_ids do
-      [] ->
+    do_update_access_metadata(node_ids, backend_mod, backend_state)
+  end
+
+  defp do_update_access_metadata([], backend_mod, backend_state),
+    do: {backend_mod, backend_state}
+
+  defp do_update_access_metadata(ids, backend_mod, backend_state) do
+    with {:ok, current_meta, bs} <- backend_mod.get_metadata(ids, backend_state),
+         updated_meta =
+           Map.new(current_meta, fn {id, meta} ->
+             {id, NodeMetadata.record_access(meta)}
+           end),
+         {:ok, bs} <- backend_mod.update_metadata(updated_meta, bs) do
+      {backend_mod, bs}
+    else
+      {:error, reason} ->
+        Logger.warning("Failed to update access metadata: #{inspect(reason)}")
         {backend_mod, backend_state}
-
-      ids ->
-        with {:ok, current_meta, bs} <- backend_mod.get_metadata(ids, backend_state) do
-          updated_meta =
-            Map.new(current_meta, fn {id, meta} ->
-              {id, NodeMetadata.record_access(meta)}
-            end)
-
-          case backend_mod.update_metadata(updated_meta, bs) do
-            {:ok, bs} ->
-              {backend_mod, bs}
-
-            {:error, reason} ->
-              Logger.warning("Failed to update access metadata: #{inspect(reason)}")
-              {backend_mod, backend_state}
-          end
-        else
-          {:error, reason} ->
-            Logger.warning("Failed to fetch metadata for access update: #{inspect(reason)}")
-            {backend_mod, backend_state}
-        end
     end
   end
 
