@@ -107,6 +107,9 @@ defmodule Mnemosyne.SessionTelemetryTest do
               ]
             }
 
+          String.contains?(system_content, "prescription quality") ->
+            %{scores: [%{index: 0, return_score: 0.85}]}
+
           true ->
             %{}
         end

@@ -10,6 +10,7 @@ defmodule Mnemosyne.Graph.Node.Procedural do
     field :instruction, String.t()
     field :condition, String.t()
     field :expected_outcome, String.t()
+    field :return_score, float() | nil, enforce: false, default: nil
     field :embedding, [float()] | nil, enforce: false, default: nil
     field :links, MapSet.t(), enforce: false, default: MapSet.new()
     field :created_at, DateTime.t(), enforce: false, default: DateTime.utc_now()

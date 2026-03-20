@@ -224,39 +224,56 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   end
 
   describe "GetReturn" do
-    test "build_messages includes trajectory stats" do
+    test "build_messages includes trajectory and prescriptions" do
       trajectory = [
         %{action: "Step A", reward: 0.8},
         %{action: "Step B", reward: 0.6}
       ]
 
-      messages = GetReturn.build_messages(%{trajectory: trajectory, goal: "Complete task"})
+      prescriptions = [
+        %{index: 0, instruction: "Do X", condition: "When Y", expected_outcome: "Z happens"}
+      ]
 
-      assert [%{role: :system}, %{role: :user, content: user}] = messages
+      messages =
+        GetReturn.build_messages(%{
+          trajectory: trajectory,
+          goal: "Complete task",
+          prescriptions: prescriptions
+        })
+
+      assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
+      assert system =~ "prescription quality"
       assert user =~ "2 steps"
-      assert user =~ "avg reward: 0.7"
       assert user =~ "Complete task"
+      assert user =~ "[0] Instruction: Do X"
+      assert user =~ "Condition: When Y"
     end
 
-    test "build_messages handles empty trajectory" do
-      messages = GetReturn.build_messages(%{trajectory: [], goal: "Goal"})
-      assert [_, %{role: :user, content: user}] = messages
-      assert user =~ "0 steps"
-      assert user =~ "avg reward: 0.0"
+    test "schema returns a Zoi schema" do
+      schema = GetReturn.schema()
+      assert is_function(schema) or is_map(schema) or is_tuple(schema)
     end
 
-    test "parse_response extracts valid float" do
-      assert {:ok, 0.72} = GetReturn.parse_response("0.72")
+    test "parse_response extracts scored prescriptions" do
+      response = %{scores: [%{index: 0, return_score: 0.72}, %{index: 1, return_score: 0.9}]}
+      assert {:ok, scores} = GetReturn.parse_response(response)
+      assert [%{index: 0, return_score: 0.72}, %{index: 1, return_score: 0.9}] = scores
     end
 
     test "parse_response clamps out-of-range values" do
-      assert {:ok, 1.0} = GetReturn.parse_response("2.5")
-      assert {:ok, +0.0} = GetReturn.parse_response("-1.0")
+      response = %{scores: [%{index: 0, return_score: 2.5}, %{index: 1, return_score: -1.0}]}
+      assert {:ok, scores} = GetReturn.parse_response(response)
+      assert [%{return_score: 1.0}, %{return_score: +0.0}] = scores
     end
 
-    test "parse_response rejects non-numeric" do
-      assert {:error, %PromptError{reason: :invalid_float}} =
-               GetReturn.parse_response("excellent")
+    test "parse_response rejects empty scores" do
+      assert {:error, %PromptError{reason: :no_scores_extracted}} =
+               GetReturn.parse_response(%{scores: []})
+    end
+
+    test "parse_response rejects non-matching input" do
+      assert {:error, %PromptError{reason: :no_scores_extracted}} =
+               GetReturn.parse_response(%{})
     end
   end
 end

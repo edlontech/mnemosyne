@@ -70,18 +70,6 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
   defp stub_extraction_llm do
     Mnemosyne.MockLLM
-    |> stub(:chat, fn messages, _opts ->
-      system_content =
-        messages
-        |> Enum.find(%{content: ""}, &(&1.role == :system))
-        |> Map.get(:content)
-
-      content = if system_content =~ "return value", do: "0.85", else: "default"
-
-      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
-    end)
-
-    Mnemosyne.MockLLM
     |> stub(:chat_structured, fn messages, _schema, _opts ->
       system_content =
         messages
@@ -115,6 +103,9 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
                 }
               ]
             }
+
+          system_content =~ "prescription quality" ->
+            %{scores: [%{index: 0, return_score: 0.85}]}
 
           true ->
             %{}
@@ -189,12 +180,6 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       episode = build_closed_episode()
 
       Mnemosyne.MockLLM
-      |> stub(:chat, fn _messages, opts ->
-        assert Keyword.get(opts, :model) == "test:model"
-        {:ok, %LLM.Response{content: "0.85", model: "mock:test", usage: %{}}}
-      end)
-
-      Mnemosyne.MockLLM
       |> stub(:chat_structured, fn messages, _schema, opts ->
         assert Keyword.get(opts, :model) == "test:model"
 
@@ -230,6 +215,9 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
                   }
                 ]
               }
+
+            system_content =~ "prescription quality" ->
+              %{scores: [%{index: 0, return_score: 0.85}]}
 
             true ->
               %{}
@@ -376,11 +364,6 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       episode = build_closed_episode()
 
       Mnemosyne.MockLLM
-      |> stub(:chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "0.85", model: "mock:test", usage: %{}}}
-      end)
-
-      Mnemosyne.MockLLM
       |> stub(:chat_structured, fn messages, _schema, _opts ->
         system_content =
           messages
@@ -409,6 +392,9 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
                   }
                 ]
               }
+
+            system_content =~ "prescription quality" ->
+              %{scores: [%{index: 0, return_score: 0.75}]}
 
             true ->
               %{}
@@ -439,11 +425,6 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       episode = build_closed_episode()
 
       Mnemosyne.MockLLM
-      |> stub(:chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "0.85", model: "mock:test", usage: %{}}}
-      end)
-
-      Mnemosyne.MockLLM
       |> stub(:chat_structured, fn messages, _schema, _opts ->
         system_content =
           messages
@@ -466,6 +447,9 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
                   }
                 ]
               }
+
+            system_content =~ "prescription quality" ->
+              %{scores: [%{index: 0, return_score: 0.75}]}
 
             true ->
               %{}
@@ -591,6 +575,39 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       Enum.each(tag_ids ++ intent_ids, fn id ->
         meta = cs.metadata[id]
         assert %NodeMetadata{reward_count: 0} = meta
+      end)
+    end
+
+    test "stamps return scores on procedural nodes" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      procedural_nodes =
+        Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Procedural{}, &1))
+
+      assert [_ | _] = procedural_nodes
+
+      Enum.each(procedural_nodes, fn node ->
+        assert node.return_score != nil
+        assert node.return_score >= 0.0 and node.return_score <= 1.0
+      end)
+    end
+
+    test "uses per-prescription return scores in metadata" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      procedural_nodes =
+        Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Procedural{}, &1))
+
+      Enum.each(procedural_nodes, fn node ->
+        meta = cs.metadata[node.id]
+        assert %NodeMetadata{cumulative_reward: reward, reward_count: 1} = meta
+        assert reward == node.return_score
       end)
     end
   end

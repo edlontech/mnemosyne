@@ -47,15 +47,8 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
 
   defp stub_extraction_llm do
     Mnemosyne.MockLLM
-    |> stub(:chat, fn messages, _opts ->
-      system_content =
-        messages
-        |> Enum.find(%{content: ""}, &(&1.role == :system))
-        |> Map.get(:content)
-
-      content = if system_content =~ "return value", do: "0.85", else: "0.8"
-
-      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    |> stub(:chat, fn _messages, _opts ->
+      {:ok, %LLM.Response{content: "0.8", model: "mock:test", usage: %{}}}
     end)
 
     Mnemosyne.MockLLM
@@ -86,6 +79,9 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
                 }
               ]
             }
+
+          system_content =~ "prescription quality" ->
+            %{scores: [%{index: 0, return_score: 0.85}]}
 
           true ->
             %{}

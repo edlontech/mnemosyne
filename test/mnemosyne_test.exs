@@ -58,6 +58,9 @@ defmodule MnemosyneTest do
               ]
             }
 
+          String.contains?(system_content, "prescription quality") ->
+            %{scores: [%{index: 0, return_score: 0.85}]}
+
           true ->
             %{}
         end
@@ -239,6 +242,14 @@ defmodule MnemosyneTest do
                      %{intent: "goal", condition: "c", instruction: "a", expected_outcome: "o"}
                    ]
                  },
+                 model: "test",
+                 usage: %{}
+               }}
+
+            String.contains?(system_content, "prescription quality") ->
+              {:ok,
+               %LLM.Response{
+                 content: %{scores: [%{index: 0, return_score: 0.85}]},
                  model: "test",
                  usage: %{}
                }}

@@ -1,15 +1,27 @@
 defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
   @moduledoc """
-  Prompt for computing the return value of a trajectory segment
-  based on rewards and overall trajectory quality.
-  """
+  Prompt for scoring each prescription (procedural instruction) in a trajectory
+  by how well it contributed to the goal.
 
-  @behaviour Mnemosyne.Prompt
+  Returns structured output via `chat_structured/3` using a Zoi schema.
+  """
 
   alias Mnemosyne.Errors.Invalid.PromptError
 
-  @impl true
-  def build_messages(%{trajectory: trajectory, goal: goal}) do
+  @doc "Returns the Zoi schema for structured LLM output validation."
+  @spec schema :: Zoi.Type.t()
+  def schema do
+    Zoi.map(
+      %{
+        scores:
+          Zoi.list(Zoi.map(%{index: Zoi.integer(), return_score: Zoi.float()}, coerce: true))
+      },
+      coerce: true
+    )
+  end
+
+  @spec build_messages(map()) :: [map()]
+  def build_messages(%{trajectory: trajectory, goal: goal, prescriptions: prescriptions}) do
     formatted_steps =
       trajectory
       |> Enum.with_index(1)
@@ -17,25 +29,23 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
         "Step #{i}: Action: #{step.action} | Reward: #{step.reward}"
       end)
 
-    avg_reward =
-      case trajectory do
-        [] -> 0.0
-        steps -> Enum.sum(Enum.map(steps, & &1.reward)) / length(steps)
-      end
+    formatted_prescriptions =
+      Enum.map_join(prescriptions, "\n", fn p ->
+        "[#{p.index}] Instruction: #{p.instruction} | Condition: #{p.condition} | Expected: #{p.expected_outcome}"
+      end)
 
     [
       %{
         role: :system,
         content: """
-        You are an expert at evaluating trajectory quality for reinforcement learning.
-        Given a trajectory segment with per-step rewards and the overall goal,
-        compute a single return value that reflects the overall quality and
-        goal-alignment of this trajectory segment.
+        You are an expert at evaluating prescription quality for reinforcement learning.
+        Given a trajectory segment with per-step rewards, the overall goal, and a list of
+        prescriptions extracted from the trajectory, score each prescription by how well
+        it contributed to goal achievement.
 
-        Consider both the individual rewards and whether the sequence of actions
-        made meaningful progress toward the goal.
-
-        Respond with ONLY a decimal number between 0.0 and 1.0.\
+        Return a JSON object with a "scores" array. Each entry has:
+        - "index": the prescription index (integer)
+        - "return_score": a float between 0.0 and 1.0\
         """
       },
       %{
@@ -43,25 +53,30 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
         content: """
         Goal: #{goal}
 
-        Trajectory (#{length(trajectory)} steps, avg reward: #{Float.round(avg_reward, 3)}):
+        Trajectory (#{length(trajectory)} steps):
         #{formatted_steps}
 
-        Return value (0.0-1.0):\
+        Prescriptions:
+        #{formatted_prescriptions}
+
+        Score each prescription:\
         """
       }
     ]
   end
 
-  @impl true
-  def parse_response(response) do
-    response
-    |> String.trim()
-    |> Float.parse()
-    |> case do
-      {value, _} when value >= 0.0 and value <= 1.0 -> {:ok, value}
-      {value, _} -> {:ok, clamp(value)}
-      :error -> {:error, PromptError.exception(prompt: :get_return, reason: :invalid_float)}
-    end
+  @spec parse_response(map()) :: {:ok, [map()]} | {:error, PromptError.t()}
+  def parse_response(%{scores: [_ | _] = scores}) do
+    clamped =
+      Enum.map(scores, fn %{index: idx, return_score: score} ->
+        %{index: idx, return_score: clamp(score)}
+      end)
+
+    {:ok, clamped}
+  end
+
+  def parse_response(_) do
+    {:error, PromptError.exception(prompt: :get_return, reason: :no_scores_extracted)}
   end
 
   defp clamp(value) when value < 0.0, do: 0.0

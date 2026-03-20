@@ -133,11 +133,10 @@ defmodule Mnemosyne.Pipeline.Structuring do
           avg_reward,
           episodic_ids
         )
-      end),
-      Task.async(fn -> compute_return(trajectory, goal, llm, llm_opts, config) end)
+      end)
     ]
 
-    [semantic_result, procedural_result, return_result] =
+    [semantic_result, procedural_result] =
       try do
         Task.await_many(extraction_tasks, :timer.seconds(60))
       rescue
@@ -148,9 +147,10 @@ defmodule Mnemosyne.Pipeline.Structuring do
       end
 
     with {:ok, semantic_cs} <- tag_result(semantic_result, :semantic),
-         {:ok, procedural_cs} <- tag_result(procedural_result, :procedural),
-         {:ok, return_value} <- tag_result(return_result, :return) do
-      base_cs = build_base_changeset(goal, episode_id, trajectory, return_value, episodic_ids)
+         {:ok, procedural_cs, instructions} <- tag_procedural_result(procedural_result),
+         {:ok, scores} <- compute_return(trajectory, goal, instructions, llm, llm_opts, config) do
+      procedural_cs = stamp_return_scores(procedural_cs, scores)
+      base_cs = build_base_changeset(goal, episode_id, trajectory, episodic_ids)
 
       cs =
         base_cs
@@ -181,7 +181,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
     total / length(steps)
   end
 
-  defp build_base_changeset(goal, episode_id, trajectory, _return_value, episodic_ids) do
+  defp build_base_changeset(goal, episode_id, trajectory, episodic_ids) do
     subgoal_node = %Subgoal{
       id: generate_id("sg"),
       description: trajectory.subgoal,
@@ -344,7 +344,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
           |> Changeset.put_metadata(intent.id, NodeMetadata.new())
         end)
 
-      {:ok, cs}
+      {:ok, cs, instructions}
     end
   end
 
@@ -371,13 +371,78 @@ defmodule Mnemosyne.Pipeline.Structuring do
     {proc_node, cs}
   end
 
-  defp compute_return(trajectory, goal, llm, llm_opts, config) do
-    messages = GetReturn.build_messages(%{trajectory: trajectory.steps, goal: goal})
+  defp compute_return(_trajectory, _goal, [], _llm, _llm_opts, _config), do: {:ok, []}
+
+  defp compute_return(trajectory, goal, instructions, llm, llm_opts, config) do
+    prescriptions =
+      instructions
+      |> Enum.with_index()
+      |> Enum.map(fn {instr, idx} ->
+        %{
+          index: idx,
+          instruction: instr.instruction,
+          condition: instr.condition,
+          expected_outcome: instr.expected_outcome
+        }
+      end)
+
+    messages =
+      GetReturn.build_messages(%{
+        trajectory: trajectory.steps,
+        goal: goal,
+        prescriptions: prescriptions
+      })
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :get_return, llm_opts)) do
+           llm.chat_structured(
+             messages,
+             GetReturn.schema(),
+             Config.llm_opts(config, :get_return, llm_opts)
+           ) do
       GetReturn.parse_response(content)
     end
+  end
+
+  defp tag_procedural_result({:ok, cs, instructions}), do: {:ok, cs, instructions}
+
+  defp tag_procedural_result({:error, reason} = err) do
+    Logger.error("procedural extraction failed: #{inspect(reason)}")
+    err
+  end
+
+  defp stamp_return_scores(cs, scores) do
+    score_map = Map.new(scores, fn %{index: idx, return_score: score} -> {idx, score} end)
+
+    proc_nodes = Enum.filter(cs.additions, &is_struct(&1, Procedural))
+
+    proc_nodes
+    |> Enum.with_index()
+    |> Enum.reduce(cs, fn {node, idx}, acc ->
+      case Map.fetch(score_map, idx) do
+        {:ok, score} ->
+          updated_node = %{node | return_score: score}
+
+          acc
+          |> update_node_in_additions(node, updated_node)
+          |> Changeset.put_metadata(
+            node.id,
+            NodeMetadata.new(cumulative_reward: score, reward_count: 1)
+          )
+
+        :error ->
+          acc
+      end
+    end)
+  end
+
+  defp update_node_in_additions(cs, old_node, new_node) do
+    updated_additions =
+      Enum.map(cs.additions, fn
+        n when n == old_node -> new_node
+        n -> n
+      end)
+
+    %{cs | additions: updated_additions}
   end
 
   defp collect_results(results) do
