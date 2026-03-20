@@ -103,7 +103,8 @@ defmodule Mnemosyne.Graph do
   end
 
   defp maybe_index_tag(graph, %Tag{label: label}, id) do
-    updated = Map.update(graph.by_tag, label, MapSet.new([id]), &MapSet.put(&1, id))
+    key = label |> String.trim() |> String.downcase()
+    updated = Map.update(graph.by_tag, key, MapSet.new([id]), &MapSet.put(&1, id))
     %{graph | by_tag: updated}
   end
 

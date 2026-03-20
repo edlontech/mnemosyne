@@ -402,4 +402,42 @@ defmodule Mnemosyne.MemoryStoreTest do
                MemoryStore.recall_in_context(pid, "nonexistent-session", "what is elixir?")
     end
   end
+
+  describe "tag deduplication in write lane" do
+    test "deduplicates tags with different casing across changesets", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      sem1 = make_semantic("sem-1", "PostgreSQL uses MVCC")
+      tag1 = %Tag{id: "tag-1", label: "database"}
+
+      cs1 =
+        Changeset.new()
+        |> Changeset.add_node(sem1)
+        |> Changeset.add_node(tag1)
+        |> Changeset.add_link("tag-1", "sem-1")
+
+      :ok = MemoryStore.apply_changeset(pid, cs1)
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "sem-1") != nil)
+
+      sem2 = make_semantic("sem-2", "MySQL supports replication")
+      tag2 = %Tag{id: "tag-2", label: "Database"}
+
+      cs2 =
+        Changeset.new()
+        |> Changeset.add_node(sem2)
+        |> Changeset.add_node(tag2)
+        |> Changeset.add_link("tag-2", "sem-2")
+
+      :ok = MemoryStore.apply_changeset(pid, cs2)
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "sem-2") != nil)
+
+      graph = MemoryStore.get_graph(pid)
+      tags = Graph.nodes_by_type(graph, :tag)
+      assert [%Tag{label: "database"}] = tags
+
+      tag = hd(tags)
+      assert MapSet.member?(tag.links, "sem-1")
+      assert MapSet.member?(tag.links, "sem-2")
+    end
+  end
 end

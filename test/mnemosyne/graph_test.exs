@@ -132,6 +132,16 @@ defmodule Mnemosyne.GraphTest do
   end
 
   describe "by_tag index" do
+    test "normalizes tag label for by_tag index" do
+      g =
+        Graph.new()
+        |> Graph.put_node(make_tag("t1", "Important"))
+        |> Graph.put_node(make_tag("t2", "  important  "))
+
+      assert MapSet.new(["t1", "t2"]) == g.by_tag["important"]
+      assert map_size(g.by_tag) == 1
+    end
+
     test "multiple nodes can share a tag label" do
       t1 = make_tag("t1", "shared")
       t2 = make_tag("t2", "shared")

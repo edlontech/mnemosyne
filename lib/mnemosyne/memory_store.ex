@@ -24,6 +24,7 @@ defmodule Mnemosyne.MemoryStore do
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
   alias Mnemosyne.Pipeline.SemanticConsolidator
+  alias Mnemosyne.Pipeline.TagDeduplicator
   alias Mnemosyne.Telemetry
 
   # -- Client API --
@@ -384,9 +385,9 @@ defmodule Mnemosyne.MemoryStore do
           value_function: config.value_function
         ]
 
-        case IntentMerger.merge(changeset, merge_opts) do
-          {:ok, merged_cs} -> {:ok, {:apply_changeset, merged_cs}}
-          {:error, _} = error -> error
+        with {:ok, deduped_cs} <- TagDeduplicator.deduplicate(changeset, merge_opts),
+             {:ok, merged_cs} <- IntentMerger.merge(deduped_cs, merge_opts) do
+          {:ok, {:apply_changeset, merged_cs}}
         end
       end)
 
