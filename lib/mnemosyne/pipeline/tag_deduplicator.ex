@@ -26,36 +26,43 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
         [:tag_deduplicator, :deduplicate],
         %{repo_id: repo_id, tag_count: length(tags)},
         fn ->
-          {kept_tags, rewrites} = deduplicate_batch(tags)
-
-          rewrites =
-            case fetch_graph_tags(opts) do
-              {:ok, graph_tags} ->
-                graph_lookup = build_graph_lookup(graph_tags)
-                deduplicate_against_graph(kept_tags, graph_lookup, rewrites)
-
-              :error ->
-                rewrites
-            end
-
-          {surviving_tags, rewrites} = remove_replaced_tags(kept_tags, rewrites)
-          rewritten_links = rewrite_links(changeset.links, rewrites)
-          deduped_links = Enum.uniq(rewritten_links)
-          cleaned_metadata = clean_metadata(changeset.metadata, rewrites)
-          deduped_count = map_size(rewrites)
-
-          result =
-            {:ok,
-             %Changeset{
-               changeset
-               | additions: other_nodes ++ surviving_tags,
-                 links: deduped_links,
-                 metadata: cleaned_metadata
-             }}
-
+          {result, deduped_count} = do_deduplicate(tags, other_nodes, changeset, opts)
           {result, %{deduped: deduped_count}}
         end
       )
+    end
+  end
+
+  defp do_deduplicate(tags, other_nodes, changeset, opts) do
+    {kept_tags, rewrites} = deduplicate_batch(tags)
+
+    rewrites = maybe_deduplicate_against_graph(kept_tags, rewrites, opts)
+
+    {surviving_tags, rewrites} = remove_replaced_tags(kept_tags, rewrites)
+    rewritten_links = rewrite_links(changeset.links, rewrites)
+    deduped_links = Enum.uniq(rewritten_links)
+    cleaned_metadata = clean_metadata(changeset.metadata, rewrites)
+
+    result =
+      {:ok,
+       %Changeset{
+         changeset
+         | additions: other_nodes ++ surviving_tags,
+           links: deduped_links,
+           metadata: cleaned_metadata
+       }}
+
+    {result, map_size(rewrites)}
+  end
+
+  defp maybe_deduplicate_against_graph(kept_tags, rewrites, opts) do
+    case fetch_graph_tags(opts) do
+      {:ok, graph_tags} ->
+        graph_lookup = build_graph_lookup(graph_tags)
+        deduplicate_against_graph(kept_tags, graph_lookup, rewrites)
+
+      :error ->
+        rewrites
     end
   end
 
