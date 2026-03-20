@@ -189,6 +189,7 @@ end
 
 defmodule Mnemosyne.NotifierSessionIntegrationTest do
   use ExUnit.Case, async: false
+  use AssertEventually, timeout: 500, interval: 10
 
   import Mimic
 
@@ -538,17 +539,17 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       :ok = Session.start_episode(pid, "test goal")
       :ok = Session.append(pid, "saw something", "did something")
 
-      events = TestNotifier.events(infra.repo_id)
+      assert_eventually(
+        Enum.any?(TestNotifier.events(infra.repo_id), fn
+          {:step_appended, ^session_id,
+           %{step_index: 0, trajectory_id: _, boundary_detected: false},
+           %{trace: %Mnemosyne.Notifier.Trace.Episode{}}} ->
+            true
 
-      assert Enum.any?(events, fn
-               {:step_appended, ^session_id,
-                %{step_index: 0, trajectory_id: _, boundary_detected: false},
-                %{trace: %Mnemosyne.Notifier.Trace.Episode{}}} ->
-                 true
-
-               _ ->
-                 false
-             end)
+          _ ->
+            false
+        end)
+      )
     end
 
     test "emits failed->extracting on retry via commit", %{tmp_dir: tmp_dir} do

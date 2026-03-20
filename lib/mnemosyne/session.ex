@@ -42,8 +42,8 @@ defmodule Mnemosyne.Session do
           prev_trajectory_id: String.t() | nil,
           flush_timer: reference() | nil,
           session_timer: reference() | nil,
-          trajectory_tasks: %{reference() => String.t()},
-          committed_trajectory_ids: MapSet.t(String.t()),
+          trajectory_tasks: %{reference() => {String.t(), [non_neg_integer()]}},
+          committed_step_indices: MapSet.t(non_neg_integer()),
           flush_triggered: %{String.t() => true},
           stopping: boolean()
         }
@@ -68,7 +68,7 @@ defmodule Mnemosyne.Session do
     :session_timer,
     append_queue: :queue.new(),
     trajectory_tasks: %{},
-    committed_trajectory_ids: MapSet.new(),
+    committed_step_indices: MapSet.new(),
     flush_triggered: %{},
     stopping: false
   ]
@@ -380,7 +380,7 @@ defmodule Mnemosyne.Session do
   def collecting(:info, {ref, {:ok, %Changeset{} = cs, trace}}, data)
       when is_map_key(data.trajectory_tasks, ref) do
     Process.demonitor(ref, [:flush])
-    traj_id = data.trajectory_tasks[ref]
+    {traj_id, step_indices} = data.trajectory_tasks[ref]
 
     MemoryStore.apply_changeset(data.memory_store, cs)
 
@@ -396,13 +396,13 @@ defmodule Mnemosyne.Session do
     Notifier.safe_notify(data.notifier, data.repo_id, event)
 
     trajectory_tasks = Map.delete(data.trajectory_tasks, ref)
-    committed = MapSet.put(data.committed_trajectory_ids, traj_id)
+    committed = MapSet.union(data.committed_step_indices, MapSet.new(step_indices))
     flush_triggered = Map.delete(data.flush_triggered, traj_id)
 
     data = %{
       data
       | trajectory_tasks: trajectory_tasks,
-        committed_trajectory_ids: committed,
+        committed_step_indices: committed,
         flush_triggered: flush_triggered
     }
 
@@ -714,7 +714,7 @@ defmodule Mnemosyne.Session do
   end
 
   defp handle_trajectory_extraction_failure(data, ref, reason) do
-    traj_id = data.trajectory_tasks[ref]
+    {traj_id, _step_indices} = data.trajectory_tasks[ref]
 
     Logger.warning("trajectory extraction failed for #{traj_id}: #{inspect(reason)}")
 
@@ -758,11 +758,10 @@ defmodule Mnemosyne.Session do
   defp uncommitted_current_steps(data) do
     current_traj_id = data.episode.current_trajectory_id
 
-    if MapSet.member?(data.committed_trajectory_ids, current_traj_id) do
-      []
-    else
-      Enum.filter(data.episode.steps, &(&1.trajectory_id == current_traj_id))
-    end
+    Enum.filter(data.episode.steps, fn step ->
+      step.trajectory_id == current_traj_id and
+        not MapSet.member?(data.committed_step_indices, step.index)
+    end)
   end
 
   defp flush_current_trajectory(data) do
@@ -793,7 +792,11 @@ defmodule Mnemosyne.Session do
   end
 
   defp maybe_spawn_trajectory_extraction(data, trajectory_id) do
-    steps = Enum.filter(data.episode.steps, &(&1.trajectory_id == trajectory_id))
+    steps =
+      Enum.filter(data.episode.steps, fn step ->
+        step.trajectory_id == trajectory_id and
+          not MapSet.member?(data.committed_step_indices, step.index)
+      end)
 
     if steps == [] do
       data
@@ -805,7 +808,8 @@ defmodule Mnemosyne.Session do
 
   defp spawn_trajectory_extraction(data, trajectory) do
     task = spawn_trajectory_task(data, trajectory)
-    trajectory_tasks = Map.put(data.trajectory_tasks, task.ref, trajectory.id)
+    step_indices = Enum.map(trajectory.steps, & &1.index)
+    trajectory_tasks = Map.put(data.trajectory_tasks, task.ref, {trajectory.id, step_indices})
     %{data | trajectory_tasks: trajectory_tasks}
   end
 
@@ -835,7 +839,7 @@ defmodule Mnemosyne.Session do
       | episode: nil,
         changeset: nil,
         trajectory_tasks: %{},
-        committed_trajectory_ids: MapSet.new(),
+        committed_step_indices: MapSet.new(),
         flush_triggered: %{},
         prev_trajectory_id: nil,
         stopping: false

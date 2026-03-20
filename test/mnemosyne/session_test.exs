@@ -765,6 +765,27 @@ defmodule Mnemosyne.SessionTest do
       assert Session.state(pid) == :collecting
       assert map_size(MemoryStore.get_graph(infra.memory_store).nodes) == 0
     end
+
+    test "commits steps appended after a previous flush on same trajectory", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      stub_trajectory_extraction_success()
+
+      infra = start_infra_with_timeouts(tmp_dir, true, 50, :infinity)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs1", "act1")
+
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > 0)
+
+      initial_count = map_size(MemoryStore.get_graph(infra.memory_store).nodes)
+
+      :ok = Session.append(pid, "obs2", "act2")
+      :ok = Session.append(pid, "obs3", "act3")
+
+      assert_eventually(map_size(MemoryStore.get_graph(infra.memory_store).nodes) > initial_count)
+      assert Session.state(pid) == :collecting
+    end
   end
 
   describe "session timeout" do
