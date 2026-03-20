@@ -326,6 +326,75 @@ defmodule Mnemosyne do
   end
 
   @doc """
+  Like `commit/2` but returns immediately. When the session is busy
+  (extracting or collecting with in-flight trajectory tasks), the commit
+  is queued and executes when the blocking work completes.
+
+  The optional callback receives `{:ok, :committed}` or `{:error, reason}`.
+  An `:ok` return means the operation was accepted, not that it succeeded.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec commit_async(String.t(), Session.op_callback(), keyword()) ::
+          :ok | {:error, Mnemosyne.Errors.error()}
+  def commit_async(session_id, callback \\ nil, opts \\ []) do
+    with {:ok, pid} <- lookup_session(session_id, opts) do
+      Session.commit_async(pid, callback)
+    end
+  end
+
+  @doc """
+  Like `discard/2` but returns immediately with optional callback.
+  See `commit_async/3` for queuing semantics.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec discard_async(String.t(), Session.op_callback(), keyword()) ::
+          :ok | {:error, Mnemosyne.Errors.error()}
+  def discard_async(session_id, callback \\ nil, opts \\ []) do
+    with {:ok, pid} <- lookup_session(session_id, opts) do
+      Session.discard_async(pid, callback)
+    end
+  end
+
+  @doc """
+  Like `start_session/2` but for resuming an existing idle session
+  with a new episode. Returns immediately with optional callback.
+  See `commit_async/3` for queuing semantics.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec start_episode_async(String.t(), String.t(), Session.op_callback(), keyword()) ::
+          :ok | {:error, Mnemosyne.Errors.error()}
+  def start_episode_async(session_id, goal, callback \\ nil, opts \\ []) do
+    with {:ok, pid} <- lookup_session(session_id, opts) do
+      Session.start_episode_async(pid, goal, callback)
+    end
+  end
+
+  @doc """
+  Like `close/2` but returns immediately with optional callback.
+  See `commit_async/3` for queuing semantics.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec close_async(String.t(), Session.op_callback(), keyword()) ::
+          :ok | {:error, Mnemosyne.Errors.error()}
+  def close_async(session_id, callback \\ nil, opts \\ []) do
+    with {:ok, pid} <- lookup_session(session_id, opts) do
+      Session.close_async(pid, callback)
+    end
+  end
+
+  @doc """
   Returns the current state of a session.
 
   Possible states: `:idle`, `:collecting`, `:extracting`, `:ready`, `:failed`.

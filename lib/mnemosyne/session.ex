@@ -45,6 +45,7 @@ defmodule Mnemosyne.Session do
           trajectory_tasks: %{reference() => {String.t(), [non_neg_integer()]}},
           committed_step_indices: MapSet.t(non_neg_integer()),
           flush_triggered: %{String.t() => true},
+          pending_ops: :queue.queue(),
           stopping: boolean()
         }
 
@@ -70,6 +71,7 @@ defmodule Mnemosyne.Session do
     trajectory_tasks: %{},
     committed_step_indices: MapSet.new(),
     flush_triggered: %{},
+    pending_ops: :queue.new(),
     stopping: false
   ]
 
@@ -110,6 +112,46 @@ defmodule Mnemosyne.Session do
           :ok
   def append_async(server, observation, action, callback \\ nil) do
     GenStateMachine.cast(server, {:append_async, observation, action, callback})
+  end
+
+  @type op_callback :: ({:ok, term()} | {:error, Mnemosyne.Errors.error()} -> any()) | nil
+
+  @doc """
+  Asynchronous commit. Returns immediately with `:ok` when the session is idle
+  or ready, or queues the operation when extraction is in progress. The optional
+  callback receives `{:ok, :committed}` or `{:error, reason}` when the op runs.
+  """
+  @spec commit_async(GenServer.server(), op_callback()) :: :ok | {:error, SessionError.t()}
+  def commit_async(server, callback \\ nil) do
+    GenStateMachine.call(server, {:async_op, {:commit}, callback})
+  end
+
+  @doc """
+  Asynchronous discard. Returns immediately or queues when busy.
+  The optional callback receives `{:ok, :discarded}` or `{:error, reason}`.
+  """
+  @spec discard_async(GenServer.server(), op_callback()) :: :ok | {:error, SessionError.t()}
+  def discard_async(server, callback \\ nil) do
+    GenStateMachine.call(server, {:async_op, {:discard}, callback})
+  end
+
+  @doc """
+  Asynchronous start_episode. Returns immediately or queues when busy.
+  The optional callback receives `{:ok, :started}` or `{:error, reason}`.
+  """
+  @spec start_episode_async(GenServer.server(), String.t(), op_callback()) ::
+          :ok | {:error, SessionError.t()}
+  def start_episode_async(server, goal, callback \\ nil) do
+    GenStateMachine.call(server, {:async_op, {:start_episode, goal}, callback})
+  end
+
+  @doc """
+  Asynchronous close. Returns immediately or queues when busy.
+  The optional callback receives `{:ok, :closed}` or `{:error, reason}`.
+  """
+  @spec close_async(GenServer.server(), op_callback()) :: :ok | {:error, SessionError.t()}
+  def close_async(server, callback \\ nil) do
+    GenStateMachine.call(server, {:async_op, {:close}, callback})
   end
 
   @doc """
@@ -237,6 +279,12 @@ defmodule Mnemosyne.Session do
     do:
       {:keep_state_and_data,
        [{:reply, from, {:error, SessionError.exception(reason: :not_collecting)}}]}
+
+  def idle(:internal, :drain_next, data), do: handle_drain_next(:idle, data)
+
+  def idle({:call, from}, {:async_op, op, callback}, data) do
+    execute_async_op_immediately(data, op, callback, from)
+  end
 
   def idle({:call, from}, _request, _data),
     do:
@@ -410,7 +458,7 @@ defmodule Mnemosyne.Session do
       Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id, %{}})
       {:stop, :normal, data}
     else
-      {:keep_state, data}
+      {:keep_state, data, drain_next_action(data)}
     end
   end
 
@@ -452,6 +500,22 @@ defmodule Mnemosyne.Session do
     end
   end
 
+  def collecting(:internal, :drain_next, data), do: handle_drain_next(:collecting, data)
+
+  def collecting({:call, from}, {:async_op, op, callback}, data) do
+    if map_size(data.trajectory_tasks) > 0 do
+      case can_enqueue?(data, op) do
+        :ok ->
+          {:keep_state, enqueue_op(data, op, callback), [{:reply, from, :ok}]}
+
+        {:error, _} = error ->
+          {:keep_state_and_data, [{:reply, from, error}]}
+      end
+    else
+      execute_async_op_immediately(data, op, callback, from)
+    end
+  end
+
   def collecting(:info, _msg, _data), do: :keep_state_and_data
 
   def collecting({:call, from}, _request, _data),
@@ -472,6 +536,16 @@ defmodule Mnemosyne.Session do
     {:keep_state_and_data, [{:reply, from, build_context(data)}]}
   end
 
+  def extracting({:call, from}, {:async_op, op, callback}, data) do
+    case can_enqueue?(data, op) do
+      :ok ->
+        {:keep_state, enqueue_op(data, op, callback), [{:reply, from, :ok}]}
+
+      {:error, _} = error ->
+        {:keep_state_and_data, [{:reply, from, error}]}
+    end
+  end
+
   def extracting({:call, from}, _request, _data) do
     {:keep_state_and_data,
      [{:reply, from, {:error, SessionError.exception(reason: :extraction_in_progress)}}]}
@@ -488,10 +562,12 @@ defmodule Mnemosyne.Session do
       MemoryStore.apply_changeset(data.memory_store, changeset)
       node_ids = Enum.map(changeset.additions, & &1.id)
       emit_transition(data, :extracting, :idle, %{node_ids: node_ids})
-      {:next_state, :idle, reset_session_data(data)}
+      new_data = reset_session_data(data)
+      {:next_state, :idle, new_data, drain_next_action(new_data)}
     else
       emit_transition(data, :extracting, :ready)
-      {:next_state, :ready, %{data | changeset: changeset, extraction_task: nil}}
+      new_data = %{data | changeset: changeset, extraction_task: nil}
+      {:next_state, :ready, new_data, drain_next_action(new_data)}
     end
   end
 
@@ -502,9 +578,12 @@ defmodule Mnemosyne.Session do
       MemoryStore.apply_changeset(data.memory_store, changeset)
       node_ids = Enum.map(changeset.additions, & &1.id)
       emit_transition(data, :extracting, :idle, %{node_ids: node_ids})
+      new_data = reset_session_data(data)
+      {:next_state, :idle, new_data, drain_next_action(new_data)}
     else
       emit_transition(data, :extracting, :ready)
-      {:next_state, :ready, %{data | changeset: changeset, extraction_task: nil}}
+      new_data = %{data | changeset: changeset, extraction_task: nil}
+      {:next_state, :ready, new_data, drain_next_action(new_data)}
     end
   end
 
@@ -512,12 +591,14 @@ defmodule Mnemosyne.Session do
     Process.demonitor(ref, [:flush])
     Logger.error("extraction failed for session #{data.id}: #{inspect(reason)}")
     emit_transition(data, :extracting, :failed)
+    data = flush_pending_ops(data, SessionError.exception(reason: :extraction_failed))
     {:next_state, :failed, %{data | extraction_task: nil}}
   end
 
   def extracting(:info, {:DOWN, ref, :process, _pid, _reason}, %{extraction_task: ref} = data) do
     Logger.error("extraction failed for session #{data.id}")
     emit_transition(data, :extracting, :failed)
+    data = flush_pending_ops(data, SessionError.exception(reason: :extraction_failed))
     {:next_state, :failed, %{data | extraction_task: nil}}
   end
 
@@ -573,6 +654,12 @@ defmodule Mnemosyne.Session do
 
   def ready({:call, from}, :get_context, data) do
     {:keep_state_and_data, [{:reply, from, build_context(data)}]}
+  end
+
+  def ready(:internal, :drain_next, data), do: handle_drain_next(:ready, data)
+
+  def ready({:call, from}, {:async_op, op, callback}, data) do
+    execute_async_op_immediately(data, op, callback, from)
   end
 
   def ready({:call, from}, _request, _data) do
@@ -726,6 +813,7 @@ defmodule Mnemosyne.Session do
 
     trajectory_tasks = Map.delete(data.trajectory_tasks, ref)
     data = %{data | trajectory_tasks: trajectory_tasks}
+    data = flush_pending_ops(data, SessionError.exception(reason: :extraction_failed))
 
     if data.stopping and map_size(data.trajectory_tasks) == 0 do
       Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id, %{}})
@@ -860,5 +948,171 @@ defmodule Mnemosyne.Session do
       data.repo_id,
       {:session_transition, data.id, from_state, to_state, extra_metadata}
     )
+  end
+
+  # -- Pending Ops Queue --
+
+  @max_pending_ops 5
+
+  defp project_state(starting_state, queue) do
+    :queue.fold(
+      fn {op, _callback}, state -> project_transition(state, op) end,
+      starting_state,
+      queue
+    )
+  end
+
+  defp project_transition(:ready, {:commit}), do: :idle
+  defp project_transition(:ready, {:discard}), do: :idle
+  defp project_transition(:idle, {:start_episode, _goal}), do: :collecting
+  defp project_transition(:collecting, {:close}), do: :ready
+  defp project_transition(state, _op), do: {:invalid, state}
+
+  defp projection_starting_state(data) do
+    cond do
+      data.extraction_task != nil and auto_commit_enabled?(data) -> :idle
+      data.extraction_task != nil -> :ready
+      map_size(data.trajectory_tasks) > 0 -> :collecting
+      true -> :idle
+    end
+  end
+
+  defp can_enqueue?(data, op) do
+    cond do
+      data.stopping ->
+        {:error, SessionError.exception(reason: :session_stopping)}
+
+      :queue.len(data.pending_ops) >= @max_pending_ops ->
+        {:error, SessionError.exception(reason: :pending_queue_full)}
+
+      true ->
+        starting = projection_starting_state(data)
+        projected = project_state(starting, data.pending_ops)
+        validate_projected_transition(projected, op)
+    end
+  end
+
+  defp validate_projected_transition({:invalid, _} = projected, _op),
+    do: {:error, SessionError.exception(reason: :invalid_queued_operation, state: projected)}
+
+  defp validate_projected_transition(state, op) do
+    case project_transition(state, op) do
+      {:invalid, _} ->
+        {:error, SessionError.exception(reason: :invalid_queued_operation, state: state)}
+
+      _next ->
+        :ok
+    end
+  end
+
+  defp enqueue_op(data, op, callback) do
+    queue = :queue.in({op, callback}, data.pending_ops)
+
+    :telemetry.execute(
+      [:mnemosyne, :session, :op_enqueue],
+      %{system_time: System.system_time()},
+      %{
+        op: elem(op, 0),
+        queue_depth: :queue.len(queue),
+        projected_state: project_state(projection_starting_state(data), queue),
+        session_id: data.id,
+        repo_id: data.repo_id
+      }
+    )
+
+    %{data | pending_ops: queue}
+  end
+
+  defp flush_pending_ops(data, error) do
+    :queue.fold(
+      fn {_op, callback}, _acc ->
+        if callback, do: callback.({:error, error})
+      end,
+      nil,
+      data.pending_ops
+    )
+
+    %{data | pending_ops: :queue.new()}
+  end
+
+  defp drain_next_action(data) do
+    if :queue.is_empty(data.pending_ops) do
+      []
+    else
+      [{:next_event, :internal, :drain_next}]
+    end
+  end
+
+  defp execute_drain_op({:commit}, data) do
+    case data do
+      %{changeset: nil} ->
+        {:error, SessionError.exception(reason: :not_ready)}
+
+      %{changeset: changeset} ->
+        MemoryStore.apply_changeset(data.memory_store, changeset)
+        node_ids = Enum.map(changeset.additions, & &1.id)
+        emit_transition(data, :ready, :idle, %{node_ids: node_ids})
+        {:ok, :committed, :idle, %{data | episode: nil, changeset: nil}}
+    end
+  end
+
+  defp execute_drain_op({:discard}, data) do
+    emit_transition(data, :ready, :idle)
+    {:ok, :discarded, :idle, %{data | episode: nil, changeset: nil}}
+  end
+
+  defp execute_drain_op({:start_episode, goal}, data) do
+    episode = Episode.new(goal)
+    emit_transition(data, :idle, :collecting)
+    {:ok, :started, :collecting, start_timers(%{data | episode: episode})}
+  end
+
+  defp execute_drain_op({:close}, data) do
+    case Episode.close(data.episode) do
+      {:ok, closed} ->
+        data = cancel_timers(data)
+        task = spawn_extraction(%{data | episode: closed})
+        emit_transition(data, :collecting, :extracting)
+        {:ok, :closed, :extracting, %{data | episode: closed, extraction_task: task.ref}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp handle_drain_next(_current_state, data) do
+    case :queue.out(data.pending_ops) do
+      {:empty, _} ->
+        {:keep_state, data}
+
+      {{:value, {op, callback}}, rest} ->
+        data = %{data | pending_ops: rest}
+        apply_drained_op(execute_drain_op(op, data), callback, data)
+    end
+  end
+
+  defp apply_drained_op({:ok, result, next_state, new_data}, callback, _data) do
+    if callback, do: callback.({:ok, result})
+    {:next_state, next_state, new_data, drain_next_action(new_data)}
+  end
+
+  defp apply_drained_op({:error, error}, callback, data) do
+    if callback, do: callback.({:error, error})
+
+    new_data =
+      flush_pending_ops(data, SessionError.exception(reason: :preceding_op_failed))
+
+    {:keep_state, new_data}
+  end
+
+  defp execute_async_op_immediately(data, op, callback, from) do
+    case execute_drain_op(op, data) do
+      {:ok, result, next_state, new_data} ->
+        if callback, do: callback.({:ok, result})
+        {:next_state, next_state, new_data, [{:reply, from, :ok}]}
+
+      {:error, error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
   end
 end

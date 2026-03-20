@@ -29,6 +29,11 @@ defmodule Mnemosyne.Telemetry do
 
   ### Session
   - `[:mnemosyne, :session, :transition, :start | :stop | :exception]`
+  - `[:mnemosyne, :session, :op_enqueue]` — point event on enqueue
+    - Metadata: `op`, `queue_depth`, `projected_state`, `session_id`, `repo_id`
+  - `[:mnemosyne, :session, :op_drain, :start | :stop | :exception]` — span around drain
+    - Start metadata: `queue_depth`, `session_id`, `repo_id`
+    - Stop measurements: `ops_executed`, `ops_failed`
 
   ### Repository Lifecycle
   - `[:mnemosyne, :repo, :open, :start | :stop | :exception]`
@@ -61,6 +66,8 @@ defmodule Mnemosyne.Telemetry do
     @prefix ++ [:consolidator, :consolidate],
     @prefix ++ [:intent_merger, :merge],
     @prefix ++ [:session, :transition],
+    @prefix ++ [:session, :op_enqueue],
+    @prefix ++ [:session, :op_drain],
     @prefix ++ [:repo, :open],
     @prefix ++ [:repo, :close],
     @prefix ++ [:memory_store, :queue],

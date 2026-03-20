@@ -1155,6 +1155,324 @@ defmodule Mnemosyne.SessionTest do
     end
   end
 
+  describe "pending ops queue" do
+    defp stub_slow_extraction do
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        Process.sleep(500)
+        {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        Process.sleep(500)
+
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
+
+        content =
+          cond do
+            String.contains?(system_content, "factual knowledge") ->
+              %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
+
+            String.contains?(system_content, "actionable instructions") ->
+              %{
+                instructions: [
+                  %{
+                    intent: "goal",
+                    condition: "condition",
+                    instruction: "action",
+                    expected_outcome: "outcome"
+                  }
+                ]
+              }
+
+            true ->
+              %{}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+      end)
+    end
+
+    test "commit_async queues during extracting and drains on success", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs", "act")
+
+      stub_slow_extraction()
+
+      :ok = Session.close(pid)
+      assert Session.state(pid) == :extracting
+
+      test_pid = self()
+
+      assert :ok =
+               Session.commit_async(pid, fn result ->
+                 send(test_pid, {:commit_cb, result})
+               end)
+
+      assert_receive {:commit_cb, {:ok, :committed}}, 5_000
+      assert_eventually(Session.state(pid) == :idle)
+    end
+
+    test "commit_async returns error for invalid projected state", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs", "act")
+
+      stub_slow_extraction()
+
+      :ok = Session.close(pid)
+      assert Session.state(pid) == :extracting
+
+      assert :ok = Session.commit_async(pid, nil)
+
+      assert {:error, %SessionError{reason: :invalid_queued_operation}} =
+               Session.commit_async(pid, nil)
+    end
+
+    test "queued ops chain: commit then start_episode", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs", "act")
+
+      stub_slow_extraction()
+
+      :ok = Session.close(pid)
+      assert Session.state(pid) == :extracting
+
+      test_pid = self()
+
+      assert :ok =
+               Session.commit_async(pid, fn result ->
+                 send(test_pid, {:commit_cb, result})
+               end)
+
+      assert :ok =
+               Session.start_episode_async(pid, "next goal", fn result ->
+                 send(test_pid, {:start_cb, result})
+               end)
+
+      assert_receive {:commit_cb, {:ok, :committed}}, 5_000
+      assert_receive {:start_cb, {:ok, :started}}, 5_000
+      assert_eventually(Session.state(pid) == :collecting)
+    end
+
+    test "extraction failure flushes queue with error callbacks", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs", "act")
+
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        Process.sleep(300)
+        {:error, :extraction_boom}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        Process.sleep(300)
+        {:error, :extraction_boom}
+      end)
+
+      :ok = Session.close(pid)
+
+      test_pid = self()
+
+      assert :ok =
+               Session.commit_async(pid, fn result ->
+                 send(test_pid, {:commit_cb, result})
+               end)
+
+      assert :ok =
+               Session.start_episode_async(pid, "next goal", fn result ->
+                 send(test_pid, {:start_cb, result})
+               end)
+
+      assert_receive {:commit_cb, {:error, %SessionError{reason: :extraction_failed}}}, 5_000
+      assert_receive {:start_cb, {:error, %SessionError{reason: :extraction_failed}}}, 5_000
+      assert_eventually(Session.state(pid) == :failed)
+    end
+
+    test "queue depth limit", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs", "act")
+
+      stub_slow_extraction()
+
+      :ok = Session.close(pid)
+      assert Session.state(pid) == :extracting
+
+      assert :ok = Session.commit_async(pid, nil)
+      assert :ok = Session.start_episode_async(pid, "g1", nil)
+      assert :ok = Session.close_async(pid, nil)
+      assert :ok = Session.commit_async(pid, nil)
+      assert :ok = Session.start_episode_async(pid, "g2", nil)
+
+      assert {:error, %SessionError{reason: :pending_queue_full}} =
+               Session.close_async(pid, nil)
+    end
+
+    test "sync commit still rejects during extracting", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs", "act")
+
+      stub_slow_extraction()
+
+      :ok = Session.close(pid)
+      assert Session.state(pid) == :extracting
+
+      assert {:error, %SessionError{reason: :extraction_in_progress}} = Session.commit(pid)
+    end
+
+    test "async ops execute immediately when not busy", %{tmp_dir: tmp_dir} do
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      test_pid = self()
+
+      assert :ok =
+               Session.start_episode_async(pid, "goal", fn result ->
+                 send(test_pid, {:start_cb, result})
+               end)
+
+      assert_receive {:start_cb, {:ok, :started}}, 1_000
+      assert Session.state(pid) == :collecting
+    end
+
+    test "auto-commit: start_episode_async queues from extracting", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs", "act")
+
+      stub_slow_extraction()
+
+      :ok = Session.close(pid)
+      assert Session.state(pid) == :extracting
+
+      test_pid = self()
+
+      assert :ok =
+               Session.start_episode_async(pid, "next goal", fn result ->
+                 send(test_pid, {:start_cb, result})
+               end)
+
+      assert_receive {:start_cb, {:ok, :started}}, 5_000
+      assert_eventually(Session.state(pid) == :collecting)
+    end
+
+    test "auto-commit: commit_async rejected from extracting", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "obs", "act")
+
+      stub_slow_extraction()
+
+      :ok = Session.close(pid)
+      assert Session.state(pid) == :extracting
+
+      assert {:error, %SessionError{reason: :invalid_queued_operation}} =
+               Session.commit_async(pid, nil)
+    end
+
+    test "close_async queues during collecting with in-flight trajectory tasks",
+         %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode_with_boundary()
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        Process.sleep(500)
+
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
+
+        content =
+          cond do
+            String.contains?(system_content, "factual knowledge") ->
+              %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
+
+            String.contains?(system_content, "actionable instructions") ->
+              %{
+                instructions: [
+                  %{
+                    intent: "goal",
+                    condition: "condition",
+                    instruction: "action",
+                    expected_outcome: "outcome"
+                  }
+                ]
+              }
+
+            true ->
+              %{}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+      end)
+
+      infra = start_infra_with_auto_commit(tmp_dir, true)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "test goal")
+      :ok = Session.append(pid, "first obs", "first act")
+      :ok = Session.append(pid, "second obs", "second act")
+
+      Process.sleep(50)
+
+      test_pid = self()
+
+      assert :ok =
+               Session.close_async(pid, fn result ->
+                 send(test_pid, {:close_cb, result})
+               end)
+
+      assert Session.state(pid) == :collecting
+
+      assert_receive {:close_cb, {:ok, :closed}}, 5_000
+      assert_eventually(Session.state(pid) in [:extracting, :ready, :idle])
+    end
+  end
+
   defp close_and_commit_direct(server) do
     :ok = Session.close(server)
 

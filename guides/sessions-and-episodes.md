@@ -124,6 +124,64 @@ It polls the session state and handles retries on transient failures:
   poll_interval: 100)   # 100ms between polls (default: 50ms)
 ```
 
+## Async Operations and Queuing
+
+The sync API (`commit/1`, `close/1`, etc.) rejects operations when the session is busy. The async API enqueues them instead, executing when the blocking work completes:
+
+```elixir
+:ok = Mnemosyne.close(session_id)
+
+# Instead of polling for :ready, queue the commit immediately:
+:ok = Mnemosyne.commit_async(session_id, fn
+  {:ok, :committed} -> IO.puts("committed")
+  {:error, reason} -> IO.puts("failed: #{inspect(reason)}")
+end)
+```
+
+The callback is optional. Without it, the operation is fire-and-forget:
+
+```elixir
+:ok = Mnemosyne.commit_async(session_id)
+```
+
+You can chain operations. Each is validated against the projected state after all preceding queued ops:
+
+```elixir
+:ok = Mnemosyne.close(session_id)
+:ok = Mnemosyne.commit_async(session_id)
+:ok = Mnemosyne.start_episode_async(session_id, "Next goal")
+# Session will: finish extraction → commit → start new episode
+```
+
+### Available Async Functions
+
+| Function | Queues when |
+|----------|------------|
+| `commit_async/2` | `:extracting` or `:collecting` with in-flight trajectory tasks |
+| `discard_async/2` | Same |
+| `start_episode_async/3` | Same |
+| `close_async/2` | Same |
+
+When the session is not busy, async functions execute immediately (same as their sync counterparts).
+
+### Queuing Rules
+
+- Maximum 5 pending operations
+- Each operation is validated against the projected state (e.g., can't queue two commits in a row)
+- `:ok` return means "accepted for execution", not "guaranteed to succeed"
+- If extraction fails, all queued callbacks receive `{:error, %SessionError{reason: :extraction_failed}}`
+- If a queued operation fails during drain, subsequent callbacks receive `{:error, %SessionError{reason: :preceding_op_failed}}`
+
+### Auto-commit Sessions
+
+With auto-commit enabled, extraction success transitions directly to `:idle` (skipping `:ready`). The async API accounts for this — `commit_async` is invalid (already auto-committed), but `start_episode_async` works:
+
+```elixir
+# Auto-commit session: queue a new episode after extraction
+:ok = Mnemosyne.close(session_id)
+:ok = Mnemosyne.start_episode_async(session_id, "Next goal")
+```
+
 ## Handling Failures
 
 If extraction fails, the session moves to `:failed`. The closed episode is preserved, so you can retry:

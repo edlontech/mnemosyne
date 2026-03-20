@@ -23,5 +23,10 @@ defmodule Mnemosyne.Errors.Framework.SessionError do
   defp format_reason(:append_in_progress), do: "an append operation is still running"
   defp format_reason(:append_crashed), do: "append task crashed unexpectedly"
   defp format_reason(:session_failed), do: "session is in failed state"
+  defp format_reason(:invalid_queued_operation), do: "operation not valid for projected state"
+  defp format_reason(:extraction_failed), do: "extraction failed, queued operations flushed"
+  defp format_reason(:preceding_op_failed), do: "a preceding queued operation failed"
+  defp format_reason(:pending_queue_full), do: "pending operations queue is full"
+  defp format_reason(:session_stopping), do: "session is shutting down"
   defp format_reason(reason), do: inspect(reason)
 end
