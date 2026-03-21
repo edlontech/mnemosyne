@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.1.2](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.1...mnemosyne-v0.1.2) (2026-03-21)
+
+
+### Features
+
+* add async session operations with pending ops queue ([583225c](https://github.com/edlontech/mnemosyne/commit/583225c6d14c70251687709fc27406f90d4e2b4d))
+* Added Append Async function with improved concurrency ([ebe74c6](https://github.com/edlontech/mnemosyne/commit/ebe74c63ba0dec4c7cf8f80ac50fa8f41cae0f3f))
+* Added function to fetch the latest top_k results ([fcfbacb](https://github.com/edlontech/mnemosyne/commit/fcfbacb6aaed1fc94b2c610e0fd1b523825a7f97))
+* conditional per-hop query refinement in retrieval ([161d4f4](https://github.com/edlontech/mnemosyne/commit/161d4f4c93dd8d200ee416af1fe90b94372540d4))
+* include node_ids in trajectory_committed/flushed events ([01e341b](https://github.com/edlontech/mnemosyne/commit/01e341b1d9571e169d71fb2f7fc46d8d9cd71e4a))
+* incremental session commit with auto-commit and idle timeouts ([a5a3f6d](https://github.com/edlontech/mnemosyne/commit/a5a3f6d0a6692460e1db542d8ecf4b8852e99653))
+* lazy progressive state derivation at extraction time ([70cdb21](https://github.com/edlontech/mnemosyne/commit/70cdb21a99f95be81190f58ec1b0d9c781ae09f1))
+* notifier observability with trace structs and metadata ([c9c81ba](https://github.com/edlontech/mnemosyne/commit/c9c81ba15dd4aa31c1549e3a03290de5ed5514e7))
+* per-prescription return scores in structuring pipeline ([7ae3fc4](https://github.com/edlontech/mnemosyne/commit/7ae3fc4545c43eddc27cbcfa86c216d693f520a5))
+* tag normalization and deduplication in write lane ([3770a5c](https://github.com/edlontech/mnemosyne/commit/3770a5c396c6f03810fffe96aec3e6e82856f999))
+* update access metadata on retrieval ([9d0c5af](https://github.com/edlontech/mnemosyne/commit/9d0c5af5f67f2395759ed281ec07554b34e9c253))
+
+
+### Bug Fixes
+
+* Emits extracting-&gt;idle on auto-commit ([b9b60b6](https://github.com/edlontech/mnemosyne/commit/b9b60b6403f0aebba2ca3a5a3ff4aa0eb1cbce71))
+* Fixed provenance edges connection ([563db7e](https://github.com/edlontech/mnemosyne/commit/563db7e4fed175fc4db497cdc7e48fba3b071ee1))
+* Fixed race condition in the notifier ([464a1ec](https://github.com/edlontech/mnemosyne/commit/464a1ec13db0bd728f013f634ddbb8ab10a62018))
+* Track committed step indices instead of trajectory IDs in auto-commit ([17714ce](https://github.com/edlontech/mnemosyne/commit/17714ceca24348c27542a1a7f963f0afa9cabbf1))
+
 ## [0.1.1](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.0...mnemosyne-v0.1.1) (2026-03-17)
 
 
