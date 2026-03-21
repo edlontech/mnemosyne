@@ -40,9 +40,9 @@ defmodule Mnemosyne.Notifier do
                boundary_detected: boolean()
              }, metadata()}
           | {:trajectory_committed, session_id :: String.t(), trajectory_id :: String.t(),
-             %{node_count: non_neg_integer()}, metadata()}
+             %{node_count: non_neg_integer(), node_ids: [String.t()]}, metadata()}
           | {:trajectory_flushed, session_id :: String.t(), trajectory_id :: String.t(),
-             %{node_count: non_neg_integer()}, metadata()}
+             %{node_count: non_neg_integer(), node_ids: [String.t()]}, metadata()}
           | {:session_expired, session_id :: String.t(), metadata()}
           | {:trajectory_extraction_failed, session_id :: String.t(), trajectory_id :: String.t(),
              reason :: term(), metadata()}

@@ -20,6 +20,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
     )
   end
 
+  @doc "Builds the system and user messages for the return-scoring prompt."
   @spec build_messages(map()) :: [map()]
   def build_messages(%{trajectory: trajectory, goal: goal, prescriptions: prescriptions}) do
     formatted_steps =
@@ -65,6 +66,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
     ]
   end
 
+  @doc "Parses and clamps the scored prescriptions from the LLM response."
   @spec parse_response(map()) :: {:ok, [map()]} | {:error, PromptError.t()}
   def parse_response(%{scores: [_ | _] = scores}) do
     clamped =

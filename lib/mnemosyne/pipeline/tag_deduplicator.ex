@@ -13,6 +13,7 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Tag
 
+  @doc "Deduplicates Tag nodes in the changeset against both the batch and the existing graph."
   @spec deduplicate(Changeset.t(), keyword()) :: {:ok, Changeset.t()} | {:error, term()}
   def deduplicate(%Changeset{} = changeset, opts) do
     {tags, other_nodes} = Enum.split_with(changeset.additions, &match?(%Tag{}, &1))
@@ -33,7 +34,7 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
     end
   end
 
-  defp do_deduplicate(tags, other_nodes, changeset, opts) do
+  defp do_deduplicate(tags, other_nodes, %Changeset{} = changeset, opts) do
     {kept_tags, rewrites} = deduplicate_batch(tags)
 
     rewrites = maybe_deduplicate_against_graph(kept_tags, rewrites, opts)
