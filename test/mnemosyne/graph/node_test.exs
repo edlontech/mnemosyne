@@ -16,6 +16,7 @@ defmodule Mnemosyne.Graph.NodeTest do
         observation: "user clicked button",
         action: "navigate",
         state: "idle",
+        subgoal: "find settings",
         reward: 1.0,
         trajectory_id: "traj-1"
       }
@@ -24,6 +25,7 @@ defmodule Mnemosyne.Graph.NodeTest do
       assert node.observation == "user clicked button"
       assert node.action == "navigate"
       assert node.state == "idle"
+      assert node.subgoal == "find settings"
       assert node.reward == 1.0
       assert node.trajectory_id == "traj-1"
     end
@@ -34,6 +36,7 @@ defmodule Mnemosyne.Graph.NodeTest do
         observation: "obs",
         action: "act",
         state: "s",
+        subgoal: "goal",
         reward: 0.5,
         trajectory_id: "t-1"
       }
@@ -49,6 +52,7 @@ defmodule Mnemosyne.Graph.NodeTest do
         observation: "obs",
         action: "act",
         state: "s",
+        subgoal: "goal",
         reward: 0.5,
         trajectory_id: "t-1",
         embedding: [0.1, 0.2],

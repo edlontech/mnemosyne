@@ -83,6 +83,15 @@ defmodule MnemosyneTest do
       {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
     end)
 
+    stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+      {:ok,
+       %LLM.Response{
+         content: %{reasoning: "analysis", information: "Summary."},
+         model: "test",
+         usage: %{}
+       }}
+    end)
+
     stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
       {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
     end)
@@ -337,6 +346,15 @@ defmodule MnemosyneTest do
 
       stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
         {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{reasoning: "analysis", information: "Summary."},
+           model: "test",
+           usage: %{}
+         }}
       end)
 
       assert {:ok, %ReasonedMemory{}} =

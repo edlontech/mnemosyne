@@ -120,7 +120,11 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     messages = ReasonEpisodic.build_messages(%{query: query, nodes: nodes})
 
     with {:ok, %LLM.Response{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :reason_episodic, llm_opts)),
+           llm.chat_structured(
+             messages,
+             ReasonEpisodic.schema(),
+             Config.llm_opts(config, :reason_episodic, llm_opts)
+           ),
          {:ok, summary} <- ReasonEpisodic.parse_response(content) do
       {:ok, {:episodic, summary}}
     end
@@ -130,7 +134,11 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     messages = ReasonSemantic.build_messages(%{query: query, nodes: nodes})
 
     with {:ok, %LLM.Response{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :reason_semantic, llm_opts)),
+           llm.chat_structured(
+             messages,
+             ReasonSemantic.schema(),
+             Config.llm_opts(config, :reason_semantic, llm_opts)
+           ),
          {:ok, summary} <- ReasonSemantic.parse_response(content) do
       {:ok, {:semantic, summary}}
     end
@@ -140,7 +148,11 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     messages = ReasonProcedural.build_messages(%{query: query, nodes: nodes})
 
     with {:ok, %LLM.Response{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :reason_procedural, llm_opts)),
+           llm.chat_structured(
+             messages,
+             ReasonProcedural.schema(),
+             Config.llm_opts(config, :reason_procedural, llm_opts)
+           ),
          {:ok, summary} <- ReasonProcedural.parse_response(content) do
       {:ok, {:procedural, summary}}
     end

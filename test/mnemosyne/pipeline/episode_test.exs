@@ -42,8 +42,8 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     end)
   end
 
-  defp stub_append_cycle(subgoal \\ "Navigate to config", reward \\ "0.8") do
-    stub_llm_responses([subgoal, reward])
+  defp stub_subgoal_only(subgoal \\ "Navigate to config") do
+    stub_llm_responses([subgoal])
     stub_embedding()
   end
 
@@ -61,8 +61,8 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
   end
 
   describe "append/4" do
-    test "adds a step to the episode" do
-      stub_append_cycle()
+    test "first append stores step with nil reward" do
+      stub_subgoal_only()
       episode = Episode.new("Test goal")
 
       assert {:ok, episode, _trace} =
@@ -72,9 +72,29 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       assert step.observation == "saw something"
       assert step.action == "did something"
       assert step.subgoal == "Navigate to config"
-      assert step.reward == 0.8
+      assert step.reward == nil
       assert step.index == 0
       assert is_list(step.embedding)
+    end
+
+    test "second append scores the previous step using current observation" do
+      # First append: subgoal only (no reward call)
+      stub_subgoal_only("Navigate to config")
+      episode = Episode.new("Test goal")
+
+      {:ok, episode, _trace} =
+        Episode.append(episode, "saw something", "did something", @default_opts)
+
+      # Second append: subgoal for step 1 + reward for step 0
+      stub_llm_responses(["Explore options", "0.8"])
+      stub_embedding()
+
+      {:ok, episode, _trace} =
+        Episode.append(episode, "result appeared", "clicked it", @default_opts)
+
+      assert [step_0, step_1] = episode.steps
+      assert step_0.reward == 0.8
+      assert step_1.reward == nil
     end
 
     test "rejects append on closed episode" do
@@ -91,7 +111,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       Mnemosyne.MockLLM
       |> stub(:chat, fn _messages, opts ->
         assert Keyword.get(opts, :model) == "test:model"
-        {:ok, %LLM.Response{content: "0.8", model: "mock:test", usage: %{}}}
+        {:ok, %LLM.Response{content: "subgoal", model: "mock:test", usage: %{}}}
       end)
 
       episode = Episode.new("Test goal")
@@ -109,6 +129,58 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
       assert {:error, :llm_failure} =
                Episode.append(episode, "obs", "act", @default_opts)
+    end
+  end
+
+  describe "score_pending_reward/2" do
+    test "scores the last step with sentinel" do
+      stub_subgoal_only()
+      episode = Episode.new("Test goal")
+      {:ok, episode, _} = Episode.append(episode, "saw something", "did something", @default_opts)
+
+      assert hd(episode.steps).reward == nil
+
+      stub_llm_responses(["0.7"])
+      assert {:ok, episode} = Episode.score_pending_reward(episode, @default_opts)
+      assert hd(episode.steps).reward == 0.7
+    end
+
+    test "is no-op for empty episode" do
+      episode = Episode.new("Test goal")
+      assert {:ok, ^episode} = Episode.score_pending_reward(episode, @default_opts)
+    end
+
+    test "is no-op when reward already scored" do
+      stub_subgoal_only()
+      episode = Episode.new("Test goal")
+      {:ok, episode, _} = Episode.append(episode, "obs", "act", @default_opts)
+
+      # Manually set reward
+      [step] = episode.steps
+      episode = %{episode | steps: [%{step | reward: 0.9}]}
+
+      assert {:ok, scored} = Episode.score_pending_reward(episode, @default_opts)
+      assert hd(scored.steps).reward == 0.9
+    end
+
+    test "falls back to 0.5 on LLM error" do
+      stub_subgoal_only()
+      episode = Episode.new("Test goal")
+      {:ok, episode, _} = Episode.append(episode, "obs", "act", @default_opts)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat, fn _messages, _opts -> {:error, :llm_failure} end)
+
+      assert {:ok, episode} = Episode.score_pending_reward(episode, @default_opts)
+      assert hd(episode.steps).reward == 0.5
+    end
+
+    test "rejects on closed episode" do
+      episode = Episode.new("Test goal")
+      {:ok, closed} = Episode.close(episode)
+
+      assert {:error, %EpisodeError{reason: :episode_closed}} =
+               Episode.score_pending_reward(closed, @default_opts)
     end
   end
 
@@ -182,12 +254,18 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
   describe "close/1" do
     test "closes episode and builds trajectories" do
-      stub_append_cycle()
+      stub_subgoal_only()
       episode = Episode.new("Test goal")
       {:ok, episode, _trace} = Episode.append(episode, "obs1", "act1", @default_opts)
 
-      stub_append_cycle("Same subgoal", "0.9")
+      # Second append: subgoal + reward for step 0
+      stub_llm_responses(["Same subgoal", "0.9"])
+      stub_embedding()
       {:ok, episode, _trace} = Episode.append(episode, "obs2", "act2", @default_opts)
+
+      # Score last pending step before close
+      stub_llm_responses(["0.8"])
+      {:ok, episode} = Episode.score_pending_reward(episode, @default_opts)
 
       {:ok, closed} = Episode.close(episode)
 

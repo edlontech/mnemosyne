@@ -38,7 +38,7 @@ defmodule Mnemosyne.Pipeline.Episode do
           action: String.t(),
           subgoal: String.t(),
           state: String.t() | nil,
-          reward: float(),
+          reward: float() | nil,
           embedding: [float()] | nil,
           trajectory_id: String.t()
         }
@@ -86,14 +86,15 @@ defmodule Mnemosyne.Pipeline.Episode do
                infer_subgoal(llm, observation, action, episode.goal, config, llm_opts),
              {:ok, %Embedding.Response{vectors: [subgoal_embedding | _]}} <-
                embedding.embed(subgoal, Config.embedding_opts(config)),
-             {:ok, reward} <- evaluate_reward(llm, observation, action, subgoal, config, llm_opts) do
+             {:ok, episode} <-
+               score_previous_step(episode, observation, llm, config, llm_opts) do
           step = %{
             index: length(episode.steps),
             observation: observation,
             action: action,
             subgoal: subgoal,
             state: nil,
-            reward: reward,
+            reward: nil,
             embedding: subgoal_embedding,
             trajectory_id: episode.current_trajectory_id
           }
@@ -117,7 +118,7 @@ defmodule Mnemosyne.Pipeline.Episode do
             step_index: step.index,
             trajectory_id: step.trajectory_id,
             boundary_detected: new_trajectory,
-            reward: reward,
+            reward: last_step_reward(episode.steps),
             duration_us: duration_us,
             subgoal: if(verbosity == :detailed, do: subgoal),
             similarity_score: if(verbosity == :detailed, do: similarity),
@@ -131,6 +132,44 @@ defmodule Mnemosyne.Pipeline.Episode do
         end
       end
     )
+  end
+
+  @doc "Scores the reward for the last step using a sentinel next-observation. Call before close."
+  @spec score_pending_reward(t(), keyword()) :: {:ok, t()} | {:error, EpisodeError.t()}
+  def score_pending_reward(%__MODULE__{closed: true}, _opts),
+    do: {:error, EpisodeError.exception(reason: :episode_closed)}
+
+  def score_pending_reward(%__MODULE__{steps: []} = episode, _opts), do: {:ok, episode}
+
+  def score_pending_reward(%__MODULE__{} = episode, opts) do
+    llm = Keyword.fetch!(opts, :llm)
+    config = Keyword.get(opts, :config)
+    llm_opts = Keyword.get(opts, :llm_opts, [])
+
+    {prev_steps, [last_step]} = Enum.split(episode.steps, -1)
+
+    if last_step.reward != nil do
+      {:ok, episode}
+    else
+      sentinel = "[Episode ended - no further observation]"
+
+      case evaluate_reward(
+             llm,
+             last_step.observation,
+             last_step.action,
+             last_step.subgoal,
+             sentinel,
+             config,
+             llm_opts
+           ) do
+        {:ok, reward} ->
+          {:ok, %{episode | steps: prev_steps ++ [%{last_step | reward: reward}]}}
+
+        {:error, _} ->
+          Logger.warning("final step reward scoring failed, using fallback 0.5")
+          {:ok, %{episode | steps: prev_steps ++ [%{last_step | reward: 0.5}]}}
+      end
+    end
   end
 
   @doc "Closes the episode, grouping steps into trajectory segments."
@@ -152,15 +191,51 @@ defmodule Mnemosyne.Pipeline.Episode do
     end
   end
 
-  defp evaluate_reward(llm, observation, action, subgoal, config, llm_opts) do
+  defp evaluate_reward(llm, observation, action, subgoal, next_observation, config, llm_opts) do
     messages =
-      GetReward.build_messages(%{observation: observation, action: action, subgoal: subgoal})
+      GetReward.build_messages(%{
+        observation: observation,
+        action: action,
+        subgoal: subgoal,
+        next_observation: next_observation
+      })
 
     with {:ok, %{content: content}} <-
            llm.chat(messages, Config.llm_opts(config, :get_reward, llm_opts)) do
       GetReward.parse_response(content)
     end
   end
+
+  defp score_previous_step(%{steps: []} = episode, _next_obs, _llm, _config, _llm_opts),
+    do: {:ok, episode}
+
+  defp score_previous_step(episode, next_observation, llm, config, llm_opts) do
+    {prev_steps, [last_step]} = Enum.split(episode.steps, -1)
+
+    if last_step.reward != nil do
+      {:ok, episode}
+    else
+      case evaluate_reward(
+             llm,
+             last_step.observation,
+             last_step.action,
+             last_step.subgoal,
+             next_observation,
+             config,
+             llm_opts
+           ) do
+        {:ok, reward} ->
+          {:ok, %{episode | steps: prev_steps ++ [%{last_step | reward: reward}]}}
+
+        {:error, _} ->
+          Logger.warning("deferred reward scoring failed, using fallback 0.5")
+          {:ok, %{episode | steps: prev_steps ++ [%{last_step | reward: 0.5}]}}
+      end
+    end
+  end
+
+  defp last_step_reward([]), do: nil
+  defp last_step_reward(steps), do: List.last(steps).reward
 
   defp maybe_segment_trajectory(%{current_subgoal_embedding: nil} = episode, _new_embedding),
     do: {episode, nil}

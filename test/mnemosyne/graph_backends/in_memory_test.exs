@@ -32,6 +32,7 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
       observation: "obs #{id}",
       action: "act #{id}",
       state: "state #{id}",
+      subgoal: "goal #{id}",
       reward: 1.0,
       trajectory_id: "traj-1",
       embedding: embedding

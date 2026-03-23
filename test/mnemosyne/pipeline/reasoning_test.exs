@@ -29,6 +29,7 @@ defmodule Mnemosyne.Pipeline.ReasoningTest do
          observation: "Server crashed",
          action: "Restarted",
          state: "Degraded",
+         subgoal: "restore service",
          reward: 0.3,
          trajectory_id: "t1"
        }, 0.9}
@@ -47,14 +48,15 @@ defmodule Mnemosyne.Pipeline.ReasoningTest do
          id: "proc_1",
          instruction: "Run migrations first",
          condition: "deploying to prod",
-         expected_outcome: "schema updated"
+         expected_outcome: "schema updated",
+         return_score: 0.9
        }, 0.88}
     ]
   end
 
   defp stub_reasoning_llm do
     Mnemosyne.MockLLM
-    |> stub(:chat, fn messages, _opts ->
+    |> stub(:chat_structured, fn messages, _schema, _opts ->
       system_content =
         messages
         |> Enum.find(%{content: ""}, &(&1.role == :system))
@@ -62,10 +64,26 @@ defmodule Mnemosyne.Pipeline.ReasoningTest do
 
       content =
         cond do
-          system_content =~ "episodic memories" -> "The server crashed and was restarted."
-          system_content =~ "factual knowledge" -> "Migrations should always run before deploy."
-          system_content =~ "procedural knowledge" -> "Run migrations first when deploying."
-          true -> "default summary"
+          system_content =~ "episodic memories" ->
+            %{
+              reasoning: "The crash event is directly relevant.",
+              information: "The server crashed and was restarted."
+            }
+
+          system_content =~ "factual knowledge" ->
+            %{
+              reasoning: "Migration fact is high confidence.",
+              information: "Migrations should always run before deploy."
+            }
+
+          system_content =~ "procedural knowledge" ->
+            %{
+              reasoning: "The migration procedure has high return.",
+              information: "Run migrations first when deploying."
+            }
+
+          true ->
+            %{reasoning: "analysis", information: "default summary"}
         end
 
       {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
@@ -121,7 +139,7 @@ defmodule Mnemosyne.Pipeline.ReasoningTest do
 
     test "propagates LLM errors" do
       Mnemosyne.MockLLM
-      |> stub(:chat, fn _messages, _opts -> {:error, :llm_unavailable} end)
+      |> stub(:chat_structured, fn _messages, _schema, _opts -> {:error, :llm_unavailable} end)
 
       result = build_retrieval_result(%{semantic: make_semantic_candidates()})
 
@@ -136,9 +154,15 @@ defmodule Mnemosyne.Pipeline.ReasoningTest do
       }
 
       Mnemosyne.MockLLM
-      |> stub(:chat, fn _messages, opts ->
+      |> stub(:chat_structured, fn _messages, _schema, opts ->
         assert Keyword.get(opts, :model) == "test:reasoning"
-        {:ok, %LLM.Response{content: "Summary.", model: "mock:test", usage: %{}}}
+
+        {:ok,
+         %LLM.Response{
+           content: %{reasoning: "analysis", information: "Summary."},
+           model: "mock:test",
+           usage: %{}
+         }}
       end)
 
       result = build_retrieval_result(%{semantic: make_semantic_candidates()})
@@ -170,6 +194,22 @@ defmodule Mnemosyne.Pipeline.ReasoningTest do
       assert memory.procedural == "Run migrations first when deploying."
       assert is_nil(memory.episodic)
       assert is_nil(memory.semantic)
+    end
+
+    test "rejects empty information field" do
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{reasoning: "analysis", information: ""},
+           model: "mock:test",
+           usage: %{}
+         }}
+      end)
+
+      result = build_retrieval_result(%{episodic: make_episodic_candidates()})
+
+      assert {:error, _} = Reasoning.reason(result, default_opts())
     end
   end
 end

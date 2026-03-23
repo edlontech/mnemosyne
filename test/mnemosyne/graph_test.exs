@@ -15,6 +15,7 @@ defmodule Mnemosyne.GraphTest do
       observation: "obs",
       action: "act",
       state: "s",
+      subgoal: "goal",
       reward: 1.0,
       trajectory_id: "traj1"
     }

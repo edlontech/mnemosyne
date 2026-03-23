@@ -21,7 +21,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
             Zoi.map(
               %{
                 proposition: Zoi.string(),
-                concepts: Zoi.list(Zoi.string())
+                concepts: Zoi.list(Zoi.string()),
+                confidence: Zoi.float()
               },
               coerce: true
             )
@@ -48,12 +49,22 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
         Given a trajectory segment, extract propositional knowledge — facts the agent
         learned from this experience.
 
-        For each fact, also identify the key concepts (entities, terms, topics) that
-        the fact relates to. These concepts serve as semantic indices for retrieval.
+        Quality constraints:
+        - Coreference resolution: replace all pronouns with their explicit referents.
+          Each proposition must be self-contained and interpretable without context.
+        - Deduplication: if multiple steps yield the same fact, emit it once.
+          Prefer the most specific formulation.
+        - Atomicity: each proposition must express exactly one fact. No compound statements.
+
+        For each fact, identify:
+        - "concepts": key terms (entities, topics) the fact relates to, used as semantic indices
+        - "confidence": your confidence in this proposition from 0.0 to 1.0
+          (0.0 = uncertain/inferred, 1.0 = directly stated and unambiguous)
 
         Return your response as a JSON object with a "facts" array. Each fact has:
         - "proposition": a self-contained factual statement
-        - "concepts": array of concept terms (entities, topics) related to the fact\
+        - "concepts": array of concept terms
+        - "confidence": float between 0.0 and 1.0\
         """
       },
       %{
@@ -76,7 +87,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
      Enum.map(facts, fn fact ->
        %{
          proposition: fact[:proposition],
-         concepts: fact[:concepts] || []
+         concepts: fact[:concepts] || [],
+         confidence: parse_confidence(fact[:confidence])
        }
      end)}
   end
@@ -84,4 +96,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
   def parse_response(_) do
     {:error, PromptError.exception(prompt: :get_semantic, reason: :no_facts_extracted)}
   end
+
+  defp parse_confidence(val) when is_float(val) and val >= 0.0 and val <= 1.0, do: val
+  defp parse_confidence(val) when is_number(val), do: max(0.0, min(1.0, val / 1))
+  defp parse_confidence(_), do: 1.0
 end

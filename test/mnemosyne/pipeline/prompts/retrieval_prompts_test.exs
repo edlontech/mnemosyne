@@ -71,18 +71,22 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
 
   describe "ReasonEpisodic" do
     test "build_messages formats episodic nodes" do
+      now = DateTime.utc_now()
+
       nodes = [
         %{
           observation: "Server crashed",
           action: "Restarted service",
           state: "Degraded",
-          reward: 0.3
+          reward: 0.3,
+          created_at: now
         },
         %{
           observation: "Service recovered",
           action: "Verified health",
           state: "Healthy",
-          reward: 0.9
+          reward: 0.9,
+          created_at: now
         }
       ]
 
@@ -90,28 +94,38 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
         ReasonEpisodic.build_messages(%{query: "What happened during the outage?", nodes: nodes})
 
       assert [%{role: :system}, %{role: :user, content: user}] = messages
-      assert user =~ "Episode 1:"
-      assert user =~ "Episode 2:"
+      assert user =~ "Episode 1"
+      assert user =~ "Episode 2"
       assert user =~ "Server crashed"
       assert user =~ "What happened during the outage?"
     end
 
-    test "parse_response returns trimmed summary" do
+    test "parse_response extracts information from structured response" do
       assert {:ok, "The server crashed and was restarted."} =
-               ReasonEpisodic.parse_response("  The server crashed and was restarted.  \n")
+               ReasonEpisodic.parse_response(%{
+                 reasoning: "The crash is relevant.",
+                 information: "The server crashed and was restarted."
+               })
     end
 
-    test "parse_response rejects empty response" do
+    test "parse_response rejects empty information" do
       assert {:error, %PromptError{reason: :empty_response}} =
-               ReasonEpisodic.parse_response("   ")
+               ReasonEpisodic.parse_response(%{reasoning: "analysis", information: "   "})
+    end
+
+    test "parse_response rejects missing information" do
+      assert {:error, %PromptError{reason: :empty_response}} =
+               ReasonEpisodic.parse_response(%{})
     end
   end
 
   describe "ReasonSemantic" do
     test "build_messages formats semantic nodes with confidence" do
+      now = DateTime.utc_now()
+
       nodes = [
-        %{proposition: "Elixir runs on the BEAM VM", confidence: 0.95},
-        %{proposition: "GenServers handle synchronous calls", confidence: 0.88}
+        %{proposition: "Elixir runs on the BEAM VM", confidence: 0.95, created_at: now},
+        %{proposition: "GenServers handle synchronous calls", confidence: 0.88, created_at: now}
       ]
 
       messages =
@@ -124,28 +138,38 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
       assert user =~ "Tell me about Elixir runtime"
     end
 
-    test "parse_response returns trimmed summary" do
+    test "parse_response extracts information from structured response" do
       assert {:ok, "Elixir leverages the BEAM VM for concurrency."} =
-               ReasonSemantic.parse_response("  Elixir leverages the BEAM VM for concurrency.  ")
+               ReasonSemantic.parse_response(%{
+                 reasoning: "The BEAM fact is high confidence.",
+                 information: "Elixir leverages the BEAM VM for concurrency."
+               })
     end
 
-    test "parse_response rejects empty response" do
-      assert {:error, %PromptError{reason: :empty_response}} = ReasonSemantic.parse_response("")
+    test "parse_response rejects empty information" do
+      assert {:error, %PromptError{reason: :empty_response}} =
+               ReasonSemantic.parse_response(%{reasoning: "analysis", information: ""})
     end
   end
 
   describe "ReasonProcedural" do
     test "build_messages formats procedural nodes" do
+      now = DateTime.utc_now()
+
       nodes = [
         %{
           condition: "deploying to prod",
           instruction: "run migrations first",
-          expected_outcome: "schema is updated"
+          expected_outcome: "schema is updated",
+          return_score: 0.9,
+          created_at: now
         },
         %{
           condition: "high traffic",
           instruction: "enable rate limiting",
-          expected_outcome: "system stays stable"
+          expected_outcome: "system stays stable",
+          return_score: nil,
+          created_at: now
         }
       ]
 
@@ -153,22 +177,25 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
         ReasonProcedural.build_messages(%{query: "How do I deploy safely?", nodes: nodes})
 
       assert [%{role: :system}, %{role: :user, content: user}] = messages
-      assert user =~ "Procedure 1:"
+      assert user =~ "Procedure 1"
       assert user =~ "WHEN deploying to prod"
       assert user =~ "DO run migrations first"
       assert user =~ "How do I deploy safely?"
+      assert user =~ "return: 0.90"
+      assert user =~ "return: N/A"
     end
 
-    test "parse_response returns trimmed summary" do
+    test "parse_response extracts information from structured response" do
       assert {:ok, "First run migrations, then deploy the new code."} =
-               ReasonProcedural.parse_response(
-                 "  First run migrations, then deploy the new code.  "
-               )
+               ReasonProcedural.parse_response(%{
+                 reasoning: "Migration procedure has high return.",
+                 information: "First run migrations, then deploy the new code."
+               })
     end
 
-    test "parse_response rejects empty response" do
+    test "parse_response rejects empty information" do
       assert {:error, %PromptError{reason: :empty_response}} =
-               ReasonProcedural.parse_response("   ")
+               ReasonProcedural.parse_response(%{reasoning: "analysis", information: "   "})
     end
   end
 end

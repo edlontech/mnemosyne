@@ -251,8 +251,13 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
   describe "Reasoning.reason/2 telemetry" do
     test "emits start and stop events" do
       Mnemosyne.MockLLM
-      |> stub(:chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "Summary text.", model: "mock:test", usage: %{}}}
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{reasoning: "analysis", information: "Summary text."},
+           model: "mock:test",
+           usage: %{}
+         }}
       end)
 
       attach_telemetry([:mnemosyne, :reasoning, :reason, :start])

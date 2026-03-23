@@ -772,15 +772,16 @@ defmodule Mnemosyne.Session do
     if auto_commit_enabled?(data) do
       handle_auto_commit_close(data, from)
     else
-      case Episode.close(data.episode) do
-        {:ok, closed_episode} ->
-          new_data = %{data | episode: closed_episode}
-          task = spawn_extraction(new_data)
-          emit_transition(data, :collecting, :extracting)
+      reward_opts = [llm: data.llm, config: data.config]
 
-          {:next_state, :extracting, %{new_data | extraction_task: task.ref},
-           [{:reply, from, :ok}]}
+      with {:ok, scored_episode} <- Episode.score_pending_reward(data.episode, reward_opts),
+           {:ok, closed_episode} <- Episode.close(scored_episode) do
+        new_data = %{data | episode: closed_episode}
+        task = spawn_extraction(new_data)
+        emit_transition(data, :collecting, :extracting)
 
+        {:next_state, :extracting, %{new_data | extraction_task: task.ref}, [{:reply, from, :ok}]}
+      else
         {:error, _} = error ->
           {:keep_state_and_data, [{:reply, from, error}]}
       end
@@ -869,16 +870,26 @@ defmodule Mnemosyne.Session do
   end
 
   defp handle_auto_commit_close(data, from) do
-    case uncommitted_current_steps(data) do
-      [] ->
-        emit_transition(data, :collecting, :idle)
-        {:next_state, :idle, reset_session_data(data), [{:reply, from, :ok}]}
+    reward_opts = [llm: data.llm, config: data.config]
 
-      steps ->
-        trajectory = Episode.build_trajectory_from_steps(steps)
-        task = spawn_trajectory_task(data, trajectory)
-        emit_transition(data, :collecting, :extracting)
-        {:next_state, :extracting, %{data | extraction_task: task.ref}, [{:reply, from, :ok}]}
+    case Episode.score_pending_reward(data.episode, reward_opts) do
+      {:ok, scored_episode} ->
+        data = %{data | episode: scored_episode}
+
+        case uncommitted_current_steps(data) do
+          [] ->
+            emit_transition(data, :collecting, :idle)
+            {:next_state, :idle, reset_session_data(data), [{:reply, from, :ok}]}
+
+          steps ->
+            trajectory = Episode.build_trajectory_from_steps(steps)
+            task = spawn_trajectory_task(data, trajectory)
+            emit_transition(data, :collecting, :extracting)
+            {:next_state, :extracting, %{data | extraction_task: task.ref}, [{:reply, from, :ok}]}
+        end
+
+      {:error, _} = error ->
+        {:keep_state_and_data, [{:reply, from, error}]}
     end
   end
 
@@ -1071,13 +1082,15 @@ defmodule Mnemosyne.Session do
   end
 
   defp execute_drain_op({:close}, data) do
-    case Episode.close(data.episode) do
-      {:ok, closed} ->
-        data = cancel_timers(data)
-        task = spawn_extraction(%{data | episode: closed})
-        emit_transition(data, :collecting, :extracting)
-        {:ok, :closed, :extracting, %{data | episode: closed, extraction_task: task.ref}}
+    reward_opts = [llm: data.llm, config: data.config]
 
+    with {:ok, scored_episode} <- Episode.score_pending_reward(data.episode, reward_opts),
+         {:ok, closed} <- Episode.close(scored_episode) do
+      data = cancel_timers(data)
+      task = spawn_extraction(%{data | episode: closed})
+      emit_transition(data, :collecting, :extracting)
+      {:ok, :closed, :extracting, %{data | episode: closed, extraction_task: task.ref}}
+    else
       {:error, reason} ->
         {:error, reason}
     end

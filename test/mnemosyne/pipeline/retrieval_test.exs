@@ -66,6 +66,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       observation: "Server crashed",
       action: "Restarted service",
       state: "Degraded",
+      subgoal: "restore service",
       reward: 0.3,
       trajectory_id: "traj_1",
       embedding: @test_vector
@@ -75,6 +76,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       observation: "Service recovered",
       action: "Verified health",
       state: "Healthy",
+      subgoal: "verify recovery",
       reward: 0.9,
       trajectory_id: "traj_1",
       embedding: @alt_vector
@@ -214,6 +216,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       observation: "Server crashed under load",
       action: "Added connection pooling",
       state: "Degraded",
+      subgoal: "fix stability",
       reward: 0.7,
       trajectory_id: "traj_1",
       embedding: @test_vector
@@ -223,6 +226,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       observation: "Pool stabilized throughput",
       action: "Verified metrics",
       state: "Healthy",
+      subgoal: "verify fix",
       reward: 0.9,
       trajectory_id: "traj_1",
       embedding: @alt_vector

@@ -10,6 +10,7 @@ defmodule Mnemosyne.Graph.Node.Episodic do
     field :observation, String.t()
     field :action, String.t()
     field :state, String.t()
+    field :subgoal, String.t()
     field :reward, float()
     field :trajectory_id, String.t()
     field :embedding, [float()] | nil, enforce: false, default: nil

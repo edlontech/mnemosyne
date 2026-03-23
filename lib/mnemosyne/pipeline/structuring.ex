@@ -263,6 +263,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
         observation: step.observation,
         action: step.action,
         state: step.state,
+        subgoal: step.subgoal,
         reward: step.reward,
         trajectory_id: trajectory.id,
         embedding: step.embedding
@@ -338,7 +339,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
     sem_node = %Semantic{
       id: generate_id("sem"),
       proposition: fact.proposition,
-      confidence: 1.0,
+      confidence: fact.confidence,
       embedding: emb
     }
 

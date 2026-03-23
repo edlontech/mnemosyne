@@ -41,13 +41,15 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
         GetReward.build_messages(%{
           observation: "Server responded 200",
           action: "Send GET request",
-          subgoal: "Verify API health"
+          subgoal: "Verify API health",
+          next_observation: "Dashboard shows green"
         })
 
       assert [%{role: :system}, %{role: :user, content: user}] = messages
       assert user =~ "Verify API health"
       assert user =~ "Server responded 200"
       assert user =~ "Send GET request"
+      assert user =~ "Dashboard shows green"
     end
 
     test "parse_response extracts valid float" do
