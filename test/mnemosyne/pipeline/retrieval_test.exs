@@ -16,6 +16,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
   alias Mnemosyne.GraphBackends.InMemory
   alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Retrieval
+  alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
   @default_opts [
     llm: Mnemosyne.MockLLM,
@@ -291,7 +292,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     result.candidates
     |> Map.values()
     |> List.flatten()
-    |> Enum.map(fn {node, _} -> NodeProtocol.id(node) end)
+    |> Enum.map(fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
   end
 
   describe "retrieval with provenance edges" do
@@ -357,7 +358,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       semantic_nodes =
         result.candidates
         |> Map.get(:semantic, [])
-        |> Enum.map(fn {node, _} -> node end)
+        |> Enum.map(fn %TaggedCandidate{node: node} -> node end)
 
       assert semantic_nodes != []
 
@@ -383,7 +384,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       procedural_nodes =
         result.candidates
         |> Map.get(:procedural, [])
-        |> Enum.map(fn {node, _} -> node end)
+        |> Enum.map(fn %TaggedCandidate{node: node} -> node end)
 
       assert procedural_nodes != []
 
@@ -403,7 +404,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     test "discovers sibling semantic nodes through shared tags" do
       graph = build_routing_test_graph()
       backend = {InMemory, %InMemory{graph: graph}}
-      candidates = [{Graph.get_node(graph, "sem_pasta"), 0.9}]
+      candidates = [TaggedCandidate.from_hop_0(Graph.get_node(graph, "sem_pasta"), 0.9)]
       seen = MapSet.new(["sem_pasta"])
 
       siblings = Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:tag])
@@ -417,7 +418,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     test "discovers sibling procedural nodes through shared intents" do
       graph = build_routing_test_graph()
       backend = {InMemory, %InMemory{graph: graph}}
-      candidates = [{Graph.get_node(graph, "proc_migrate"), 0.9}]
+      candidates = [TaggedCandidate.from_hop_0(Graph.get_node(graph, "proc_migrate"), 0.9)]
       seen = MapSet.new(["proc_migrate"])
 
       siblings = Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:intent])
@@ -430,7 +431,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     test "excludes routing nodes from results" do
       graph = build_routing_test_graph()
       backend = {InMemory, %InMemory{graph: graph}}
-      candidates = [{Graph.get_node(graph, "sem_pasta"), 0.9}]
+      candidates = [TaggedCandidate.from_hop_0(Graph.get_node(graph, "sem_pasta"), 0.9)]
       seen = MapSet.new(["sem_pasta"])
 
       siblings = Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:tag])
@@ -442,7 +443,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     test "returns empty list when no routing neighbors exist" do
       graph = build_routing_test_graph()
       backend = {InMemory, %InMemory{graph: graph}}
-      candidates = [{Graph.get_node(graph, "src_orphan"), 0.5}]
+      candidates = [TaggedCandidate.from_hop_0(Graph.get_node(graph, "src_orphan"), 0.5)]
       seen = MapSet.new(["src_orphan"])
 
       assert [] == Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:tag])
@@ -503,7 +504,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         result.candidates
         |> Map.values()
         |> List.flatten()
-        |> Enum.map(fn {node, _} -> node.id end)
+        |> Enum.map(fn %TaggedCandidate{node: node} -> node.id end)
 
       assert "sem_close" in all_ids
       assert "sem_far" in all_ids
@@ -572,7 +573,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         result.candidates
         |> Map.values()
         |> List.flatten()
-        |> Enum.map(fn {n, _} -> n.id end)
+        |> Enum.map(fn %TaggedCandidate{node: n} -> n.id end)
 
       assert "sem_b" in all_ids
       assert "proc_b" in all_ids
@@ -590,7 +591,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         result.candidates
         |> Map.values()
         |> List.flatten()
-        |> Enum.map(fn {node, _} -> NodeProtocol.node_type(node) end)
+        |> Enum.map(fn %TaggedCandidate{node: node} -> NodeProtocol.node_type(node) end)
 
       refute :tag in all_types
       refute :intent in all_types
@@ -671,7 +672,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         result.candidates
         |> Map.values()
         |> List.flatten()
-        |> Enum.map(fn {node, _score} -> node.id end)
+        |> Enum.map(fn %TaggedCandidate{node: node} -> node.id end)
 
       refute "ep_1" in all_ids
       refute "ep_2" in all_ids
@@ -690,7 +691,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         result.candidates
         |> Map.values()
         |> List.flatten()
-        |> Enum.map(fn {node, _score} -> node.id end)
+        |> Enum.map(fn %TaggedCandidate{node: node} -> node.id end)
 
       assert "ep_1" in all_candidates or "ep_2" in all_candidates
     end
@@ -784,7 +785,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         result.candidates
         |> Map.values()
         |> List.flatten()
-        |> Enum.map(fn {node, _score} -> node.id end)
+        |> Enum.map(fn %TaggedCandidate{node: node} -> node.id end)
 
       assert "proc_1" in all_ids
       refute "int_1" in all_ids
@@ -802,7 +803,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         result.candidates
         |> Map.values()
         |> List.flatten()
-        |> Enum.map(fn {node, _score} -> node.id end)
+        |> Enum.map(fn %TaggedCandidate{node: node} -> node.id end)
 
       assert "sem_1" in all_ids
       refute "tag_1" in all_ids
@@ -818,7 +819,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       result.candidates
       |> Map.values()
       |> List.flatten()
-      |> Enum.each(fn {_node, score} ->
+      |> Enum.each(fn %TaggedCandidate{score: score} ->
         assert is_float(score)
       end)
     end

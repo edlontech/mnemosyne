@@ -172,17 +172,37 @@ value_function: %{
 
 ## Result Structure
 
-`recall/3` runs the retrieval pipeline and then passes the candidates through a **reasoning** step that synthesizes them into typed summaries using LLM calls. The final result is a `ReasonedMemory` struct:
+`recall/3` runs the retrieval pipeline and then passes the candidates through a **reasoning** step that synthesizes them into typed summaries using LLM calls. The final result is a `RecallResult` struct:
 
 ```elixir
-%Mnemosyne.Pipeline.Reasoning.ReasonedMemory{
-  episodic: "The user previously planned a trip to Kyoto...",
-  semantic: "The user prefers 2-week trips and travels in March...",
-  procedural: "When discussing destinations, first confirm travel dates..."
+%Mnemosyne.Pipeline.RecallResult{
+  reasoned: %Mnemosyne.Pipeline.Reasoning.ReasonedMemory{
+    episodic: "The user previously planned a trip to Kyoto...",
+    semantic: "The user prefers 2-week trips and travels in March...",
+    procedural: "When discussing destinations, first confirm travel dates..."
+  },
+  touched_nodes: [
+    %Mnemosyne.Pipeline.Retrieval.TouchedNode{
+      id: "sem_42", type: :semantic, score: 0.92, phase: :initial, hop: 0
+    },
+    %Mnemosyne.Pipeline.Retrieval.TouchedNode{
+      id: "ep_7", type: :episodic, score: 0.85, phase: :multi_hop, hop: 1
+    }
+  ],
+  trace: %Mnemosyne.Notifier.Trace.Recall{
+    mode: :mixed,
+    tags: ["travel", "preferences"],
+    candidate_count: 5,
+    phase_timings: %{hop_0: 1200, multi_hop: 3400, ...}
+  }
 }
 ```
 
-Each field is a natural-language summary of the relevant candidates for that memory type, or `nil` when no candidates of that type were found. The reasoning step runs in parallel across the three types.
+The `reasoned` field contains natural-language summaries per memory type (`nil` when no candidates of that type were found). The reasoning step runs in parallel across the three types.
+
+The `touched_nodes` field lists every node that contributed to the result, sorted by score. Each entry carries the node's origin phase (`:initial`, `:multi_hop`, `:refinement`, or `:provenance`) and hop number. When `config.trace_verbosity` is `:detailed`, the full node struct is included in the `node` field; at `:summary` (the default) it is `nil`.
+
+The `trace` field provides execution metadata: classified mode, generated tags, per-phase timings, candidate counts per hop, and composite scores per node.
 
 ## Next Steps
 

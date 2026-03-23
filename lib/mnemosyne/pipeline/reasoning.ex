@@ -16,6 +16,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   alias Mnemosyne.Pipeline.Prompts.ReasonProcedural
   alias Mnemosyne.Pipeline.Prompts.ReasonSemantic
   alias Mnemosyne.Pipeline.Retrieval
+  alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
   use TypedStruct
 
@@ -113,7 +114,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   defp extract_nodes(candidates, type) do
     candidates
     |> Map.get(type, [])
-    |> Enum.map(fn {node, _score} -> node end)
+    |> Enum.map(fn %TaggedCandidate{node: node} -> node end)
   end
 
   defp run_reasoning(:episodic, query, nodes, llm, llm_opts, config) do

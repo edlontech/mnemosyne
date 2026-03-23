@@ -15,9 +15,9 @@ defmodule Mnemosyne.Notifier.Trace.Recall do
     field :result_count, non_neg_integer(), default: 0
     field :duration_us, non_neg_integer(), default: 0
 
-    field :candidates_per_hop, [map()], default: nil
-    field :scores, [map()], default: nil
-    field :rejected, [map()], default: nil
-    field :phase_timings, map(), default: nil
+    field :candidates_per_hop, %{non_neg_integer() => non_neg_integer()} | nil, default: nil
+    field :scores, %{String.t() => float()} | nil, default: nil
+    field :rejected, %{atom() => non_neg_integer()} | nil, default: nil
+    field :phase_timings, %{atom() => non_neg_integer()} | nil, default: nil
   end
 end

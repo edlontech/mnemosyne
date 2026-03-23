@@ -9,6 +9,7 @@ defmodule Mnemosyne.Pipeline.ReasoningTest do
   alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
+  alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
   setup :set_mimic_from_context
 
@@ -24,33 +25,42 @@ defmodule Mnemosyne.Pipeline.ReasoningTest do
 
   defp make_episodic_candidates do
     [
-      {%Episodic{
-         id: "ep_1",
-         observation: "Server crashed",
-         action: "Restarted",
-         state: "Degraded",
-         subgoal: "restore service",
-         reward: 0.3,
-         trajectory_id: "t1"
-       }, 0.9}
+      TaggedCandidate.from_hop_0(
+        %Episodic{
+          id: "ep_1",
+          observation: "Server crashed",
+          action: "Restarted",
+          state: "Degraded",
+          subgoal: "restore service",
+          reward: 0.3,
+          trajectory_id: "t1"
+        },
+        0.9
+      )
     ]
   end
 
   defp make_semantic_candidates do
     [
-      {%Semantic{id: "sem_1", proposition: "Always run migrations", confidence: 0.95}, 0.85}
+      TaggedCandidate.from_hop_0(
+        %Semantic{id: "sem_1", proposition: "Always run migrations", confidence: 0.95},
+        0.85
+      )
     ]
   end
 
   defp make_procedural_candidates do
     [
-      {%Procedural{
-         id: "proc_1",
-         instruction: "Run migrations first",
-         condition: "deploying to prod",
-         expected_outcome: "schema updated",
-         return_score: 0.9
-       }, 0.88}
+      TaggedCandidate.from_hop_0(
+        %Procedural{
+          id: "proc_1",
+          instruction: "Run migrations first",
+          condition: "deploying to prod",
+          expected_outcome: "schema updated",
+          return_score: 0.9
+        },
+        0.88
+      )
     ]
   end
 

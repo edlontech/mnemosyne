@@ -75,6 +75,7 @@ defmodule Mnemosyne do
   alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Errors.Framework.RepoError
   alias Mnemosyne.MemoryStore
+  alias Mnemosyne.Pipeline.RecallResult
   alias Mnemosyne.Session
   alias Mnemosyne.Supervisor, as: MneSupervisor
 
@@ -458,7 +459,7 @@ defmodule Mnemosyne do
       {:ok, memories} = Mnemosyne.recall("my-repo", "How to handle GenServer timeouts?")
   """
   @spec recall(String.t(), String.t(), keyword()) ::
-          {:ok, term()} | {:error, Mnemosyne.Errors.error()}
+          {:ok, RecallResult.t()} | {:error, Mnemosyne.Errors.error()}
   def recall(repo_id, query, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.recall(pid, query, opts)
@@ -477,7 +478,7 @@ defmodule Mnemosyne do
       {:ok, memories} = Mnemosyne.recall_in_context("my-repo", session_id, "What patterns apply here?")
   """
   @spec recall_in_context(String.t(), String.t(), String.t(), keyword()) ::
-          {:ok, term()} | {:error, Mnemosyne.Errors.error()}
+          {:ok, RecallResult.t()} | {:error, Mnemosyne.Errors.error()}
   def recall_in_context(repo_id, session_id, query, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       case lookup_session(session_id, opts) do

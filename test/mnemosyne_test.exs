@@ -15,6 +15,7 @@ defmodule MnemosyneTest do
   alias Mnemosyne.LLM
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
+  alias Mnemosyne.Pipeline.RecallResult
 
   @moduletag :tmp_dir
 
@@ -190,7 +191,9 @@ defmodule MnemosyneTest do
       :ok = Mnemosyne.apply_changeset(repo, changeset)
 
       assert_eventually(Mnemosyne.get_graph(repo).nodes["s1"] != nil)
-      assert {:ok, %ReasonedMemory{}} = Mnemosyne.recall(repo, "what is elixir?")
+
+      assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}}} =
+               Mnemosyne.recall(repo, "what is elixir?")
     end
 
     test "returns error when repo does not exist", %{tmp_dir: tmp_dir} do
@@ -357,7 +360,7 @@ defmodule MnemosyneTest do
          }}
       end)
 
-      assert {:ok, %ReasonedMemory{}} =
+      assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}}} =
                Mnemosyne.recall_in_context(repo, session_id, "what is pattern matching?")
 
       [{:query, augmented_query}] = :ets.lookup(queries_seen, :query)

@@ -10,6 +10,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
   alias Mnemosyne.Pipeline.Episode
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Retrieval
+  alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
   alias Mnemosyne.Pipeline.Structuring
   alias Mnemosyne.ValueFunction
 
@@ -268,7 +269,10 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
         tags: ["test"],
         candidates: %{
           semantic: [
-            {%Semantic{id: "sem_1", proposition: "fact", confidence: 0.9}, 0.85}
+            TaggedCandidate.from_hop_0(
+              %Semantic{id: "sem_1", proposition: "fact", confidence: 0.9},
+              0.85
+            )
           ]
         }
       }

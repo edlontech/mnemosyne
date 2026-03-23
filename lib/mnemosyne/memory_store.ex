@@ -23,7 +23,9 @@ defmodule Mnemosyne.MemoryStore do
   alias Mnemosyne.Pipeline.Decay
   alias Mnemosyne.Pipeline.IntentMerger
   alias Mnemosyne.Pipeline.Reasoning
+  alias Mnemosyne.Pipeline.RecallResult
   alias Mnemosyne.Pipeline.Retrieval
+  alias Mnemosyne.Pipeline.Retrieval.TouchedNode
   alias Mnemosyne.Pipeline.SemanticConsolidator
   alias Mnemosyne.Pipeline.TagDeduplicator
   alias Mnemosyne.Telemetry
@@ -54,14 +56,14 @@ defmodule Mnemosyne.MemoryStore do
 
   @doc "Runs async retrieval + reasoning and returns the result."
   @spec recall(GenServer.server(), String.t(), keyword()) ::
-          {:ok, Reasoning.ReasonedMemory.t()} | {:error, Mnemosyne.Errors.error()}
+          {:ok, RecallResult.t()} | {:error, Mnemosyne.Errors.error()}
   def recall(server, query, opts \\ []) do
     GenServer.call(server, {:recall, query, opts}, :timer.seconds(120))
   end
 
   @doc "Fetches session context, augments the query, then runs recall."
   @spec recall_in_context(GenServer.server(), term(), String.t(), keyword()) ::
-          {:ok, Reasoning.ReasonedMemory.t()} | {:error, Mnemosyne.Errors.error()}
+          {:ok, RecallResult.t()} | {:error, Mnemosyne.Errors.error()}
   def recall_in_context(server, session_id, query, opts \\ []) do
     GenServer.call(server, {:recall_in_context, session_id, query, opts}, :timer.seconds(120))
   end
@@ -572,18 +574,18 @@ defmodule Mnemosyne.MemoryStore do
     metadata = %{session_id: session_id}
 
     case result do
-      {:ok, reasoned, candidates, trace} ->
-        metadata = Map.put(metadata, :trace, trace)
+      {:ok, %RecallResult{} = recall_result} ->
+        metadata = Map.put(metadata, :trace, recall_result.trace)
 
         Notifier.safe_notify(
           state.notifier,
           state.repo_id,
-          {:recall_executed, query, {:ok, reasoned}, metadata}
+          {:recall_executed, query, {:ok, recall_result}, metadata}
         )
 
-        GenServer.reply(from, {:ok, reasoned})
+        GenServer.reply(from, {:ok, recall_result})
 
-        backend = update_access_metadata(candidates, state.backend)
+        backend = update_access_metadata(recall_result.touched_nodes, state.backend)
         {:noreply, %{state | pending_recalls: pending, backend: backend}}
 
       {:error, reason} ->
@@ -617,6 +619,7 @@ defmodule Mnemosyne.MemoryStore do
     session_id = Keyword.get(opts, :session_id)
     backend = state.backend
     repo_id = state.repo_id
+    verbosity = if config, do: config.trace_verbosity, else: :summary
 
     Task.Supervisor.async_nolink(state.task_supervisor, fn ->
       retrieval_opts = [
@@ -639,7 +642,14 @@ defmodule Mnemosyne.MemoryStore do
                query: query,
                config: config
              ) do
-        {:ok, reasoned, result.candidates, trace}
+        touched_nodes =
+          result.candidates
+          |> Map.values()
+          |> List.flatten()
+          |> Enum.map(&TouchedNode.from_tagged(&1, verbosity))
+          |> Enum.sort_by(& &1.score, :desc)
+
+        {:ok, %RecallResult{reasoned: reasoned, touched_nodes: touched_nodes, trace: trace}}
       end
     end)
   end
@@ -663,13 +673,8 @@ defmodule Mnemosyne.MemoryStore do
   defp maybe_update_metadata(backend_mod, metadata, bs),
     do: backend_mod.update_metadata(metadata, bs)
 
-  defp update_access_metadata(candidates, {backend_mod, backend_state}) do
-    node_ids =
-      candidates
-      |> Map.values()
-      |> List.flatten()
-      |> Enum.map(fn {node, _score} -> Mnemosyne.Graph.Node.id(node) end)
-
+  defp update_access_metadata(touched_nodes, {backend_mod, backend_state}) do
+    node_ids = Enum.map(touched_nodes, & &1.id)
     do_update_access_metadata(node_ids, backend_mod, backend_state)
   end
 

@@ -16,6 +16,7 @@ defmodule Mnemosyne.MemoryStoreTest do
   alias Mnemosyne.MemoryStore
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
+  alias Mnemosyne.Pipeline.RecallResult
 
   @moduletag :tmp_dir
 
@@ -198,7 +199,53 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s1") != nil)
 
-      assert {:ok, %ReasonedMemory{}} = MemoryStore.recall(pid, "what is elixir?")
+      assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}}} =
+               MemoryStore.recall(pid, "what is elixir?")
+    end
+
+    test "recall result includes touched_nodes and trace", %{tmp_dir: tmp_dir} do
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{reasoning: "analysis", information: "Summary."},
+           model: "test",
+           usage: %{}
+         }}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+      end)
+
+      pid = start_store(tmp_dir)
+
+      node = make_semantic("s1", "Elixir is functional")
+      tag = %Tag{id: "t1", label: "elixir"}
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(node)
+        |> Changeset.add_node(tag)
+
+      :ok = MemoryStore.apply_changeset(pid, changeset)
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s1") != nil)
+
+      assert {:ok, %RecallResult{touched_nodes: touched, trace: trace}} =
+               MemoryStore.recall(pid, "what is elixir?")
+
+      assert is_list(touched)
+      assert trace.phase_timings != nil
+      assert trace.candidates_per_hop != nil
+      assert trace.scores != nil
     end
   end
 
@@ -416,7 +463,7 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s1") != nil)
 
-      assert {:ok, %ReasonedMemory{}} =
+      assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}}} =
                MemoryStore.recall_in_context(pid, "nonexistent-session", "what is elixir?")
     end
   end
@@ -501,7 +548,8 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       {:ok, %{}} = MemoryStore.get_metadata(pid, ["s1"])
 
-      assert {:ok, %ReasonedMemory{}} = MemoryStore.recall(pid, "what is elixir?")
+      assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}}} =
+               MemoryStore.recall(pid, "what is elixir?")
 
       assert_eventually(
         match?(

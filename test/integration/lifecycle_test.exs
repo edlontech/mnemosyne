@@ -5,6 +5,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
   @moduletag :tmp_dir
 
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
+  alias Mnemosyne.Pipeline.RecallResult
 
   @repo "integration"
 
@@ -102,7 +103,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
              "procedural node #{proc.id} should have provenance links to episodic nodes"
     end)
 
-    assert {:ok, %ReasonedMemory{} = result} =
+    assert {:ok, %RecallResult{reasoned: %ReasonedMemory{} = result}} =
              Mnemosyne.recall(@repo, "how do supervisors work in Elixir?")
 
     assert result.episodic != nil or result.semantic != nil or result.procedural != nil
@@ -138,7 +139,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
         "Read about how the BEAM VM manages scheduling and ran observer to see scheduler utilization across cores."
       )
 
-    assert {:ok, %ReasonedMemory{} = result} =
+    assert {:ok, %RecallResult{reasoned: %ReasonedMemory{} = result}} =
              Mnemosyne.recall_in_context(@repo, read_session, "how does process memory work?")
 
     assert result.episodic != nil or result.semantic != nil or result.procedural != nil
