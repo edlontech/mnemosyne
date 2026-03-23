@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.3](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.2...mnemosyne-v0.1.3) (2026-03-23)
+
+
+### Features
+
+* add recall observability with TaggedCandidate and TouchedNode structs ([2c7116d](https://github.com/edlontech/mnemosyne/commit/2c7116d56f02aed940257876179036351b376cec))
+
+
+### Bug Fixes
+
+* Added missing append states ([b7c52bb](https://github.com/edlontech/mnemosyne/commit/b7c52bb9e643a91871bfb0ac0e611b7b36cb582a))
+
 ## [0.1.2](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.1...mnemosyne-v0.1.2) (2026-03-23)
 
 
