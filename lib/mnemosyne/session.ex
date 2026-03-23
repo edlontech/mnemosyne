@@ -275,6 +275,11 @@ defmodule Mnemosyne.Session do
       {:keep_state_and_data,
        [{:reply, from, {:error, SessionError.exception(reason: :not_collecting)}}]}
 
+  def idle(:cast, {:append_async, _observation, _action, callback}, _data) do
+    if callback, do: callback.({:error, SessionError.exception(reason: :not_collecting)})
+    :keep_state_and_data
+  end
+
   def idle({:call, from}, :close, _data),
     do:
       {:keep_state_and_data,
@@ -549,6 +554,11 @@ defmodule Mnemosyne.Session do
     end
   end
 
+  def extracting(:cast, {:append_async, _observation, _action, callback}, _data) do
+    if callback, do: callback.({:error, SessionError.exception(reason: :extraction_in_progress)})
+    :keep_state_and_data
+  end
+
   def extracting({:call, from}, _request, _data) do
     {:keep_state_and_data,
      [{:reply, from, {:error, SessionError.exception(reason: :extraction_in_progress)}}]}
@@ -663,6 +673,11 @@ defmodule Mnemosyne.Session do
 
   def ready({:call, from}, {:async_op, op, callback}, data) do
     execute_async_op_immediately(data, op, callback, from)
+  end
+
+  def ready(:cast, {:append_async, _observation, _action, callback}, _data) do
+    if callback, do: callback.({:error, SessionError.exception(reason: :not_idle)})
+    :keep_state_and_data
   end
 
   def ready({:call, from}, _request, _data) do
