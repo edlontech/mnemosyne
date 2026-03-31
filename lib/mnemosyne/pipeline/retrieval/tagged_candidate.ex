@@ -13,21 +13,25 @@ defmodule Mnemosyne.Pipeline.Retrieval.TaggedCandidate do
     field :hop, non_neg_integer() | nil
   end
 
+  @doc "Builds a tagged candidate from the initial retrieval phase (hop 0)."
   @spec from_hop_0(struct(), float()) :: t()
   def from_hop_0(node, score) do
     %__MODULE__{node: node, score: score, phase: :initial, hop: 0}
   end
 
+  @doc "Builds a tagged candidate discovered during multi-hop traversal at the given hop depth."
   @spec from_multi_hop(struct(), float(), non_neg_integer()) :: t()
   def from_multi_hop(node, score, hop) do
     %__MODULE__{node: node, score: score, phase: :multi_hop, hop: hop}
   end
 
+  @doc "Builds a tagged candidate from the query refinement phase."
   @spec from_refinement(struct(), float()) :: t()
   def from_refinement(node, score) do
     %__MODULE__{node: node, score: score, phase: :refinement, hop: nil}
   end
 
+  @doc "Builds a tagged candidate from the provenance lookup phase."
   @spec from_provenance(struct(), float()) :: t()
   def from_provenance(node, score) do
     %__MODULE__{node: node, score: score, phase: :provenance, hop: nil}

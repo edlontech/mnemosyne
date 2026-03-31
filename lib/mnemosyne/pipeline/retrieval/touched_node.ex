@@ -17,6 +17,7 @@ defmodule Mnemosyne.Pipeline.Retrieval.TouchedNode do
     field :node, struct() | nil
   end
 
+  @doc "Projects a `TaggedCandidate` into a caller-facing `TouchedNode` at the given verbosity level."
   @spec from_tagged(TaggedCandidate.t(), :summary | :detailed) :: t()
   def from_tagged(%TaggedCandidate{} = tc, :summary) do
     %__MODULE__{
