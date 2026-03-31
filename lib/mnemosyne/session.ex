@@ -1096,6 +1096,9 @@ defmodule Mnemosyne.Session do
     {:ok, :started, :collecting, start_timers(%{data | episode: episode})}
   end
 
+  defp execute_drain_op({:close}, %{episode: nil}),
+    do: {:error, SessionError.exception(reason: :not_collecting)}
+
   defp execute_drain_op({:close}, data) do
     reward_opts = [llm: data.llm, config: data.config]
 
