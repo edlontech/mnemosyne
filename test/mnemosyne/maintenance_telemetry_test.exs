@@ -86,7 +86,7 @@ defmodule Mnemosyne.MaintenanceTelemetryTest do
     tag = %Tag{id: "tag_1", label: "concept", embedding: @test_vector}
 
     links =
-      Enum.map(nodes, fn node -> {"tag_1", node.id} end)
+      Enum.map(nodes, fn node -> {"tag_1", node.id, :membership} end)
 
     metadata =
       Map.new(
@@ -172,7 +172,7 @@ defmodule Mnemosyne.MaintenanceTelemetryTest do
 
       cs = %Changeset{
         additions: [intent, sem],
-        links: [{"int_1", "sem_1"}],
+        links: [{"int_1", "sem_1", :hierarchical}],
         metadata: %{
           "int_1" => NodeMetadata.new(),
           "sem_1" => NodeMetadata.new()

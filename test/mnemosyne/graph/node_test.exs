@@ -1,8 +1,11 @@
 defmodule Mnemosyne.Graph.NodeTest do
   use ExUnit.Case, async: true
 
+  alias Mnemosyne.Graph.Edge
   alias Mnemosyne.Graph.Node
   alias Mnemosyne.Graph.Node.Episodic
+  alias Mnemosyne.Graph.Node.Helpers
+  alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Node.Procedural
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Source
@@ -42,11 +45,13 @@ defmodule Mnemosyne.Graph.NodeTest do
       }
 
       assert node.embedding == nil
-      assert node.links == MapSet.new()
+      assert node.links == Edge.empty_links()
       assert %DateTime{} = node.created_at
     end
 
     test "protocol dispatch" do
+      links = %{Edge.empty_links() | membership: MapSet.new(["link-1"])}
+
       node = %Episodic{
         id: "ep-1",
         observation: "obs",
@@ -56,12 +61,14 @@ defmodule Mnemosyne.Graph.NodeTest do
         reward: 0.5,
         trajectory_id: "t-1",
         embedding: [0.1, 0.2],
-        links: MapSet.new(["link-1"])
+        links: links
       }
 
       assert Node.id(node) == "ep-1"
       assert Node.embedding(node) == [0.1, 0.2]
-      assert Node.links(node) == MapSet.new(["link-1"])
+      assert Node.links(node) == links
+      assert Node.links(node, :membership) == MapSet.new(["link-1"])
+      assert Node.links(node, :sibling) == MapSet.new()
       assert Node.node_type(node) == :episodic
     end
   end
@@ -83,22 +90,26 @@ defmodule Mnemosyne.Graph.NodeTest do
       node = %Semantic{id: "sem-1", proposition: "p", confidence: 0.5}
 
       assert node.embedding == nil
-      assert node.links == MapSet.new()
+      assert node.links == Edge.empty_links()
       assert %DateTime{} = node.created_at
     end
 
     test "protocol dispatch" do
+      links = %{Edge.empty_links() | membership: MapSet.new(["l-1"])}
+
       node = %Semantic{
         id: "sem-1",
         proposition: "p",
         confidence: 0.5,
         embedding: [0.3],
-        links: MapSet.new(["l-1"])
+        links: links
       }
 
       assert Node.id(node) == "sem-1"
       assert Node.embedding(node) == [0.3]
-      assert Node.links(node) == MapSet.new(["l-1"])
+      assert Node.links(node) == links
+      assert Node.links(node, :membership) == MapSet.new(["l-1"])
+      assert Node.links(node, :hierarchical) == MapSet.new()
       assert Node.node_type(node) == :semantic
     end
   end
@@ -127,7 +138,7 @@ defmodule Mnemosyne.Graph.NodeTest do
       }
 
       assert node.embedding == nil
-      assert node.links == MapSet.new()
+      assert node.links == Edge.empty_links()
       assert %DateTime{} = node.created_at
     end
 
@@ -141,7 +152,8 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert Node.id(node) == "proc-1"
       assert Node.embedding(node) == nil
-      assert Node.links(node) == MapSet.new()
+      assert Node.links(node) == Edge.empty_links()
+      assert Node.links(node, :provenance) == MapSet.new()
       assert Node.node_type(node) == :procedural
     end
   end
@@ -158,7 +170,7 @@ defmodule Mnemosyne.Graph.NodeTest do
       node = %Tag{id: "tag-1", label: "l"}
 
       assert node.embedding == nil
-      assert node.links == MapSet.new()
+      assert node.links == Edge.empty_links()
       assert %DateTime{} = node.created_at
     end
 
@@ -167,8 +179,36 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert Node.id(node) == "tag-1"
       assert Node.embedding(node) == nil
-      assert Node.links(node) == MapSet.new()
+      assert Node.links(node) == Edge.empty_links()
+      assert Node.links(node, :membership) == MapSet.new()
       assert Node.node_type(node) == :tag
+    end
+  end
+
+  describe "Intent" do
+    test "creates struct with all required fields" do
+      node = %Intent{id: "int-1", description: "find relevant docs"}
+
+      assert node.id == "int-1"
+      assert node.description == "find relevant docs"
+    end
+
+    test "has correct defaults" do
+      node = %Intent{id: "int-1", description: "d"}
+
+      assert node.embedding == nil
+      assert node.links == Edge.empty_links()
+      assert %DateTime{} = node.created_at
+    end
+
+    test "protocol dispatch" do
+      node = %Intent{id: "int-1", description: "d"}
+
+      assert Node.id(node) == "int-1"
+      assert Node.embedding(node) == nil
+      assert Node.links(node) == Edge.empty_links()
+      assert Node.links(node, :hierarchical) == MapSet.new()
+      assert Node.node_type(node) == :intent
     end
   end
 
@@ -184,7 +224,7 @@ defmodule Mnemosyne.Graph.NodeTest do
       node = %Subgoal{id: "sg-1", description: "d"}
 
       assert node.embedding == nil
-      assert node.links == MapSet.new()
+      assert node.links == Edge.empty_links()
       assert node.parent_goal == nil
       assert %DateTime{} = node.created_at
     end
@@ -200,7 +240,8 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert Node.id(node) == "sg-1"
       assert Node.embedding(node) == nil
-      assert Node.links(node) == MapSet.new()
+      assert Node.links(node) == Edge.empty_links()
+      assert Node.links(node, :hierarchical) == MapSet.new()
       assert Node.node_type(node) == :subgoal
     end
   end
@@ -218,7 +259,7 @@ defmodule Mnemosyne.Graph.NodeTest do
       node = %Source{id: "src-1", episode_id: "ep-1", step_index: 0}
 
       assert node.embedding == nil
-      assert node.links == MapSet.new()
+      assert node.links == Edge.empty_links()
       assert %DateTime{} = node.created_at
     end
 
@@ -227,8 +268,30 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert Node.id(node) == "src-1"
       assert Node.embedding(node) == nil
-      assert Node.links(node) == MapSet.new()
+      assert Node.links(node) == Edge.empty_links()
+      assert Node.links(node, :provenance) == MapSet.new()
       assert Node.node_type(node) == :source
+    end
+  end
+
+  describe "Helpers.all_linked_ids/1" do
+    test "returns empty set for node with no links" do
+      node = %Semantic{id: "sem-1", proposition: "p", confidence: 0.5}
+
+      assert Helpers.all_linked_ids(node) == MapSet.new()
+    end
+
+    test "flattens links across all edge types" do
+      links = %{
+        membership: MapSet.new(["a", "b"]),
+        hierarchical: MapSet.new(["c"]),
+        provenance: MapSet.new(),
+        sibling: MapSet.new(["d"])
+      }
+
+      node = %Semantic{id: "sem-1", proposition: "p", confidence: 0.5, links: links}
+
+      assert Helpers.all_linked_ids(node) == MapSet.new(["a", "b", "c", "d"])
     end
   end
 end

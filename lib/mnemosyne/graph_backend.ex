@@ -13,7 +13,7 @@ defmodule Mnemosyne.GraphBackend do
   - `delete_nodes/2` - Remove nodes by their IDs.
   - `find_candidates/6` - Query for nodes matching type/embedding/tag criteria.
   - `get_node/2` - Fetch a single node by ID.
-  - `get_linked_nodes/2` - Fetch nodes by their IDs.
+  - `get_linked_nodes/3` - Fetch linked nodes, optionally filtered by edge type.
 
   Read callbacks (`find_candidates`, `get_node`, `get_linked_nodes`) return state
   for interface uniformity but must not rely on state mutation — callers may
@@ -21,6 +21,7 @@ defmodule Mnemosyne.GraphBackend do
   """
 
   alias Mnemosyne.Graph.Changeset
+  alias Mnemosyne.Graph.Edge
 
   @type state :: term()
   @type scored_node :: {struct(), float()}
@@ -47,7 +48,7 @@ defmodule Mnemosyne.GraphBackend do
   @callback get_node(String.t(), state()) ::
               {:ok, struct() | nil, state()}
 
-  @callback get_linked_nodes([String.t()], state()) ::
+  @callback get_linked_nodes([String.t()], Edge.edge_type() | nil, state()) ::
               {:ok, [struct()], state()}
 
   @callback get_metadata([String.t()], state()) ::

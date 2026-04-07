@@ -121,7 +121,7 @@ defmodule Mnemosyne.Pipeline.DecayTest do
         Changeset.new()
         |> Changeset.add_node(sem)
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_old", "tag_1")
+        |> Changeset.add_link("sem_old", "tag_1", :membership)
 
       meta =
         NodeMetadata.new(
@@ -159,7 +159,7 @@ defmodule Mnemosyne.Pipeline.DecayTest do
         Changeset.new()
         |> Changeset.add_node(proc)
         |> Changeset.add_node(intent)
-        |> Changeset.add_link("proc_old", "intent_1")
+        |> Changeset.add_link("proc_old", "intent_1", :hierarchical)
 
       meta =
         NodeMetadata.new(
@@ -251,7 +251,7 @@ defmodule Mnemosyne.Pipeline.DecayTest do
         Changeset.new()
         |> Changeset.add_node(sem)
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_old", "tag_1")
+        |> Changeset.add_link("sem_old", "tag_1", :membership)
 
       old_meta =
         NodeMetadata.new(
@@ -299,8 +299,8 @@ defmodule Mnemosyne.Pipeline.DecayTest do
         |> Changeset.add_node(sem_old)
         |> Changeset.add_node(sem_active)
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_old", "tag_1")
-        |> Changeset.add_link("sem_active", "tag_1")
+        |> Changeset.add_link("sem_old", "tag_1", :membership)
+        |> Changeset.add_link("sem_active", "tag_1", :membership)
 
       old_meta =
         NodeMetadata.new(
@@ -331,7 +331,7 @@ defmodule Mnemosyne.Pipeline.DecayTest do
 
       {:ok, tag_node, _} = InMemory.get_node("tag_1", final_bs)
       assert tag_node.id == "tag_1"
-      assert MapSet.size(tag_node.links) > 0
+      assert tag_node.links |> Map.values() |> Enum.any?(&(MapSet.size(&1) > 0))
 
       {:ok, surviving, _} = InMemory.get_node("sem_active", final_bs)
       assert surviving.id == "sem_active"

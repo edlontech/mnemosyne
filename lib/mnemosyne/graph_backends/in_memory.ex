@@ -66,11 +66,12 @@ defmodule Mnemosyne.GraphBackends.InMemory do
   end
 
   @impl true
-  def get_linked_nodes(node_ids, state) do
+  def get_linked_nodes(node_ids, _edge_type, %__MODULE__{graph: graph} = state) do
     nodes =
       node_ids
-      |> Enum.map(&Graph.get_node(state.graph, &1))
+      |> Enum.map(&Graph.get_node(graph, &1))
       |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(&NodeProtocol.id/1)
 
     {:ok, nodes, state}
   end

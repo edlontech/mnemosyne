@@ -267,10 +267,10 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
       Enum.each(tag_nodes, fn tag ->
         assert tag.embedding != nil
-        tag_links = Enum.filter(cs.links, fn {from, _to} -> from == tag.id end)
+        tag_links = Enum.filter(cs.links, fn {from, _to, _type} -> from == tag.id end)
         assert tag_links != []
 
-        Enum.each(tag_links, fn {_from, to} ->
+        Enum.each(tag_links, fn {_from, to, _type} ->
           assert MapSet.member?(semantic_ids, to)
         end)
       end)
@@ -294,10 +294,10 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
       Enum.each(intent_nodes, fn intent ->
         assert intent.embedding != nil
-        intent_links = Enum.filter(cs.links, fn {from, _to} -> from == intent.id end)
+        intent_links = Enum.filter(cs.links, fn {from, _to, _type} -> from == intent.id end)
         assert intent_links != []
 
-        Enum.each(intent_links, fn {_from, to} ->
+        Enum.each(intent_links, fn {_from, to, _type} ->
           assert MapSet.member?(procedural_ids, to)
         end)
       end)
@@ -381,7 +381,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         |> MapSet.new(& &1.id)
 
       sibling_links =
-        Enum.filter(cs.links, fn {from, to} ->
+        Enum.filter(cs.links, fn {from, to, _type} ->
           MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
         end)
 
@@ -442,7 +442,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         |> MapSet.new(& &1.id)
 
       sibling_links =
-        Enum.filter(cs.links, fn {from, to} ->
+        Enum.filter(cs.links, fn {from, to, _type} ->
           MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
         end)
 
@@ -497,7 +497,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         |> MapSet.new(& &1.id)
 
       sibling_links =
-        Enum.filter(cs.links, fn {from, to} ->
+        Enum.filter(cs.links, fn {from, to, _type} ->
           MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
         end)
 
@@ -521,12 +521,12 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         |> MapSet.new(& &1.id)
 
       tag_to_sem_links =
-        Enum.filter(cs.links, fn {from, to} ->
+        Enum.filter(cs.links, fn {from, to, _type} ->
           MapSet.member?(tag_ids, from) and MapSet.member?(semantic_ids, to)
         end)
 
       sibling_links =
-        Enum.filter(cs.links, fn {from, to} ->
+        Enum.filter(cs.links, fn {from, to, _type} ->
           MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
         end)
 
@@ -551,7 +551,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         |> MapSet.new(& &1.id)
 
       provenance_links =
-        Enum.filter(cs.links, fn {from, to} ->
+        Enum.filter(cs.links, fn {from, to, _type} ->
           MapSet.member?(semantic_ids, from) and MapSet.member?(episodic_ids, to)
         end)
 
@@ -577,7 +577,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         |> MapSet.new(& &1.id)
 
       provenance_links =
-        Enum.filter(cs.links, fn {from, to} ->
+        Enum.filter(cs.links, fn {from, to, _type} ->
           MapSet.member?(procedural_ids, from) and MapSet.member?(episodic_ids, to)
         end)
 
@@ -585,7 +585,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       assert length(provenance_links) == expected_count
     end
 
-    test "tag and intent nodes have reward_count == 0" do
+    test "tag and intent nodes have reward_count > 0 with avg child reward" do
       episode = build_closed_episode()
       stub_extraction_llm()
 
@@ -603,7 +603,8 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
       Enum.each(tag_ids ++ intent_ids, fn id ->
         meta = cs.metadata[id]
-        assert %NodeMetadata{reward_count: 0} = meta
+        assert %NodeMetadata{reward_count: 1} = meta
+        assert meta.cumulative_reward > 0.0
       end)
     end
 
@@ -622,6 +623,17 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         assert node.return_score != nil
         assert node.return_score >= 0.0 and node.return_score <= 1.0
       end)
+    end
+
+    test "source nodes receive observation embeddings" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      source_nodes = Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Source{}, &1))
+      assert [_ | _] = source_nodes
+      assert Enum.all?(source_nodes, fn s -> s.embedding != nil end)
     end
 
     test "uses per-prescription return scores in metadata" do

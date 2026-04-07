@@ -43,13 +43,13 @@ defmodule Mnemosyne.QueryApiTest do
   end
 
   defp seed_graph(repo_id, sup) do
-    tag = %Tag{id: "t1", label: "elixir", links: MapSet.new(["s1"])}
+    tag = %Tag{id: "t1", label: "elixir", links: %{membership: MapSet.new(["s1"])}}
 
     sem = %Semantic{
       id: "s1",
       proposition: "Elixir is functional",
       confidence: 0.9,
-      links: MapSet.new(["t1"])
+      links: %{membership: MapSet.new(["t1"])}
     }
 
     meta = NodeMetadata.new(created_at: DateTime.utc_now(), access_count: 3)

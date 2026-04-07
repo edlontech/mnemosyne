@@ -140,6 +140,11 @@ defmodule Mnemosyne.Config do
                    overrides: @override_schema,
                    backend: Zoi.optional(@backend_schema),
                    value_function: @vf_schema,
+                   episodic_validation:
+                     Zoi.default(Zoi.optional(Zoi.map()), nil,
+                       description:
+                         "Optional map with :validation_threshold, :orphan_penalty, :weak_grounding_penalty"
+                     ),
                    intent_merge_threshold:
                      Zoi.default(Zoi.float(), 0.8,
                        description:
@@ -181,6 +186,11 @@ defmodule Mnemosyne.Config do
     overrides: @override_schema,
     backend: Zoi.optional(@backend_schema),
     value_function: @vf_schema,
+    episodic_validation:
+      Zoi.default(Zoi.optional(Zoi.map()), nil,
+        description:
+          "Optional map with :validation_threshold, :orphan_penalty, :weak_grounding_penalty"
+      ),
     intent_merge_threshold:
       Zoi.default(Zoi.float(), 0.8,
         description:

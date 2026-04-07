@@ -8,6 +8,7 @@ defmodule Mnemosyne.Graph do
   use TypedStruct
 
   alias Mnemosyne.Graph.Changeset
+  alias Mnemosyne.Graph.Edge
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
@@ -49,13 +50,16 @@ defmodule Mnemosyne.Graph do
     end
   end
 
-  @doc "Creates a bidirectional link between two nodes. No-op if either ID is missing."
-  @spec link(t(), String.t(), String.t()) :: t()
-  def link(%__MODULE__{nodes: nodes} = graph, id_a, id_b) do
+  @doc "Creates a typed bidirectional link between two nodes. No-op if either ID is missing."
+  @spec link(t(), String.t(), String.t(), Edge.edge_type()) :: t()
+  def link(%__MODULE__{nodes: nodes} = graph, id_a, id_b, type) do
     with {:ok, node_a} <- Map.fetch(nodes, id_a),
          {:ok, node_b} <- Map.fetch(nodes, id_b) do
-      updated_a = %{node_a | links: MapSet.put(node_a.links, id_b)}
-      updated_b = %{node_b | links: MapSet.put(node_b.links, id_a)}
+      links_a = Map.update(node_a.links, type, MapSet.new([id_b]), &MapSet.put(&1, id_b))
+      links_b = Map.update(node_b.links, type, MapSet.new([id_a]), &MapSet.put(&1, id_a))
+
+      updated_a = %{node_a | links: links_a}
+      updated_b = %{node_b | links: links_b}
 
       %{graph | nodes: nodes |> Map.put(id_a, updated_a) |> Map.put(id_b, updated_b)}
     else
@@ -71,11 +75,7 @@ defmodule Mnemosyne.Graph do
         graph
 
       {_node, remaining} ->
-        cleaned =
-          Map.new(remaining, fn {nid, node} ->
-            {nid, %{node | links: MapSet.delete(node.links, id)}}
-          end)
-
+        cleaned = Map.new(remaining, fn {nid, node} -> {nid, remove_link_ref(node, id)} end)
         rebuild_indexes(%{graph | nodes: cleaned})
     end
   end
@@ -117,12 +117,17 @@ defmodule Mnemosyne.Graph do
 
   defp maybe_index_subgoal(graph, _node, _id), do: graph
 
+  defp remove_link_ref(node, id) do
+    updated_links = Map.new(node.links, fn {type, ids} -> {type, MapSet.delete(ids, id)} end)
+    %{node | links: updated_links}
+  end
+
   defp apply_additions(graph, additions) do
     Enum.reduce(additions, graph, &put_node(&2, &1))
   end
 
   defp apply_links(graph, links) do
-    Enum.reduce(links, graph, fn {id_a, id_b}, g -> link(g, id_a, id_b) end)
+    Enum.reduce(links, graph, fn {id_a, id_b, type}, g -> link(g, id_a, id_b, type) end)
   end
 
   defp rebuild_indexes(%__MODULE__{nodes: nodes} = graph) do

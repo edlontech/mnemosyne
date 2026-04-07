@@ -107,14 +107,14 @@ defmodule Mnemosyne.NotifierIntegrationTest do
       emb = List.duplicate(0.5, 128)
       emb_similar = List.duplicate(0.5, 127) ++ [0.50001]
 
-      tag = %Tag{id: "t1", label: "elixir", links: MapSet.new(["s1", "s2"])}
+      tag = %Tag{id: "t1", label: "elixir", links: %{membership: MapSet.new(["s1", "s2"])}}
 
       sem1 = %Semantic{
         id: "s1",
         proposition: "Elixir is great",
         confidence: 0.9,
         embedding: emb,
-        links: MapSet.new(["t1"])
+        links: %{membership: MapSet.new(["t1"])}
       }
 
       sem2 = %Semantic{
@@ -122,7 +122,7 @@ defmodule Mnemosyne.NotifierIntegrationTest do
         proposition: "Elixir is awesome",
         confidence: 0.9,
         embedding: emb_similar,
-        links: MapSet.new(["t1"])
+        links: %{membership: MapSet.new(["t1"])}
       }
 
       meta1 = NodeMetadata.new(created_at: DateTime.utc_now(), access_count: 5)

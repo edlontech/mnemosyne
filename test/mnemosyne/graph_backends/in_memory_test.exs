@@ -72,8 +72,8 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
     end
   end
 
-  describe "get_linked_nodes/2" do
-    test "traverses links and returns linked nodes" do
+  describe "get_linked_nodes/3" do
+    test "returns nodes by IDs when edge_type is nil" do
       {:ok, state} = InMemory.init([])
       n1 = semantic_node("s1", @test_vector)
       n2 = semantic_node("s2", @alt_vector)
@@ -82,21 +82,58 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
         Changeset.new()
         |> Changeset.add_node(n1)
         |> Changeset.add_node(n2)
-        |> Changeset.add_link("s1", "s2")
+        |> Changeset.add_link("s1", "s2", :sibling)
 
       {:ok, state} = InMemory.apply_changeset(changeset, state)
 
-      {:ok, %Semantic{} = retrieved, state} = InMemory.get_node("s1", state)
-      link_ids = MapSet.to_list(retrieved.links)
-
-      {:ok, linked, _state} = InMemory.get_linked_nodes(link_ids, state)
-      assert [%Semantic{id: "s2"}] = linked
+      {:ok, nodes, _state} = InMemory.get_linked_nodes(["s1"], nil, state)
+      assert [%Semantic{id: "s1"}] = nodes
     end
 
-    test "filters out non-existent node IDs" do
+    test "returns nodes by IDs regardless of edge type filter" do
       {:ok, state} = InMemory.init([])
-      {:ok, nodes, _state} = InMemory.get_linked_nodes(["nonexistent"], state)
+      n1 = semantic_node("s1", @test_vector)
+      n2 = semantic_node("s2", @alt_vector)
+      t1 = tag_node("t1", "elixir", @test_vector)
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(n1)
+        |> Changeset.add_node(n2)
+        |> Changeset.add_node(t1)
+        |> Changeset.add_link("s1", "s2", :sibling)
+        |> Changeset.add_link("s1", "t1", :membership)
+
+      {:ok, state} = InMemory.apply_changeset(changeset, state)
+
+      {:ok, nodes, _state} = InMemory.get_linked_nodes(["s1", "t1"], :membership, state)
+      ids = Enum.map(nodes, & &1.id) |> Enum.sort()
+      assert ids == ["s1", "t1"]
+    end
+
+    test "returns empty list for non-existent node IDs" do
+      {:ok, state} = InMemory.init([])
+      {:ok, nodes, _state} = InMemory.get_linked_nodes(["nonexistent"], nil, state)
       assert nodes == []
+    end
+
+    test "deduplicates nodes across multiple source IDs" do
+      {:ok, state} = InMemory.init([])
+      n1 = semantic_node("s1", @test_vector)
+      n2 = semantic_node("s2", @alt_vector)
+      n3 = semantic_node("s3", @test_vector)
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(n1)
+        |> Changeset.add_node(n2)
+        |> Changeset.add_node(n3)
+
+      {:ok, state} = InMemory.apply_changeset(changeset, state)
+
+      {:ok, nodes, _state} = InMemory.get_linked_nodes(["s1", "s2", "s1"], nil, state)
+      ids = Enum.map(nodes, & &1.id) |> Enum.sort()
+      assert ids == ["s1", "s2"]
     end
   end
 

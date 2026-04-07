@@ -10,6 +10,7 @@ defmodule Mnemosyne.Pipeline.Decay do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Graph.Node, as: NodeProtocol
+  alias Mnemosyne.Graph.Node.Helpers, as: NodeHelpers
   alias Mnemosyne.NodeMetadata
 
   @default_threshold 0.1
@@ -72,7 +73,7 @@ defmodule Mnemosyne.Pipeline.Decay do
     with {:ok, routing_nodes, bs} <- backend_mod.get_nodes_by_type([:tag, :intent], bs) do
       orphans =
         routing_nodes
-        |> Enum.filter(&(MapSet.size(NodeProtocol.links(&1)) == 0))
+        |> Enum.filter(&(NodeHelpers.all_linked_ids(&1) |> MapSet.size() == 0))
         |> Enum.map(&NodeProtocol.id/1)
 
       {:ok, orphans, bs}

@@ -4,6 +4,7 @@ defmodule Mnemosyne.GraphTest do
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
+  alias Mnemosyne.Graph.Node.Helpers
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
 
@@ -88,29 +89,62 @@ defmodule Mnemosyne.GraphTest do
     end
   end
 
-  describe "link/3" do
-    test "creates bidirectional links" do
+  describe "link/4" do
+    test "creates bidirectional links with edge type" do
       g =
         Graph.new()
         |> Graph.put_node(make_episodic("e1"))
         |> Graph.put_node(make_tag("t1", "x"))
-        |> Graph.link("e1", "t1")
+        |> Graph.link("e1", "t1", :membership)
 
       e1 = Graph.get_node(g, "e1")
       t1 = Graph.get_node(g, "t1")
 
-      assert MapSet.member?(e1.links, "t1")
-      assert MapSet.member?(t1.links, "e1")
+      assert MapSet.member?(e1.links[:membership], "t1")
+      assert MapSet.member?(t1.links[:membership], "e1")
+    end
+
+    test "stores links in the correct edge type map" do
+      g =
+        Graph.new()
+        |> Graph.put_node(make_episodic("e1"))
+        |> Graph.put_node(make_episodic("e2"))
+        |> Graph.link("e1", "e2", :sibling)
+
+      e1 = Graph.get_node(g, "e1")
+
+      assert MapSet.member?(e1.links[:sibling], "e2")
+      refute MapSet.member?(e1.links[:membership], "e2")
+      refute MapSet.member?(e1.links[:hierarchical], "e2")
+      refute MapSet.member?(e1.links[:provenance], "e2")
+    end
+
+    test "supports multiple edge types between the same nodes" do
+      g =
+        Graph.new()
+        |> Graph.put_node(make_episodic("e1"))
+        |> Graph.put_node(make_episodic("e2"))
+        |> Graph.link("e1", "e2", :membership)
+        |> Graph.link("e1", "e2", :sibling)
+
+      e1 = Graph.get_node(g, "e1")
+
+      assert MapSet.member?(e1.links[:membership], "e2")
+      assert MapSet.member?(e1.links[:sibling], "e2")
+
+      all_ids = Helpers.all_linked_ids(e1)
+      assert MapSet.size(all_ids) == 1
+      assert MapSet.member?(all_ids, "e2")
     end
 
     test "is no-op when either node is missing" do
       g =
         Graph.new()
         |> Graph.put_node(make_episodic("e1"))
-        |> Graph.link("e1", "missing")
+        |> Graph.link("e1", "missing", :membership)
 
       e1 = Graph.get_node(g, "e1")
-      assert MapSet.size(e1.links) == 0
+      assert e1 |> Helpers.all_linked_ids() |> MapSet.size() == 0
     end
   end
 
@@ -120,7 +154,7 @@ defmodule Mnemosyne.GraphTest do
         Changeset.new()
         |> Changeset.add_node(make_episodic("e1"))
         |> Changeset.add_node(make_tag("t1", "label"))
-        |> Changeset.add_link("e1", "t1")
+        |> Changeset.add_link("e1", "t1", :membership)
 
       g = Graph.apply_changeset(Graph.new(), cs)
 
@@ -128,7 +162,24 @@ defmodule Mnemosyne.GraphTest do
       assert Graph.get_node(g, "t1") != nil
 
       e1 = Graph.get_node(g, "e1")
-      assert MapSet.member?(e1.links, "t1")
+      assert MapSet.member?(e1.links[:membership], "t1")
+    end
+
+    test "applies mixed edge types" do
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(make_episodic("e1"))
+        |> Changeset.add_node(make_episodic("e2"))
+        |> Changeset.add_node(make_tag("t1", "label"))
+        |> Changeset.add_link("e1", "t1", :membership)
+        |> Changeset.add_link("e1", "e2", :sibling)
+
+      g = Graph.apply_changeset(Graph.new(), cs)
+
+      e1 = Graph.get_node(g, "e1")
+      assert MapSet.member?(e1.links[:membership], "t1")
+      assert MapSet.member?(e1.links[:sibling], "e2")
+      refute MapSet.member?(e1.links[:membership], "e2")
     end
   end
 
@@ -217,16 +268,23 @@ defmodule Mnemosyne.GraphTest do
       assert Graph.delete_node(g, "missing") == g
     end
 
-    test "removes stale link references from remaining nodes" do
+    test "removes stale link references from all edge types" do
       g =
         Graph.new()
         |> Graph.put_node(make_episodic("e1"))
         |> Graph.put_node(make_episodic("e2"))
-        |> Graph.link("e1", "e2")
+        |> Graph.put_node(make_episodic("e3"))
+        |> Graph.link("e1", "e2", :membership)
+        |> Graph.link("e1", "e3", :sibling)
         |> Graph.delete_node("e1")
 
       e2 = Graph.get_node(g, "e2")
-      refute MapSet.member?(e2.links, "e1")
+      e3 = Graph.get_node(g, "e3")
+
+      refute MapSet.member?(e2.links[:membership], "e1")
+      refute MapSet.member?(e3.links[:sibling], "e1")
+      assert e2 |> Helpers.all_linked_ids() |> MapSet.size() == 0
+      assert e3 |> Helpers.all_linked_ids() |> MapSet.size() == 0
     end
   end
 end

@@ -100,13 +100,13 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     |> Graph.put_node(%Intent{
       id: "int_1",
       description: "Deploy application safely",
-      embedding: @test_vector,
-      links: MapSet.new(["proc_1"])
+      embedding: @test_vector
     })
-    |> Graph.link("tag_1", "sem_1")
-    |> Graph.link("ep_1", "sg_1")
-    |> Graph.link("ep_1", "src_1")
-    |> Graph.link("ep_2", "sg_1")
+    |> Graph.link("tag_1", "sem_1", :membership)
+    |> Graph.link("int_1", "proc_1", :hierarchical)
+    |> Graph.link("ep_1", "sg_1", :hierarchical)
+    |> Graph.link("ep_1", "src_1", :provenance)
+    |> Graph.link("ep_2", "sg_1", :hierarchical)
   end
 
   defp stub_retrieval_llm(mode \\ "semantic", tags \\ "BEAM VM\nfault tolerance") do
@@ -201,13 +201,13 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       episode_id: "ep_001",
       step_index: 0
     })
-    |> Graph.link("tag_cooking", "sem_pasta")
-    |> Graph.link("tag_cooking", "sem_risotto")
-    |> Graph.link("tag_cooking", "sem_sushi")
-    |> Graph.link("tag_italian", "sem_pasta")
-    |> Graph.link("tag_italian", "sem_risotto")
-    |> Graph.link("intent_deploy", "proc_migrate")
-    |> Graph.link("intent_deploy", "proc_rollback")
+    |> Graph.link("tag_cooking", "sem_pasta", :membership)
+    |> Graph.link("tag_cooking", "sem_risotto", :membership)
+    |> Graph.link("tag_cooking", "sem_sushi", :membership)
+    |> Graph.link("tag_italian", "sem_pasta", :membership)
+    |> Graph.link("tag_italian", "sem_risotto", :membership)
+    |> Graph.link("intent_deploy", "proc_migrate", :hierarchical)
+    |> Graph.link("intent_deploy", "proc_rollback", :hierarchical)
   end
 
   defp build_provenance_graph do
@@ -265,27 +265,21 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       description: "Scale database connections",
       embedding: @test_vector
     })
-    # episodic structure
-    |> Graph.link("ep_1", "sg_1")
-    |> Graph.link("ep_1", "src_1")
-    |> Graph.link("ep_2", "sg_1")
-    |> Graph.link("ep_2", "src_2")
-    # semantic subgraph: tag → semantic (membership)
-    |> Graph.link("tag_pooling", "sem_pool")
-    |> Graph.link("tag_pooling", "sem_throughput")
-    |> Graph.link("tag_perf", "sem_throughput")
-    # semantic sibling
-    |> Graph.link("sem_pool", "sem_throughput")
-    # procedural subgraph: intent → procedural (hierarchical)
-    |> Graph.link("int_scale", "proc_pool")
-    # provenance: semantic → episodic
-    |> Graph.link("sem_pool", "ep_1")
-    |> Graph.link("sem_pool", "ep_2")
-    |> Graph.link("sem_throughput", "ep_1")
-    |> Graph.link("sem_throughput", "ep_2")
-    # provenance: procedural → episodic
-    |> Graph.link("proc_pool", "ep_1")
-    |> Graph.link("proc_pool", "ep_2")
+    |> Graph.link("ep_1", "sg_1", :hierarchical)
+    |> Graph.link("ep_1", "src_1", :provenance)
+    |> Graph.link("ep_2", "sg_1", :hierarchical)
+    |> Graph.link("ep_2", "src_2", :provenance)
+    |> Graph.link("tag_pooling", "sem_pool", :membership)
+    |> Graph.link("tag_pooling", "sem_throughput", :membership)
+    |> Graph.link("tag_perf", "sem_throughput", :membership)
+    |> Graph.link("sem_pool", "sem_throughput", :sibling)
+    |> Graph.link("int_scale", "proc_pool", :hierarchical)
+    |> Graph.link("sem_pool", "ep_1", :provenance)
+    |> Graph.link("sem_pool", "ep_2", :provenance)
+    |> Graph.link("sem_throughput", "ep_1", :provenance)
+    |> Graph.link("sem_throughput", "ep_2", :provenance)
+    |> Graph.link("proc_pool", "ep_1", :provenance)
+    |> Graph.link("proc_pool", "ep_2", :provenance)
   end
 
   defp candidate_ids(result) do
@@ -363,10 +357,8 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       assert semantic_nodes != []
 
       Enum.each(semantic_nodes, fn node ->
-        episodic_links =
-          node.links
-          |> MapSet.to_list()
-          |> Enum.filter(&String.starts_with?(&1, "ep_"))
+        provenance_ids = Map.get(node.links, :provenance, MapSet.new()) |> MapSet.to_list()
+        episodic_links = Enum.filter(provenance_ids, &String.starts_with?(&1, "ep_"))
 
         assert episodic_links != [],
                "semantic node #{node.id} should have provenance links to episodic nodes"
@@ -389,10 +381,8 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       assert procedural_nodes != []
 
       Enum.each(procedural_nodes, fn node ->
-        episodic_links =
-          node.links
-          |> MapSet.to_list()
-          |> Enum.filter(&String.starts_with?(&1, "ep_"))
+        provenance_ids = Map.get(node.links, :provenance, MapSet.new()) |> MapSet.to_list()
+        episodic_links = Enum.filter(provenance_ids, &String.starts_with?(&1, "ep_"))
 
         assert episodic_links != [],
                "procedural node #{node.id} should have provenance links to episodic nodes"
@@ -483,8 +473,8 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
           label: "shared_concept",
           embedding: tag_vec
         })
-        |> Graph.link("tag_shared", "sem_close")
-        |> Graph.link("tag_shared", "sem_far")
+        |> Graph.link("tag_shared", "sem_close", :membership)
+        |> Graph.link("tag_shared", "sem_far", :membership)
 
       stub_retrieval_llm("semantic", "shared_concept")
 
@@ -550,10 +540,10 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
           description: "Goal",
           embedding: tag_vec
         })
-        |> Graph.link("tag_x", "sem_a")
-        |> Graph.link("tag_x", "sem_b")
-        |> Graph.link("int_x", "proc_a")
-        |> Graph.link("int_x", "proc_b")
+        |> Graph.link("tag_x", "sem_a", :membership)
+        |> Graph.link("tag_x", "sem_b", :membership)
+        |> Graph.link("int_x", "proc_a", :hierarchical)
+        |> Graph.link("int_x", "proc_b", :hierarchical)
 
       stub_retrieval_llm("mixed", "concept\ngoal")
 
@@ -847,7 +837,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         label: "weak concept",
         embedding: @orthogonal_vector
       })
-      |> Graph.link("tag_weak", "sem_weak")
+      |> Graph.link("tag_weak", "sem_weak", :membership)
     end
 
     defp refinement_config(opts) do

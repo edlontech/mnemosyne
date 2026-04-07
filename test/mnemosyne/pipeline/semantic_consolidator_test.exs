@@ -82,8 +82,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
         |> Changeset.add_node(sem_a)
         |> Changeset.add_node(sem_b)
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_a", "tag_1")
-        |> Changeset.add_link("sem_b", "tag_1")
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
 
       high_score_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
       low_score_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
@@ -130,8 +130,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
         |> Changeset.add_node(sem_a)
         |> Changeset.add_node(sem_b)
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_a", "tag_1")
-        |> Changeset.add_link("sem_b", "tag_1")
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
 
       bs =
         build_backend(cs, %{
@@ -182,9 +182,9 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
         |> Changeset.add_node(sem_b)
         |> Changeset.add_node(sem_c)
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_a", "tag_1")
-        |> Changeset.add_link("sem_b", "tag_1")
-        |> Changeset.add_link("sem_c", "tag_1")
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
+        |> Changeset.add_link("sem_c", "tag_1", :membership)
 
       high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
       mid_meta = base_metadata(access_count: 5, cumulative_reward: 2.0, reward_count: 1)
@@ -233,8 +233,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
         |> Changeset.add_node(sem_a)
         |> Changeset.add_node(sem_b)
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_a", "tag_1")
-        |> Changeset.add_link("sem_b", "tag_1")
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
 
       high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
       low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
@@ -278,8 +278,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
         |> Changeset.add_node(sem_a)
         |> Changeset.add_node(sem_b)
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_a", "tag_1")
-        |> Changeset.add_link("sem_b", "tag_1")
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
 
       bs = build_backend(cs, %{"sem_a" => base_metadata(access_count: 5)})
 

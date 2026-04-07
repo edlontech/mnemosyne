@@ -37,14 +37,23 @@ defmodule Mnemosyne.Graph.ChangesetTest do
     end
   end
 
-  describe "add_link/3" do
-    test "prepends link tuple to links" do
+  describe "add_link/4" do
+    test "prepends 3-tuple link to links" do
       cs =
         Changeset.new()
-        |> Changeset.add_link("a", "b")
-        |> Changeset.add_link("c", "d")
+        |> Changeset.add_link("a", "b", :membership)
+        |> Changeset.add_link("c", "d", :sibling)
 
-      assert [{"c", "d"}, {"a", "b"}] = cs.links
+      assert [{"c", "d", :sibling}, {"a", "b", :membership}] = cs.links
+    end
+
+    test "preserves edge type in link tuple" do
+      cs =
+        Changeset.new()
+        |> Changeset.add_link("x", "y", :hierarchical)
+        |> Changeset.add_link("p", "q", :provenance)
+
+      assert [{"p", "q", :provenance}, {"x", "y", :hierarchical}] = cs.links
     end
   end
 
@@ -72,7 +81,7 @@ defmodule Mnemosyne.Graph.ChangesetTest do
   end
 
   describe "merge/2" do
-    test "concatenates additions and links from both changesets" do
+    test "concatenates additions and 3-tuple links from both changesets" do
       tag = %Tag{id: "t1", label: "test"}
 
       episodic = %Episodic{
@@ -88,12 +97,12 @@ defmodule Mnemosyne.Graph.ChangesetTest do
       cs1 =
         Changeset.new()
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("a", "b")
+        |> Changeset.add_link("a", "b", :membership)
 
       cs2 =
         Changeset.new()
         |> Changeset.add_node(episodic)
-        |> Changeset.add_link("c", "d")
+        |> Changeset.add_link("c", "d", :sibling)
 
       merged = Changeset.merge(cs1, cs2)
 
@@ -101,8 +110,8 @@ defmodule Mnemosyne.Graph.ChangesetTest do
       assert length(merged.links) == 2
       assert tag in merged.additions
       assert episodic in merged.additions
-      assert {"a", "b"} in merged.links
-      assert {"c", "d"} in merged.links
+      assert {"a", "b", :membership} in merged.links
+      assert {"c", "d", :sibling} in merged.links
     end
 
     test "merges metadata maps from both changesets" do

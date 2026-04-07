@@ -12,6 +12,7 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
 
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Tag
+  alias Mnemosyne.NodeMetadata
 
   @doc "Deduplicates Tag nodes in the changeset against both the batch and the existing graph."
   @spec deduplicate(Changeset.t(), keyword()) :: {:ok, Changeset.t()} | {:error, term()}
@@ -124,14 +125,31 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
   defp rewrite_links(links, rewrites) when map_size(rewrites) == 0, do: links
 
   defp rewrite_links(links, rewrites) do
-    Enum.map(links, fn {from, to} ->
-      {Map.get(rewrites, from, from), Map.get(rewrites, to, to)}
+    Enum.map(links, fn {from, to, type} ->
+      {Map.get(rewrites, from, from), Map.get(rewrites, to, to), type}
     end)
   end
 
   defp clean_metadata(metadata, rewrites) when map_size(rewrites) == 0, do: metadata
 
   defp clean_metadata(metadata, rewrites) do
-    Map.drop(metadata, Map.keys(rewrites))
+    Enum.reduce(rewrites, metadata, fn {source_id, target_id}, acc ->
+      propagate_reward(acc, source_id, target_id)
+    end)
+  end
+
+  defp propagate_reward(metadata, source_id, target_id) do
+    case Map.get(metadata, source_id) do
+      %NodeMetadata{cumulative_reward: reward, reward_count: rc} when rc > 0 ->
+        target_meta = Map.get(metadata, target_id, NodeMetadata.new())
+        updated_target = NodeMetadata.update_reward(target_meta, reward)
+
+        metadata
+        |> Map.delete(source_id)
+        |> Map.put(target_id, updated_target)
+
+      _ ->
+        Map.delete(metadata, source_id)
+    end
   end
 end

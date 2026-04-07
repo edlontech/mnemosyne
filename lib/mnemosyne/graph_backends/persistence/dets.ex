@@ -102,9 +102,9 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
   end
 
   defp persist_links(links, ref) do
-    Enum.reduce_while(links, :ok, fn {id_a, id_b}, :ok ->
-      with :ok <- update_link(ref, id_a, id_b),
-           :ok <- update_link(ref, id_b, id_a) do
+    Enum.reduce_while(links, :ok, fn {id_a, id_b, type}, :ok ->
+      with :ok <- update_link(ref, id_a, id_b, type),
+           :ok <- update_link(ref, id_b, id_a, type) do
         {:cont, :ok}
       else
         {:error, _} = error -> {:halt, error}
@@ -112,10 +112,13 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
     end)
   end
 
-  defp update_link(ref, node_id, linked_id) do
+  defp update_link(ref, node_id, linked_id, type) do
     case :dets.lookup(ref, node_id) do
       [{^node_id, node}] ->
-        updated = %{node | links: MapSet.put(node.links, linked_id)}
+        updated_links =
+          Map.update(node.links, type, MapSet.new([linked_id]), &MapSet.put(&1, linked_id))
+
+        updated = %{node | links: updated_links}
         :dets.insert(ref, {node_id, updated})
 
       [] ->

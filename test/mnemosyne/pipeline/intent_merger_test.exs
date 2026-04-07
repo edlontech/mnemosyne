@@ -74,7 +74,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         Changeset.new()
         |> Changeset.add_node(intent)
         |> Changeset.add_node(proc)
-        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.add_link("int_new", "proc_1", :hierarchical)
 
       InMemory
       |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
@@ -85,7 +85,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
 
       intent_nodes = Enum.filter(result.additions, &match?(%Intent{}, &1))
       assert [%Intent{id: "int_new", description: "Deploy to production"}] = intent_nodes
-      assert {"int_new", "proc_1"} in result.links
+      assert {"int_new", "proc_1", :hierarchical} in result.links
     end
   end
 
@@ -102,7 +102,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         Changeset.new()
         |> Changeset.add_node(new_intent)
         |> Changeset.add_node(proc)
-        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.add_link("int_new", "proc_1", :hierarchical)
 
       InMemory
       |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
@@ -114,8 +114,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
       intent_nodes = Enum.filter(result.additions, &match?(%Intent{}, &1))
       assert intent_nodes == []
 
-      assert {"int_existing", "proc_1"} in result.links
-      refute {"int_new", "proc_1"} in result.links
+      assert {"int_existing", "proc_1", :hierarchical} in result.links
+      refute {"int_new", "proc_1", :hierarchical} in result.links
     end
   end
 
@@ -129,7 +129,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         Changeset.new()
         |> Changeset.add_node(new_intent)
         |> Changeset.add_node(proc)
-        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.add_link("int_new", "proc_1", :hierarchical)
 
       InMemory
       |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
@@ -165,8 +165,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
 
       assert [0.95, 0.05, 0.0] == hd(intent_nodes).embedding
 
-      assert {"int_existing", "proc_1"} in result.links
-      refute {"int_new", "proc_1"} in result.links
+      assert {"int_existing", "proc_1", :hierarchical} in result.links
+      refute {"int_new", "proc_1", :hierarchical} in result.links
     end
   end
 
@@ -180,7 +180,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         Changeset.new()
         |> Changeset.add_node(new_intent)
         |> Changeset.add_node(proc)
-        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.add_link("int_new", "proc_1", :hierarchical)
 
       InMemory
       |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
@@ -196,7 +196,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
 
       intent_nodes = Enum.filter(result.additions, &match?(%Intent{}, &1))
       assert [%Intent{id: "int_new", description: "Deploy app"}] = intent_nodes
-      assert {"int_new", "proc_1"} in result.links
+      assert {"int_new", "proc_1", :hierarchical} in result.links
     end
   end
 
@@ -213,8 +213,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_node(intent_b)
         |> Changeset.add_node(proc_a)
         |> Changeset.add_node(proc_b)
-        |> Changeset.add_link("int_a", "proc_a")
-        |> Changeset.add_link("int_b", "proc_b")
+        |> Changeset.add_link("int_a", "proc_a", :hierarchical)
+        |> Changeset.add_link("int_b", "proc_b", :hierarchical)
 
       InMemory
       |> stub(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
@@ -227,8 +227,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
       assert length(intent_nodes) == 1
 
       [kept] = intent_nodes
-      assert {kept.id, "proc_a"} in result.links
-      assert {kept.id, "proc_b"} in result.links
+      assert {kept.id, "proc_a", :hierarchical} in result.links
+      assert {kept.id, "proc_b", :hierarchical} in result.links
     end
   end
 
@@ -246,7 +246,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         Changeset.new()
         |> Changeset.add_node(new_intent)
         |> Changeset.add_node(proc)
-        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.add_link("int_new", "proc_1", :hierarchical)
         |> Changeset.put_metadata("int_new", new_meta)
 
       InMemory
@@ -272,7 +272,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         Changeset.new()
         |> Changeset.add_node(new_intent)
         |> Changeset.add_node(proc)
-        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.add_link("int_new", "proc_1", :hierarchical)
         |> Changeset.put_metadata("int_new", new_meta)
 
       InMemory
@@ -321,7 +321,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         Changeset.new()
         |> Changeset.add_node(new_intent)
         |> Changeset.add_node(proc)
-        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.add_link("int_new", "proc_1", :hierarchical)
         |> Changeset.put_metadata("int_new", new_meta)
 
       InMemory
@@ -347,7 +347,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         Changeset.new()
         |> Changeset.add_node(intent)
         |> Changeset.add_node(proc)
-        |> Changeset.add_link("int_new", "proc_1")
+        |> Changeset.add_link("int_new", "proc_1", :hierarchical)
         |> Changeset.put_metadata("int_new", intent_meta)
 
       InMemory

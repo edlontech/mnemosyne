@@ -176,7 +176,9 @@ defmodule Mnemosyne.Pipeline.Structuring do
          {:ok, procedural_cs, instructions} <- tag_procedural_result(procedural_result),
          {:ok, scores} <- compute_return(trajectory, goal, instructions, llm, llm_opts, config) do
       procedural_cs = stamp_return_scores(procedural_cs, scores)
-      base_cs = build_base_changeset(goal, episode_id, trajectory, episodic_ids)
+
+      base_cs =
+        build_base_changeset(goal, episode_id, trajectory, episodic_ids, embedding, config)
 
       cs =
         base_cs
@@ -241,12 +243,20 @@ defmodule Mnemosyne.Pipeline.Structuring do
     total / length(steps)
   end
 
-  defp build_base_changeset(goal, episode_id, trajectory, episodic_ids) do
+  defp build_base_changeset(goal, episode_id, trajectory, episodic_ids, embedding, config) do
     subgoal_node = %Subgoal{
       id: generate_id("sg"),
       description: trajectory.subgoal,
       parent_goal: goal
     }
+
+    observations = Enum.map(trajectory.steps, & &1.observation)
+
+    observation_embeddings =
+      case embedding.embed_batch(observations, Config.embedding_opts(config)) do
+        {:ok, %Embedding.Response{vectors: vectors}} -> vectors
+        _ -> List.duplicate(nil, length(observations))
+      end
 
     cs =
       Changeset.new()
@@ -255,7 +265,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
     trajectory.steps
     |> Enum.zip(episodic_ids)
-    |> Enum.reduce(cs, fn {step, episodic_id}, acc ->
+    |> Enum.zip(observation_embeddings)
+    |> Enum.reduce(cs, fn {{step, episodic_id}, obs_embedding}, acc ->
       source_id = generate_id("src")
 
       episodic_node = %Episodic{
@@ -272,7 +283,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
       source_node = %Source{
         id: source_id,
         episode_id: episode_id,
-        step_index: step.index
+        step_index: step.index,
+        embedding: obs_embedding
       }
 
       acc
@@ -280,8 +292,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
       |> Changeset.add_node(source_node)
       |> Changeset.put_metadata(episodic_id, NodeMetadata.new())
       |> Changeset.put_metadata(source_id, NodeMetadata.new())
-      |> Changeset.add_link(episodic_id, subgoal_node.id)
-      |> Changeset.add_link(episodic_id, source_id)
+      |> Changeset.add_link(episodic_id, subgoal_node.id, :hierarchical)
+      |> Changeset.add_link(episodic_id, source_id, :provenance)
     end)
   end
 
@@ -326,9 +338,15 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
       cs =
         Enum.reduce(Map.values(concept_map), cs, fn tag, acc ->
+          linked_sem_ids = tag_to_semantic_ids(tag, acc)
+          tag_reward = compute_avg_child_reward(linked_sem_ids, acc.metadata)
+
           acc
           |> Changeset.add_node(tag)
-          |> Changeset.put_metadata(tag.id, NodeMetadata.new())
+          |> Changeset.put_metadata(
+            tag.id,
+            NodeMetadata.new(cumulative_reward: tag_reward, reward_count: 1)
+          )
         end)
 
       {:ok, cs}
@@ -351,7 +369,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
     cs =
       Enum.reduce(fact.concepts, cs, fn concept_label, acc ->
         case Map.fetch(concept_map, concept_label) do
-          {:ok, tag} -> Changeset.add_link(acc, tag.id, sem_node.id)
+          {:ok, tag} -> Changeset.add_link(acc, tag.id, sem_node.id, :membership)
           :error -> acc
         end
       end)
@@ -400,9 +418,15 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
       cs =
         Enum.reduce(Map.values(intent_map), cs, fn intent, acc ->
+          linked_proc_ids = intent_to_procedural_ids(intent, acc)
+          intent_reward = compute_avg_child_reward(linked_proc_ids, acc.metadata)
+
           acc
           |> Changeset.add_node(intent)
-          |> Changeset.put_metadata(intent.id, NodeMetadata.new())
+          |> Changeset.put_metadata(
+            intent.id,
+            NodeMetadata.new(cumulative_reward: intent_reward, reward_count: 1)
+          )
         end)
 
       {:ok, cs, instructions}
@@ -425,7 +449,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
     cs =
       case Map.fetch(intent_map, instr.intent) do
-        {:ok, intent} -> Changeset.add_link(cs, intent.id, proc_node.id)
+        {:ok, intent} -> Changeset.add_link(cs, intent.id, proc_node.id, :hierarchical)
         :error -> cs
       end
 
@@ -558,14 +582,14 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
   defp add_provenance_links(cs, knowledge_ids, episodic_ids) do
     for k_id <- knowledge_ids, e_id <- episodic_ids, reduce: cs do
-      acc -> Changeset.add_link(acc, k_id, e_id)
+      acc -> Changeset.add_link(acc, k_id, e_id, :provenance)
     end
   end
 
   defp add_sibling_links(cs, ids) do
     ids
     |> pairs()
-    |> Enum.reduce(cs, fn {a, b}, acc -> Changeset.add_link(acc, a, b) end)
+    |> Enum.reduce(cs, fn {a, b}, acc -> Changeset.add_link(acc, a, b, :sibling) end)
   end
 
   defp pairs([]), do: []
@@ -574,6 +598,33 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
   defp count_nodes_of_type(cs, mod) do
     Enum.count(cs.additions, &is_struct(&1, mod))
+  end
+
+  defp tag_to_semantic_ids(tag, cs) do
+    cs.links
+    |> Enum.filter(fn {from, _to, type} -> from == tag.id and type == :membership end)
+    |> Enum.map(fn {_from, to, _type} -> to end)
+  end
+
+  defp intent_to_procedural_ids(intent, cs) do
+    cs.links
+    |> Enum.filter(fn {from, _to, type} -> from == intent.id and type == :hierarchical end)
+    |> Enum.map(fn {_from, to, _type} -> to end)
+  end
+
+  defp compute_avg_child_reward([], _metadata), do: 0.0
+
+  defp compute_avg_child_reward(child_ids, metadata) do
+    rewards =
+      child_ids
+      |> Enum.map(&Map.get(metadata, &1))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(& &1.cumulative_reward)
+
+    case rewards do
+      [] -> 0.0
+      rs -> Enum.sum(rs) / length(rs)
+    end
   end
 
   defp generate_id(prefix) do

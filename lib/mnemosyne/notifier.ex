@@ -29,6 +29,12 @@ defmodule Mnemosyne.Notifier do
                deleted: non_neg_integer(),
                deleted_ids: [String.t()]
              }, metadata()}
+          | {:validation_completed,
+             %{
+               checked: non_neg_integer(),
+               penalized: non_neg_integer(),
+               orphaned: non_neg_integer()
+             }, metadata()}
           | {:session_transition, session_id :: String.t(), old_state :: atom(),
              new_state :: atom(), metadata()}
           | {:recall_executed, query :: String.t(), results :: term(), metadata()}

@@ -637,6 +637,21 @@ defmodule Mnemosyne do
     end
   end
 
+  @doc """
+  Validates episodic grounding of abstract nodes in the repo's graph asynchronously.
+
+  Walks provenance chains from semantic/procedural nodes to source nodes
+  and penalizes nodes whose source embeddings diverge from the abstract
+  node's embedding. Returns immediately; validation runs in the background.
+  """
+  @spec validate_episodic(String.t(), keyword()) ::
+          :ok | {:error, NotFoundError.t()}
+  def validate_episodic(repo_id, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.validate_episodic(pid, opts)
+    end
+  end
+
   # -- Private --
 
   defp lookup_repo(repo_id, opts) do

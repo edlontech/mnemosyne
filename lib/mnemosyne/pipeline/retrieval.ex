@@ -12,6 +12,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
   alias Mnemosyne.Graph.Node, as: NodeProtocol
+  alias Mnemosyne.Graph.Node.Helpers, as: NodeHelpers
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.Notifier.Trace.Recall, as: RecallTrace
   alias Mnemosyne.Pipeline.HopRefinement
@@ -332,11 +333,11 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     candidate_link_ids =
       candidates
       |> Enum.flat_map(fn %TaggedCandidate{node: node} ->
-        NodeProtocol.links(node) |> MapSet.to_list()
+        node |> NodeHelpers.all_linked_ids() |> MapSet.to_list()
       end)
       |> Enum.uniq()
 
-    {:ok, linked_nodes, _bs} = mod.get_linked_nodes(candidate_link_ids, bs)
+    {:ok, linked_nodes, _bs} = mod.get_linked_nodes(candidate_link_ids, nil, bs)
 
     routing_nodes =
       Enum.filter(linked_nodes, fn node ->
@@ -345,11 +346,11 @@ defmodule Mnemosyne.Pipeline.Retrieval do
 
     sibling_ids =
       routing_nodes
-      |> Enum.flat_map(fn node -> NodeProtocol.links(node) |> MapSet.to_list() end)
+      |> Enum.flat_map(fn node -> node |> NodeHelpers.all_linked_ids() |> MapSet.to_list() end)
       |> Enum.reject(&MapSet.member?(seen_ids, &1))
       |> Enum.uniq()
 
-    {:ok, siblings, _bs} = mod.get_linked_nodes(sibling_ids, bs)
+    {:ok, siblings, _bs} = mod.get_linked_nodes(sibling_ids, nil, bs)
 
     Enum.reject(siblings, fn node ->
       NodeProtocol.node_type(node) in routing_types
@@ -368,12 +369,12 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         NodeProtocol.node_type(node) == :episodic
       end)
       |> Enum.flat_map(fn %TaggedCandidate{node: node} ->
-        NodeProtocol.links(node) |> MapSet.to_list()
+        NodeProtocol.links(node, :provenance) |> MapSet.to_list()
       end)
       |> Enum.reject(&MapSet.member?(candidate_ids, &1))
       |> Enum.uniq()
 
-    {:ok, linked_nodes, _bs} = mod.get_linked_nodes(episodic_link_ids, bs)
+    {:ok, linked_nodes, _bs} = mod.get_linked_nodes(episodic_link_ids, nil, bs)
 
     source_nodes =
       linked_nodes
@@ -383,7 +384,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
           candidates
           |> Enum.filter(fn %TaggedCandidate{node: node} ->
             NodeProtocol.node_type(node) == :episodic and
-              MapSet.member?(NodeProtocol.links(node), NodeProtocol.id(source))
+              MapSet.member?(NodeProtocol.links(node, :provenance), NodeProtocol.id(source))
           end)
           |> Enum.map(fn %TaggedCandidate{score: score} -> score end)
           |> Enum.max(fn -> 0.0 end)

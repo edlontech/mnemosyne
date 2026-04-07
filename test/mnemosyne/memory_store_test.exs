@@ -276,14 +276,14 @@ defmodule Mnemosyne.MemoryStoreTest do
       emb = List.duplicate(0.5, 128)
       emb_similar = List.duplicate(0.5, 127) ++ [0.50001]
 
-      tag = %Tag{id: "t1", label: "elixir", links: MapSet.new(["s1", "s2"])}
+      tag = %Tag{id: "t1", label: "elixir", links: %{membership: MapSet.new(["s1", "s2"])}}
 
       sem1 = %Semantic{
         id: "s1",
         proposition: "Elixir is great",
         confidence: 0.9,
         embedding: emb,
-        links: MapSet.new(["t1"])
+        links: %{membership: MapSet.new(["t1"])}
       }
 
       sem2 = %Semantic{
@@ -291,7 +291,7 @@ defmodule Mnemosyne.MemoryStoreTest do
         proposition: "Elixir is awesome",
         confidence: 0.9,
         embedding: emb_similar,
-        links: MapSet.new(["t1"])
+        links: %{membership: MapSet.new(["t1"])}
       }
 
       meta1 = NodeMetadata.new(created_at: DateTime.utc_now(), access_count: 5)
@@ -479,7 +479,7 @@ defmodule Mnemosyne.MemoryStoreTest do
         Changeset.new()
         |> Changeset.add_node(sem1)
         |> Changeset.add_node(tag1)
-        |> Changeset.add_link("tag-1", "sem-1")
+        |> Changeset.add_link("tag-1", "sem-1", :membership)
 
       :ok = MemoryStore.apply_changeset(pid, cs1)
       assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "sem-1") != nil)
@@ -491,7 +491,7 @@ defmodule Mnemosyne.MemoryStoreTest do
         Changeset.new()
         |> Changeset.add_node(sem2)
         |> Changeset.add_node(tag2)
-        |> Changeset.add_link("tag-2", "sem-2")
+        |> Changeset.add_link("tag-2", "sem-2", :membership)
 
       :ok = MemoryStore.apply_changeset(pid, cs2)
       assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "sem-2") != nil)
@@ -501,8 +501,9 @@ defmodule Mnemosyne.MemoryStoreTest do
       assert [%Tag{label: "database"}] = tags
 
       tag = hd(tags)
-      assert MapSet.member?(tag.links, "sem-1")
-      assert MapSet.member?(tag.links, "sem-2")
+      tag_member_links = Map.get(tag.links, :membership, MapSet.new())
+      assert MapSet.member?(tag_member_links, "sem-1")
+      assert MapSet.member?(tag_member_links, "sem-2")
     end
   end
 
@@ -539,7 +540,7 @@ defmodule Mnemosyne.MemoryStoreTest do
         Changeset.new()
         |> Changeset.add_node(node)
         |> Changeset.add_node(tag)
-        |> Changeset.add_link("t1", "s1")
+        |> Changeset.add_link("t1", "s1", :membership)
         |> Changeset.put_metadata("s1", NodeMetadata.new())
 
       :ok = MemoryStore.apply_changeset(pid, changeset)

@@ -47,13 +47,13 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
         Changeset.new()
         |> Changeset.add_node(semantic_node("s1"))
         |> Changeset.add_node(semantic_node("s2"))
-        |> Changeset.add_link("s1", "s2")
+        |> Changeset.add_link("s1", "s2", :sibling)
 
       assert :ok = PersistenceDETS.save(changeset, state)
 
       {:ok, graph, _metadata} = PersistenceDETS.load(state)
-      assert MapSet.member?(graph.nodes["s1"].links, "s2")
-      assert MapSet.member?(graph.nodes["s2"].links, "s1")
+      assert MapSet.member?(Map.get(graph.nodes["s1"].links, :sibling, MapSet.new()), "s2")
+      assert MapSet.member?(Map.get(graph.nodes["s2"].links, :sibling, MapSet.new()), "s1")
 
       :dets.close(state.ref)
     end
@@ -152,7 +152,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
         Changeset.new()
         |> Changeset.add_node(semantic_node("s1"))
         |> Changeset.add_node(semantic_node("s2"))
-        |> Changeset.add_link("s1", "s2")
+        |> Changeset.add_link("s1", "s2", :sibling)
 
       {:ok, _state} = InMemory.apply_changeset(changeset, state)
 
@@ -161,7 +161,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
       assert {:ok, %Semantic{id: "s2"}, _} = InMemory.get_node("s2", state2)
 
       %Semantic{links: links} = state2.graph.nodes["s1"]
-      assert MapSet.member?(links, "s2")
+      assert MapSet.member?(Map.get(links, :sibling, MapSet.new()), "s2")
 
       :dets.close(state2.persistence |> elem(1) |> Map.get(:ref))
     end

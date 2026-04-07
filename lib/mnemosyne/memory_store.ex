@@ -21,6 +21,7 @@ defmodule Mnemosyne.MemoryStore do
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Notifier
   alias Mnemosyne.Pipeline.Decay
+  alias Mnemosyne.Pipeline.EpisodicValidation
   alias Mnemosyne.Pipeline.IntentMerger
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.RecallResult
@@ -84,6 +85,12 @@ defmodule Mnemosyne.MemoryStore do
   @spec decay_nodes(GenServer.server(), keyword()) :: :ok
   def decay_nodes(server, opts \\ []) do
     GenServer.cast(server, {:decay_nodes, opts})
+  end
+
+  @doc "Validates episodic grounding and penalizes weakly grounded nodes."
+  @spec validate_episodic(GenServer.server(), keyword()) :: :ok
+  def validate_episodic(server, opts \\ []) do
+    GenServer.cast(server, {:validate_episodic, opts})
   end
 
   @doc "Fetches a single node by ID from the backend."
@@ -201,6 +208,19 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   @impl true
+  def handle_cast({:validate_episodic, opts}, state) do
+    if state.maintenance_active == nil do
+      {ref, operation} = spawn_maintenance_task({:validate_episodic, opts, nil}, state)
+      new_state = %{state | maintenance_active: {ref, operation}}
+      emit_queue_telemetry(new_state, :maintenance_start)
+      {:noreply, new_state}
+    else
+      Logger.debug("maintenance already active, dropping validation request")
+      {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_call(:get_graph, _from, state) do
     {_backend_mod, backend_state} = state.backend
     {:reply, Map.get(backend_state, :graph, Graph.new()), state}
@@ -240,7 +260,7 @@ defmodule Mnemosyne.MemoryStore do
   def handle_call({:get_linked_nodes, node_ids}, _from, state) do
     {backend_mod, backend_state} = state.backend
 
-    case backend_mod.get_linked_nodes(node_ids, backend_state) do
+    case backend_mod.get_linked_nodes(node_ids, nil, backend_state) do
       {:ok, nodes, _bs} -> {:reply, {:ok, nodes}, state}
       {:error, _} = error -> {:reply, error, state}
     end
@@ -503,10 +523,38 @@ defmodule Mnemosyne.MemoryStore do
     {task.ref, {:decay_nodes, from}}
   end
 
+  defp spawn_maintenance_task({:validate_episodic, opts, from}, state) do
+    backend = state.backend
+    config = state.config
+    repo_id = state.repo_id
+
+    task =
+      Task.Supervisor.async_nolink(state.task_supervisor, fn ->
+        validation_opts = Keyword.merge(opts, backend: backend, config: config)
+
+        Telemetry.span([:episodic_validation, :validate], %{repo_id: repo_id}, fn ->
+          run_validation(&EpisodicValidation.validate/1, validation_opts)
+        end)
+      end)
+
+    {task.ref, {:validate_episodic, from}}
+  end
+
   defp run_maintenance(fun, opts) do
     case fun.(opts) do
       {:ok, result, updated_backend} ->
         {{:ok, result, updated_backend}, %{checked: result.checked, deleted: result.deleted}}
+
+      {:error, _} = error ->
+        {error, %{}}
+    end
+  end
+
+  defp run_validation(fun, opts) do
+    case fun.(opts) do
+      {:ok, result, updated_backend} ->
+        {{:ok, result, updated_backend},
+         %{checked: result.checked, penalized: result.penalized, orphaned: result.orphaned}}
 
       {:error, _} = error ->
         {error, %{}}
@@ -563,6 +611,15 @@ defmodule Mnemosyne.MemoryStore do
       state.repo_id,
       {:decay_completed,
        %{checked: result.checked, deleted: result.deleted, deleted_ids: result.deleted_ids}, %{}}
+    )
+  end
+
+  defp notify_maintenance(:validate_episodic, result, state) do
+    Notifier.safe_notify(
+      state.notifier,
+      state.repo_id,
+      {:validation_completed,
+       %{checked: result.checked, penalized: result.penalized, orphaned: result.orphaned}, %{}}
     )
   end
 

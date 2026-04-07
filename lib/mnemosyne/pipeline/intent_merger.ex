@@ -258,8 +258,8 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
   defp rewrite_links(links, rewrites) when map_size(rewrites) == 0, do: links
 
   defp rewrite_links(links, rewrites) do
-    Enum.map(links, fn {from, to} ->
-      {Map.get(rewrites, from, from), Map.get(rewrites, to, to)}
+    Enum.map(links, fn {from, to, type} ->
+      {Map.get(rewrites, from, from), Map.get(rewrites, to, to), type}
     end)
   end
 end

@@ -7,6 +7,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
   """
 
   alias Mnemosyne.Graph.Node, as: NodeProtocol
+  alias Mnemosyne.Graph.Node.Helpers, as: NodeHelpers
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.NodeMetadata
 
@@ -87,14 +88,14 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
   end
 
   defp tag_neighbors(node, backend_mod, bs) do
-    linked_ids = node |> NodeProtocol.links() |> MapSet.to_list()
-    {:ok, linked_nodes, _bs} = backend_mod.get_linked_nodes(linked_ids, bs)
+    linked_ids = node |> NodeHelpers.all_linked_ids() |> MapSet.to_list()
+    {:ok, linked_nodes, _bs} = backend_mod.get_linked_nodes(linked_ids, nil, bs)
 
     tags = Enum.filter(linked_nodes, &(NodeProtocol.node_type(&1) == :tag))
 
     Enum.flat_map(tags, fn tag ->
-      tag_linked_ids = tag |> NodeProtocol.links() |> MapSet.to_list()
-      {:ok, tag_neighbors, _bs} = backend_mod.get_linked_nodes(tag_linked_ids, bs)
+      tag_linked_ids = tag |> NodeHelpers.all_linked_ids() |> MapSet.to_list()
+      {:ok, tag_neighbors, _bs} = backend_mod.get_linked_nodes(tag_linked_ids, nil, bs)
 
       tag_neighbors
       |> Enum.filter(&(NodeProtocol.node_type(&1) == :semantic))

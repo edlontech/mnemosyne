@@ -7,11 +7,12 @@ defmodule Mnemosyne.Graph.Changeset do
   """
   use TypedStruct
 
+  alias Mnemosyne.Graph.Edge
   alias Mnemosyne.NodeMetadata
 
   typedstruct do
     field :additions, [struct()], default: []
-    field :links, [{String.t(), String.t()}], default: []
+    field :links, [{String.t(), String.t(), Edge.edge_type()}], default: []
     field :metadata, %{String.t() => NodeMetadata.t()}, default: %{}
   end
 
@@ -25,10 +26,11 @@ defmodule Mnemosyne.Graph.Changeset do
     %{cs | additions: [node | cs.additions]}
   end
 
-  @doc "Records a link between two node IDs in the changeset."
-  @spec add_link(t(), String.t(), String.t()) :: t()
-  def add_link(%__MODULE__{} = cs, id_a, id_b) do
-    %{cs | links: [{id_a, id_b} | cs.links]}
+  @doc "Records a typed link between two node IDs in the changeset."
+  @spec add_link(t(), String.t(), String.t(), Edge.edge_type()) :: t()
+  def add_link(%__MODULE__{} = cs, id_a, id_b, type)
+      when type in [:membership, :hierarchical, :provenance, :sibling] do
+    %{cs | links: [{id_a, id_b, type} | cs.links]}
   end
 
   @doc "Associates metadata with a node ID in the changeset."
