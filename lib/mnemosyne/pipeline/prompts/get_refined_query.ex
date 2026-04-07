@@ -1,7 +1,7 @@
 defmodule Mnemosyne.Pipeline.Prompts.GetRefinedQuery do
   @moduledoc """
-  Prompt for refining retrieval tags based on initial results.
-  Generates new search tags conditioned on what was found so far.
+  Prompt for refining retrieval tags during multi-hop retrieval.
+  Generates bridge-concept search tags targeting information not yet reached.
   """
 
   @behaviour Mnemosyne.Prompt
@@ -27,9 +27,11 @@ defmodule Mnemosyne.Pipeline.Prompts.GetRefinedQuery do
       %{
         role: :system,
         content: """
-        You are a search refinement expert. The initial retrieval for a #{mode} memory query
-        returned weak results. Based on the original query and what was found, generate
-        improved search tags that might find more relevant results.
+        You are a search refinement expert. A multi-hop retrieval is in progress for a #{mode} memory query.
+        Based on the original query and what each hop has found so far, generate refined search tags
+        that target information the current results haven't reached yet.
+
+        Focus on bridge concepts: entities or ideas that connect what's been found to what the query still needs.
 
         Return a JSON object with a "tags" array of 3-5 concise search terms.
         Return an empty array if the current results are adequate.\
@@ -40,7 +42,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetRefinedQuery do
         content: """
         Original query: #{query}
 
-        Retrieved so far:
+        Retrieved so far (by hop):
         #{formatted_candidates}
 
         Refined search tags:\

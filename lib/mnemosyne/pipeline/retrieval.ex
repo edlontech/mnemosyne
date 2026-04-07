@@ -14,9 +14,9 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.Notifier.Trace.Recall, as: RecallTrace
+  alias Mnemosyne.Pipeline.HopRefinement
   alias Mnemosyne.Pipeline.Prompts.GetMode
   alias Mnemosyne.Pipeline.Prompts.GetPlan
-  alias Mnemosyne.Pipeline.Prompts.GetRefinedQuery
   alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
   use TypedStruct
@@ -106,35 +106,28 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       end)
 
     hop0_count = length(candidates)
-    best_relevance = best_candidate_relevance(candidates, ctx.query_vector)
-    threshold = refinement_threshold(ctx.config)
 
-    {refine_us, refined_vectors} =
-      :timer.tc(fn ->
-        maybe_refine_query(
-          ctx.query,
-          candidates,
-          best_relevance,
-          threshold,
-          ctx.llm,
-          ctx.embedding,
-          ctx.llm_opts,
-          ctx.config
-        )
-      end)
+    refinement_state = init_refinement(ctx.config, ctx.max_hops)
 
-    {multihop_us, candidates} =
+    refine_ctx = %{
+      llm: ctx.llm,
+      embedding: ctx.embedding,
+      config: ctx.config,
+      llm_opts: ctx.llm_opts,
+      query: ctx.query
+    }
+
+    hop_ctx = %{
+      backend: ctx.backend,
+      query_vector: ctx.query_vector,
+      value_fns: ctx.value_fns,
+      mode: ctx.mode,
+      refine_ctx: refine_ctx
+    }
+
+    {multihop_us, {candidates, refinement_state}} =
       :timer.tc(fn ->
-        multi_hop(
-          candidates,
-          ctx.backend,
-          ctx.query_vector,
-          ctx.value_fns,
-          ctx.max_hops,
-          ctx.mode,
-          refined_vectors,
-          1
-        )
+        multi_hop(candidates, hop_ctx, ctx.max_hops, refinement_state, 1)
       end)
 
     post_multihop_count = length(candidates)
@@ -153,11 +146,16 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         do: %{multi_hop: multihop_rejected},
         else: %{}
 
+    refinement_us =
+      refinement_state.refinements
+      |> Enum.map(& &1.duration_us)
+      |> Enum.sum()
+
     phases = %{
       timings: %{
         hop_0: hop0_us,
-        refinement: refine_us,
-        multi_hop: multihop_us,
+        refinement: refinement_us,
+        multi_hop: max(0, multihop_us - refinement_us),
         provenance: prov_us
       },
       candidates_per_hop: %{0 => hop0_count, 1 => post_multihop_count},
@@ -176,7 +174,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       candidates_per_hop: phases.candidates_per_hop,
       scores: phases.scores,
       rejected: phases.rejected,
-      phase_timings: phases.timings
+      phase_timings: phases.timings,
+      refinements: refinement_state.refinements
     }
 
     result = %Result{mode: ctx.mode, tags: ctx.tags, candidates: candidates, phases: phases}
@@ -220,31 +219,15 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     Enum.map(candidates, fn {node, score} -> TaggedCandidate.from_hop_0(node, score) end)
   end
 
-  defp best_candidate_relevance([], _query_vector), do: 0.0
-
-  defp best_candidate_relevance(candidates, query_vector) do
-    candidates
-    |> Enum.map(fn %TaggedCandidate{node: node} ->
-      case NodeProtocol.embedding(node) do
-        nil -> 0.0
-        emb -> Similarity.cosine_similarity(query_vector, emb)
-      end
-    end)
-    |> Enum.max(fn -> 0.0 end)
+  defp init_refinement(nil, _max_hops) do
+    %HopRefinement.State{}
   end
 
-  defp refinement_threshold(nil), do: 0.6
-  defp refinement_threshold(config), do: config.refinement_threshold
+  defp init_refinement(%Config{} = config, max_hops) do
+    HopRefinement.init(config, max_hops)
+  end
 
-  defp inject_refined_candidates(
-         _backend,
-         _query_vector,
-         _value_fns,
-         _mode,
-         _seen_ids,
-         nil
-       ),
-       do: []
+  defp inject_refined_candidates(_backend, _qv, _vf, _mode, _seen, nil, _hop), do: []
 
   defp inject_refined_candidates(
          backend,
@@ -252,7 +235,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
          value_fns,
          mode,
          seen_ids,
-         refined_vectors
+         refined_vectors,
+         hop
        ) do
     {mod, bs} = backend
     target_types = types_for_mode(mode)
@@ -261,118 +245,31 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       {:ok, refined_candidates, _bs} ->
         refined_candidates
         |> Enum.reject(fn {node, _} -> MapSet.member?(seen_ids, NodeProtocol.id(node)) end)
-        |> Enum.map(fn {node, score} -> TaggedCandidate.from_refinement(node, score) end)
+        |> Enum.map(fn {node, score} -> TaggedCandidate.from_refinement(node, score, hop) end)
 
       _ ->
         []
     end
   end
 
-  defp maybe_refine_query(
-         _query,
-         _candidates,
-         best_relevance,
-         threshold,
-         _llm,
-         _embedding,
-         _llm_opts,
-         _config
-       )
-       when best_relevance >= threshold,
-       do: nil
-
-  defp maybe_refine_query(
-         query,
-         candidates,
-         _best_relevance,
-         _threshold,
-         llm,
-         embedding,
-         llm_opts,
-         config
-       ) do
-    summaries = summarize_candidates(candidates)
-    mode = infer_mode_from_candidates(candidates)
-
-    messages =
-      GetRefinedQuery.build_messages(%{
-        original_query: query,
-        mode: mode,
-        retrieved_so_far: summaries
-      })
-
-    with {:ok, %{content: content}} <-
-           llm.chat_structured(
-             messages,
-             GetRefinedQuery.schema(),
-             Config.llm_opts(config, :get_refined_query, llm_opts)
-           ),
-         {:ok, [_ | _] = tags} <- GetRefinedQuery.parse_response(content),
-         {:ok, %Embedding.Response{vectors: vectors}} <-
-           embedding.embed_batch(tags, Config.embedding_opts(config)) do
-      vectors
-    else
-      _ -> nil
-    end
+  defp multi_hop(candidates, _hop_ctx, 0, refinement_state, _current_hop) do
+    {candidates, refinement_state}
   end
 
-  defp summarize_candidates(candidates) do
-    Enum.map(candidates, fn %TaggedCandidate{node: node} ->
-      type = NodeProtocol.node_type(node)
-      content = node_content_summary(node)
-      %{type: type, content: content}
-    end)
-  end
+  defp multi_hop(candidates, hop_ctx, hops_remaining, refinement_state, current_hop) do
+    %{
+      backend: backend,
+      query_vector: query_vector,
+      value_fns: value_fns,
+      mode: mode,
+      refine_ctx: refine_ctx
+    } = hop_ctx
 
-  defp node_content_summary(%{proposition: p}), do: p
-  defp node_content_summary(%{instruction: i}), do: i
-  defp node_content_summary(%{observation: o, action: a}), do: "#{o} -> #{a}"
-  defp node_content_summary(%{description: d}), do: d
-  defp node_content_summary(_), do: ""
-
-  defp infer_mode_from_candidates(candidates) do
-    types =
-      Enum.map(candidates, fn %TaggedCandidate{node: node} -> NodeProtocol.node_type(node) end)
-      |> Enum.uniq()
-
-    cond do
-      :semantic in types and :procedural in types -> :mixed
-      :procedural in types -> :procedural
-      :episodic in types -> :episodic
-      true -> :semantic
-    end
-  end
-
-  defp multi_hop(
-         candidates,
-         _backend,
-         _query_vector,
-         _value_fns,
-         0,
-         _mode,
-         _refined_vectors,
-         _current_hop
-       ),
-       do: candidates
-
-  defp multi_hop(
-         candidates,
-         backend,
-         query_vector,
-         value_fns,
-         hops_remaining,
-         mode,
-         refined_vectors,
-         current_hop
-       ) do
     seen_ids =
       MapSet.new(candidates, fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
 
     routing_types = routing_types_for_mode(mode)
     expanded_nodes = expand_through_routing_nodes(candidates, backend, seen_ids, routing_types)
-
-    refined_tagged =
-      inject_refined_candidates(backend, query_vector, value_fns, mode, seen_ids, refined_vectors)
 
     vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
 
@@ -386,24 +283,46 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         TaggedCandidate.from_multi_hop(node, score, current_hop)
       end)
 
-    scored = expansion_scored ++ refined_tagged
-
     merged =
-      (candidates ++ scored)
+      (candidates ++ expansion_scored)
       |> Enum.uniq_by(fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
       |> Enum.sort_by(& &1.score, :desc)
       |> Enum.take(@max_candidates_per_hop)
 
-    multi_hop(
-      merged,
-      backend,
-      query_vector,
-      value_fns,
-      hops_remaining - 1,
-      mode,
-      nil,
-      current_hop + 1
-    )
+    {refined_vectors, refinement_state} =
+      case HopRefinement.maybe_refine(
+             refinement_state,
+             refine_ctx.query,
+             merged,
+             current_hop,
+             refine_ctx
+           ) do
+        {:refined, _tags, vectors, new_state} -> {vectors, new_state}
+        {:skip, new_state} -> {nil, new_state}
+      end
+
+    refined_tagged =
+      inject_refined_candidates(
+        backend,
+        query_vector,
+        value_fns,
+        mode,
+        seen_ids,
+        refined_vectors,
+        current_hop
+      )
+
+    merged =
+      if refined_tagged != [] do
+        (merged ++ refined_tagged)
+        |> Enum.uniq_by(fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
+        |> Enum.sort_by(& &1.score, :desc)
+        |> Enum.take(@max_candidates_per_hop)
+      else
+        merged
+      end
+
+    multi_hop(merged, hop_ctx, hops_remaining - 1, refinement_state, current_hop + 1)
   end
 
   @doc false

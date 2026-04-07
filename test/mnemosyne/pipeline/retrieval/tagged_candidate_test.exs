@@ -16,9 +16,9 @@ defmodule Mnemosyne.Pipeline.Retrieval.TaggedCandidateTest do
     assert %TaggedCandidate{phase: :multi_hop, hop: 2, score: 0.7} = tc
   end
 
-  test "from_refinement sets phase :refinement" do
-    tc = TaggedCandidate.from_refinement(@node, 0.6)
-    assert %TaggedCandidate{phase: :refinement, hop: nil, score: 0.6} = tc
+  test "from_refinement sets phase :refinement with hop" do
+    tc = TaggedCandidate.from_refinement(@node, 0.6, 1)
+    assert %TaggedCandidate{phase: :refinement, hop: 1, score: 0.6} = tc
   end
 
   test "from_provenance sets phase :provenance with nil hop" do

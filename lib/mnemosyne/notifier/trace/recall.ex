@@ -19,5 +19,6 @@ defmodule Mnemosyne.Notifier.Trace.Recall do
     field :scores, %{String.t() => float()} | nil, default: nil
     field :rejected, %{atom() => non_neg_integer()} | nil, default: nil
     field :phase_timings, %{atom() => non_neg_integer()} | nil, default: nil
+    field :refinements, [map()], default: []
   end
 end

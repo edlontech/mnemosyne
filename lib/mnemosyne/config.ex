@@ -155,6 +155,16 @@ defmodule Mnemosyne.Config do
                        description:
                          "Cosine similarity threshold below which retrieval triggers per-hop query refinement"
                      ),
+                   refinement_budget:
+                     Zoi.default(Zoi.non_negative(Zoi.integer()), 1,
+                       description:
+                         "Maximum number of LLM refinement calls per recall. Capped at max_hops at runtime."
+                     ),
+                   plateau_delta:
+                     Zoi.default(Zoi.float(), 0.05,
+                       description:
+                         "Minimum score improvement between hops to skip refinement. Lower values trigger refinement more aggressively."
+                     ),
                    session: @session_schema,
                    trace_verbosity:
                      Zoi.default(
@@ -185,6 +195,16 @@ defmodule Mnemosyne.Config do
       Zoi.default(Zoi.float(), 0.6,
         description:
           "Cosine similarity threshold below which retrieval triggers per-hop query refinement"
+      ),
+    refinement_budget:
+      Zoi.default(Zoi.non_negative(Zoi.integer()), 1,
+        description:
+          "Maximum number of LLM refinement calls per recall. Capped at max_hops at runtime."
+      ),
+    plateau_delta:
+      Zoi.default(Zoi.float(), 0.05,
+        description:
+          "Minimum score improvement between hops to skip refinement. Lower values trigger refinement more aggressively."
       ),
     session: @session_schema,
     trace_verbosity:

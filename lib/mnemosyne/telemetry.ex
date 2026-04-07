@@ -20,6 +20,7 @@ defmodule Mnemosyne.Telemetry do
   - `[:mnemosyne, :structuring, :extract, :start | :stop | :exception]`
   - `[:mnemosyne, :structuring, :extract_trajectory, :start | :stop | :exception]`
   - `[:mnemosyne, :retrieval, :retrieve, :start | :stop | :exception]`
+  - `[:mnemosyne, :retrieval, :hop_refinement, :start | :stop | :exception]`
   - `[:mnemosyne, :reasoning, :reason, :start | :stop | :exception]`
 
   ### Maintenance
@@ -61,6 +62,7 @@ defmodule Mnemosyne.Telemetry do
     @prefix ++ [:structuring, :extract],
     @prefix ++ [:structuring, :extract_trajectory],
     @prefix ++ [:retrieval, :retrieve],
+    @prefix ++ [:retrieval, :hop_refinement],
     @prefix ++ [:reasoning, :reason],
     @prefix ++ [:decay, :prune],
     @prefix ++ [:consolidator, :consolidate],

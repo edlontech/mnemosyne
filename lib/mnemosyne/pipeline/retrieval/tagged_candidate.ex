@@ -25,10 +25,10 @@ defmodule Mnemosyne.Pipeline.Retrieval.TaggedCandidate do
     %__MODULE__{node: node, score: score, phase: :multi_hop, hop: hop}
   end
 
-  @doc "Builds a tagged candidate from the query refinement phase."
-  @spec from_refinement(struct(), float()) :: t()
-  def from_refinement(node, score) do
-    %__MODULE__{node: node, score: score, phase: :refinement, hop: nil}
+  @doc "Builds a tagged candidate from the query refinement phase at the given hop."
+  @spec from_refinement(struct(), float(), non_neg_integer()) :: t()
+  def from_refinement(node, score, hop) do
+    %__MODULE__{node: node, score: score, phase: :refinement, hop: hop}
   end
 
   @doc "Builds a tagged candidate from the provenance lookup phase."

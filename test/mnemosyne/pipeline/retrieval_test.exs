@@ -850,18 +850,20 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       |> Graph.link("tag_weak", "sem_weak")
     end
 
-    defp refinement_config(threshold) do
+    defp refinement_config(opts) do
       %Config{
         llm: %{model: "test:model", opts: %{}},
         embedding: %{model: "test:embed", opts: %{}},
         value_function: %{module: Mnemosyne.ValueFunction.Default, params: %{}},
-        refinement_threshold: threshold
+        refinement_threshold: Keyword.get(opts, :threshold, 0.6),
+        refinement_budget: Keyword.get(opts, :budget, 1),
+        plateau_delta: Keyword.get(opts, :plateau_delta, 0.05)
       }
     end
 
-    test "triggers refinement when best relevance is below threshold" do
+    test "triggers refinement when score plateaus during multi-hop" do
       graph = build_low_similarity_graph()
-      config = refinement_config(0.99)
+      config = refinement_config(threshold: 0.99, budget: 1, plateau_delta: 0.05)
 
       stub_retrieval_llm("semantic", "weak concept")
 
@@ -878,18 +880,19 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         {:ok, %LLM.Response{content: %{tags: ["refined tag"]}, model: "mock:test", usage: %{}}}
       end)
 
-      {:ok, result, _trace} =
+      {:ok, result, trace} =
         Retrieval.retrieve(
           "Find something specific",
           retrieval_opts(graph, config: config, max_hops: 1)
         )
 
       assert result.mode == :semantic
+      assert is_list(trace.refinements)
     end
 
-    test "skips refinement when best relevance is above threshold" do
+    test "skips refinement when budget is zero" do
       graph = build_test_graph()
-      config = refinement_config(0.1)
+      config = refinement_config(budget: 0)
 
       stub_retrieval_llm("semantic", "BEAM VM")
 
@@ -904,18 +907,19 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       Mnemosyne.MockLLM
       |> reject(:chat_structured, 3)
 
-      {:ok, result, _trace} =
+      {:ok, result, trace} =
         Retrieval.retrieve(
           "Tell me about Elixir",
           retrieval_opts(graph, config: config, max_hops: 1)
         )
 
       assert result.mode == :semantic
+      assert trace.refinements == []
     end
 
     test "handles empty refined tags gracefully" do
       graph = build_low_similarity_graph()
-      config = refinement_config(0.99)
+      config = refinement_config(threshold: 0.99, budget: 1)
 
       stub_retrieval_llm("semantic", "weak concept")
 
@@ -944,7 +948,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
 
     test "handles refinement LLM error gracefully" do
       graph = build_low_similarity_graph()
-      config = refinement_config(0.99)
+      config = refinement_config(threshold: 0.99, budget: 1)
 
       stub_retrieval_llm("semantic", "weak concept")
 

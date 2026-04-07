@@ -24,7 +24,7 @@ defmodule Mnemosyne.TelemetryTest do
 
   test "events/0 returns all event prefixes" do
     events = Telemetry.events()
-    assert length(events) == 21
+    assert length(events) == 22
     assert [:mnemosyne, :llm, :chat] in events
     assert [:mnemosyne, :llm, :chat_structured] in events
     assert [:mnemosyne, :embedding, :embed] in events
