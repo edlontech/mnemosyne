@@ -1591,6 +1591,216 @@ defmodule Mnemosyne.SessionTest do
     end
   end
 
+  describe "idle :info catch-all (bug fix)" do
+    test "orphaned append task result in idle does not crash session", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      fake_ref = make_ref()
+      episode = Mnemosyne.Pipeline.Episode.new("fake")
+
+      send(pid, {fake_ref, {:ok, episode, %{}}})
+      send(pid, {fake_ref, {:error, :some_failure}})
+      send(pid, {:DOWN, fake_ref, :process, self(), :normal})
+
+      assert Session.state(pid) == :idle
+    end
+
+    test "orphaned trajectory task result in idle does not crash session", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      fake_ref = make_ref()
+      send(pid, {fake_ref, {:ok, %Mnemosyne.Graph.Changeset{}, %{}}})
+      send(pid, {:DOWN, fake_ref, :process, self(), :killed})
+
+      assert Session.state(pid) == :idle
+    end
+  end
+
+  describe "execute_async_op_immediately state validation (bug fix)" do
+    test "close_async from idle returns invalid_operation", %{tmp_dir: tmp_dir} do
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      assert {:error, %SessionError{reason: :invalid_operation}} = Session.close_async(pid, nil)
+      assert Session.state(pid) == :idle
+    end
+
+    test "commit_async from idle returns invalid_operation", %{tmp_dir: tmp_dir} do
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      assert {:error, %SessionError{reason: :invalid_operation}} = Session.commit_async(pid, nil)
+      assert Session.state(pid) == :idle
+    end
+
+    test "discard_async from idle returns invalid_operation", %{tmp_dir: tmp_dir} do
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      assert {:error, %SessionError{reason: :invalid_operation}} =
+               Session.discard_async(pid, nil)
+
+      assert Session.state(pid) == :idle
+    end
+
+    test "start_episode_async from idle succeeds", %{tmp_dir: tmp_dir} do
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      assert :ok = Session.start_episode_async(pid, "goal", nil)
+      assert Session.state(pid) == :collecting
+    end
+
+    test "start_episode_async from collecting returns invalid_operation", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "goal")
+
+      assert {:error, %SessionError{reason: :invalid_operation}} =
+               Session.start_episode_async(pid, "other goal", nil)
+
+      assert Session.state(pid) == :collecting
+    end
+
+    test "commit_async from collecting returns invalid_operation", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "goal")
+
+      assert {:error, %SessionError{reason: :invalid_operation}} =
+               Session.commit_async(pid, nil)
+
+      assert Session.state(pid) == :collecting
+    end
+
+    test "discard_async from collecting returns invalid_operation", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "goal")
+
+      assert {:error, %SessionError{reason: :invalid_operation}} =
+               Session.discard_async(pid, nil)
+
+      assert Session.state(pid) == :collecting
+    end
+
+    test "close_async from collecting succeeds", %{tmp_dir: tmp_dir} do
+      stub_extraction_success()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "goal")
+      :ok = Session.append(pid, "obs", "act")
+
+      assert :ok = Session.close_async(pid, nil)
+      assert Session.state(pid) in [:extracting, :ready]
+    end
+
+    test "close_async from ready returns invalid_operation", %{tmp_dir: tmp_dir} do
+      stub_extraction_success()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "goal")
+      :ok = Session.append(pid, "obs", "act")
+      :ok = Session.close(pid)
+      assert_eventually(Session.state(pid) == :ready)
+
+      assert {:error, %SessionError{reason: :invalid_operation}} = Session.close_async(pid, nil)
+      assert Session.state(pid) == :ready
+    end
+
+    test "commit_async from ready succeeds", %{tmp_dir: tmp_dir} do
+      stub_extraction_success()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "goal")
+      :ok = Session.append(pid, "obs", "act")
+      :ok = Session.close(pid)
+      assert_eventually(Session.state(pid) == :ready)
+
+      assert :ok = Session.commit_async(pid, nil)
+      assert Session.state(pid) == :idle
+    end
+
+    test "discard_async from ready succeeds", %{tmp_dir: tmp_dir} do
+      stub_extraction_success()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "goal")
+      :ok = Session.append(pid, "obs", "act")
+      :ok = Session.close(pid)
+      assert_eventually(Session.state(pid) == :ready)
+
+      assert :ok = Session.discard_async(pid, nil)
+      assert Session.state(pid) == :idle
+    end
+  end
+
+  describe "handle_drain_next state validation (bug fix)" do
+    test "drain rejects op invalid for post-auto-commit state", %{tmp_dir: tmp_dir} do
+      stub_llm_for_episode()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      stub_extraction_success()
+
+      :ok = Session.start_episode(pid, "goal")
+      :ok = Session.append(pid, "obs", "act")
+      :ok = Session.close(pid)
+      assert_eventually(Session.state(pid) == :extracting)
+
+      test_pid = self()
+
+      assert :ok =
+               Session.commit_async(pid, fn result ->
+                 send(test_pid, {:commit_cb, result})
+               end)
+
+      assert_receive {:commit_cb, {:ok, :committed}}, 5_000
+      assert_eventually(Session.state(pid) == :idle)
+    end
+
+    test "drain chains valid ops across state transitions", %{tmp_dir: tmp_dir} do
+      stub_extraction_success()
+      infra = start_infra(tmp_dir)
+      pid = start_session(infra)
+
+      :ok = Session.start_episode(pid, "goal")
+      :ok = Session.append(pid, "obs", "act")
+      :ok = Session.close(pid)
+      assert_eventually(Session.state(pid) == :extracting)
+
+      test_pid = self()
+
+      assert :ok =
+               Session.commit_async(pid, fn result ->
+                 send(test_pid, {:commit_cb, result})
+               end)
+
+      assert :ok =
+               Session.start_episode_async(pid, "next goal", fn result ->
+                 send(test_pid, {:start_cb, result})
+               end)
+
+      assert_receive {:commit_cb, {:ok, :committed}}, 5_000
+      assert_receive {:start_cb, {:ok, :started}}, 5_000
+      assert_eventually(Session.state(pid) == :collecting)
+    end
+  end
+
   defp close_and_commit_direct(server) do
     :ok = Session.close(server)
 
