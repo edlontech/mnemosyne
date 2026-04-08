@@ -81,7 +81,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSubgoal do
   end
 
   @impl true
-  def parse_response(%{"subgoal" => subgoal}) when is_binary(subgoal) do
+  def parse_response(%{subgoal: subgoal}) when is_binary(subgoal) do
     case String.trim(subgoal) do
       "" -> {:error, PromptError.exception(prompt: :get_subgoal, reason: :empty_response)}
       trimmed -> {:ok, trimmed}

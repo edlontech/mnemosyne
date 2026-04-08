@@ -29,7 +29,7 @@ defmodule MnemosyneTest do
     stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
       {:ok,
        %LLM.Response{
-         content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+         content: %{reasoning: "analysis", subgoal: "test subgoal"},
          model: "test",
          usage: %{}
        }}
@@ -54,7 +54,7 @@ defmodule MnemosyneTest do
       content =
         cond do
           String.contains?(system_content, "subgoal") ->
-            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+            %{reasoning: "analysis", subgoal: "test subgoal"}
 
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
@@ -250,7 +250,7 @@ defmodule MnemosyneTest do
           String.contains?(system_content, "subgoal") ->
             {:ok,
              %LLM.Response{
-               content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+               content: %{reasoning: "analysis", subgoal: "test subgoal"},
                model: "test",
                usage: %{}
              }}

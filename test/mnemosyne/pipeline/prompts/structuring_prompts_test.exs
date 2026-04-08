@@ -62,14 +62,14 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
     test "parse_response extracts subgoal from structured output" do
       assert {:ok, "Navigate to the config directory"} =
                GetSubgoal.parse_response(%{
-                 "reasoning" => "analysis",
-                 "subgoal" => "  Navigate to the config directory  "
+                 reasoning: "analysis",
+                 subgoal: "  Navigate to the config directory  "
                })
     end
 
     test "parse_response rejects empty subgoal" do
       assert {:error, %PromptError{reason: :empty_response}} =
-               GetSubgoal.parse_response(%{"reasoning" => "analysis", "subgoal" => "   "})
+               GetSubgoal.parse_response(%{reasoning: "analysis", subgoal: "   "})
     end
 
     test "parse_response rejects invalid schema" do

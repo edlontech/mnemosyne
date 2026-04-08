@@ -59,7 +59,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
   defp stub_first_append(subgoal \\ "Navigate to config") do
     stub_chat_responses(["The agent is in the initial state"])
-    stub_chat_structured_responses([%{"reasoning" => "analysis", "subgoal" => subgoal}])
+    stub_chat_structured_responses([%{reasoning: "analysis", subgoal: subgoal}])
     stub_embedding()
   end
 
@@ -106,7 +106,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       stub_chat_responses(["Agent has navigated to config", "0.8"])
 
       stub_chat_structured_responses([
-        %{"reasoning" => "analysis", "subgoal" => "Explore options"}
+        %{reasoning: "analysis", subgoal: "Explore options"}
       ])
 
       stub_embedding()
@@ -141,7 +141,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
         {:ok,
          %LLM.Response{
-           content: %{"reasoning" => "r", "subgoal" => "subgoal"},
+           content: %{reasoning: "r", subgoal: "subgoal"},
            model: "mock:test",
            usage: %{}
          }}
@@ -304,7 +304,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
       # Second append: chat = [state, reward], chat_structured = [subgoal]
       stub_chat_responses(["Updated state", "0.9"])
-      stub_chat_structured_responses([%{"reasoning" => "r", "subgoal" => "Same subgoal"}])
+      stub_chat_structured_responses([%{reasoning: "r", subgoal: "Same subgoal"}])
       stub_embedding()
       {:ok, episode, _trace} = Episode.append(episode, "obs2", "act2", @default_opts)
 

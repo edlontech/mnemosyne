@@ -84,7 +84,7 @@ defmodule Mnemosyne.SessionTest do
     stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
       {:ok,
        %LLM.Response{
-         content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+         content: %{reasoning: "analysis", subgoal: "test subgoal"},
          model: "test",
          usage: %{}
        }}
@@ -109,7 +109,7 @@ defmodule Mnemosyne.SessionTest do
       content =
         cond do
           String.contains?(system_content, "subgoal") ->
-            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+            %{reasoning: "analysis", subgoal: "test subgoal"}
 
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
@@ -497,7 +497,7 @@ defmodule Mnemosyne.SessionTest do
     stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
       {:ok,
        %LLM.Response{
-         content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+         content: %{reasoning: "analysis", subgoal: "test subgoal"},
          model: "test",
          usage: %{}
        }}
@@ -533,7 +533,7 @@ defmodule Mnemosyne.SessionTest do
       content =
         cond do
           String.contains?(system_content, "subgoal") ->
-            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+            %{reasoning: "analysis", subgoal: "test subgoal"}
 
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
@@ -622,7 +622,7 @@ defmodule Mnemosyne.SessionTest do
         if String.contains?(system_content, "subgoal") do
           {:ok,
            %LLM.Response{
-             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             content: %{reasoning: "analysis", subgoal: "test subgoal"},
              model: "test",
              usage: %{}
            }}
@@ -653,7 +653,7 @@ defmodule Mnemosyne.SessionTest do
         if String.contains?(system_content, "subgoal") do
           {:ok,
            %LLM.Response{
-             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             content: %{reasoning: "analysis", subgoal: "test subgoal"},
              model: "test",
              usage: %{}
            }}
@@ -684,7 +684,7 @@ defmodule Mnemosyne.SessionTest do
         if String.contains?(system_content, "subgoal") do
           {:ok,
            %LLM.Response{
-             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             content: %{reasoning: "analysis", subgoal: "test subgoal"},
              model: "test",
              usage: %{}
            }}
@@ -717,7 +717,7 @@ defmodule Mnemosyne.SessionTest do
         if String.contains?(system_content, "subgoal") do
           {:ok,
            %LLM.Response{
-             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             content: %{reasoning: "analysis", subgoal: "test subgoal"},
              model: "test",
              usage: %{}
            }}
@@ -894,7 +894,7 @@ defmodule Mnemosyne.SessionTest do
         if String.contains?(system_content, "subgoal") do
           {:ok,
            %LLM.Response{
-             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             content: %{reasoning: "analysis", subgoal: "test subgoal"},
              model: "test",
              usage: %{}
            }}
@@ -1031,7 +1031,7 @@ defmodule Mnemosyne.SessionTest do
       content =
         cond do
           String.contains?(system_content, "subgoal") ->
-            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+            %{reasoning: "analysis", subgoal: "test subgoal"}
 
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "extracted fact", concepts: ["concept_a", "concept_b"]}]}
@@ -1204,7 +1204,7 @@ defmodule Mnemosyne.SessionTest do
         content =
           cond do
             String.contains?(system_content, "subgoal") ->
-              %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+              %{reasoning: "analysis", subgoal: "test subgoal"}
 
             String.contains?(system_content, "factual knowledge") ->
               %{facts: [%{proposition: "rapid fact", concepts: ["rapid_concept"]}]}
@@ -1528,7 +1528,7 @@ defmodule Mnemosyne.SessionTest do
         if String.contains?(system_content, "subgoal") do
           {:ok,
            %LLM.Response{
-             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             content: %{reasoning: "analysis", subgoal: "test subgoal"},
              model: "test",
              usage: %{}
            }}

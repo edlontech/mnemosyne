@@ -42,7 +42,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
     |> stub(:chat_structured, fn _messages, _schema, _opts ->
       {:ok,
        %LLM.Response{
-         content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+         content: %{reasoning: "analysis", subgoal: "test subgoal"},
          model: "mock:test",
          usage: %{}
        }}
@@ -70,7 +70,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
       content =
         cond do
           system_content =~ "subgoal" ->
-            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+            %{reasoning: "analysis", subgoal: "test subgoal"}
 
           system_content =~ "factual knowledge" ->
             %{

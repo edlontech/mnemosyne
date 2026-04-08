@@ -38,7 +38,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
 
   defp stub_append_cycle(subgoal \\ "Optimize queries", reward \\ "0.8") do
     stub_chat_responses(["Derived state", reward])
-    stub_chat_structured_responses([%{"reasoning" => "analysis", "subgoal" => subgoal}])
+    stub_chat_structured_responses([%{reasoning: "analysis", subgoal: subgoal}])
     stub_default_embedding()
   end
 
