@@ -22,7 +22,9 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonEpisodic do
   end
 
   @impl true
-  def build_messages(%{query: query, nodes: nodes}) do
+  def build_messages(%{query: query, nodes: nodes} = variables) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     formatted_nodes =
       nodes
       |> Enum.with_index(1)
@@ -35,18 +37,19 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonEpisodic do
     [
       %{
         role: :system,
-        content: """
-        You are an expert at synthesizing episodic memories into relevant narratives.
-        Given a query and a set of past experiences, analyze them and produce a synthesis.
+        content:
+          """
+          You are an expert at synthesizing episodic memories into relevant narratives.
+          Given a query and a set of past experiences, analyze them and produce a synthesis.
 
-        Timestamps reflect when knowledge was extracted, not when the original event occurred.
-        Focus on temporal sequence and causal relationships between events.
-        Identify overlapping or contradictory episodes and resolve them — prefer the most recent.
+          Timestamps reflect when knowledge was extracted, not when the original event occurred.
+          Focus on temporal sequence and causal relationships between events.
+          Identify overlapping or contradictory episodes and resolve them — prefer the most recent.
 
-        Return a JSON object with:
-        - "reasoning": your analysis of which episodes are relevant and how they connect
-        - "information": the synthesized answer, concise (3-5 sentences)\
-        """
+          Return a JSON object with:
+          - "reasoning": your analysis of which episodes are relevant and how they connect
+          - "information": the synthesized answer, concise (3-5 sentences)\
+          """ <> overlay
       },
       %{
         role: :user,

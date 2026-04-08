@@ -2,6 +2,7 @@ defmodule Mnemosyne.ConfigTest do
   use ExUnit.Case, async: true
 
   alias Mnemosyne.Config
+  alias Mnemosyne.ExtractionProfile
 
   @valid_config %{
     llm: %{model: "gpt-4o", opts: %{temperature: 0.7}},
@@ -277,6 +278,90 @@ defmodule Mnemosyne.ConfigTest do
       assert params.k == 5
       assert params.base_floor == 0.3
       assert params.beta == 1.0
+    end
+
+    test "merges profile overrides on top of base params" do
+      profile = %ExtractionProfile{
+        name: :test,
+        overlays: %{},
+        value_function_overrides: %{semantic: %{base_floor: 0.15}}
+      }
+
+      input = Map.put(@valid_config, :extraction_profile, profile)
+      {:ok, config} = Zoi.parse(Config.t(), input)
+
+      params = Config.resolve_value_function(config, :semantic)
+      assert params.base_floor == 0.15
+      assert params.threshold == 0.0
+      assert params.top_k == 20
+    end
+
+    test "profile overrides win over config-level value_function params" do
+      profile = %ExtractionProfile{
+        name: :test,
+        overlays: %{},
+        value_function_overrides: %{semantic: %{threshold: 0.9}}
+      }
+
+      input =
+        @valid_config
+        |> Map.put(:extraction_profile, profile)
+        |> Map.put(:value_function, %{params: %{semantic: %{threshold: 0.5}}})
+
+      {:ok, config} = Zoi.parse(Config.t(), input)
+
+      params = Config.resolve_value_function(config, :semantic)
+      assert params.threshold == 0.9
+    end
+
+    test "does not affect node types without profile overrides" do
+      profile = %ExtractionProfile{
+        name: :test,
+        overlays: %{},
+        value_function_overrides: %{semantic: %{base_floor: 0.15}}
+      }
+
+      input = Map.put(@valid_config, :extraction_profile, profile)
+      {:ok, config} = Zoi.parse(Config.t(), input)
+
+      params = Config.resolve_value_function(config, :procedural)
+      assert params.threshold == 0.8
+      assert params.top_k == 10
+      assert params.base_floor == 0.3
+    end
+  end
+
+  describe "resolve_overlay/2" do
+    test "returns nil when config is nil" do
+      assert Config.resolve_overlay(nil, :get_semantic) == nil
+    end
+
+    test "returns nil when no extraction_profile is set" do
+      {:ok, config} = Zoi.parse(Config.t(), @valid_config)
+      assert Config.resolve_overlay(config, :get_semantic) == nil
+    end
+
+    test "returns step-specific overlay when present in profile" do
+      profile = ExtractionProfile.coding()
+
+      input = Map.put(@valid_config, :extraction_profile, profile)
+      {:ok, config} = Zoi.parse(Config.t(), input)
+
+      overlay = Config.resolve_overlay(config, :get_semantic)
+      assert is_binary(overlay)
+      assert overlay =~ "Software Engineering"
+    end
+
+    test "returns nil for steps without an overlay in profile" do
+      profile = %ExtractionProfile{
+        name: :test,
+        overlays: %{get_semantic: "test overlay"}
+      }
+
+      input = Map.put(@valid_config, :extraction_profile, profile)
+      {:ok, config} = Zoi.parse(Config.t(), input)
+
+      assert Config.resolve_overlay(config, :nonexistent_step) == nil
     end
   end
 end

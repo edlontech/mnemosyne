@@ -224,7 +224,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
           previous_state: previous_state,
           action: step.action,
           observation: step.observation,
-          goal: trajectory.subgoal
+          goal: trajectory.subgoal,
+          overlay: Config.resolve_overlay(config, :get_state)
         })
 
       with {:ok, %{content: content}} <-
@@ -316,7 +317,12 @@ defmodule Mnemosyne.Pipeline.Structuring do
          avg_reward,
          episodic_ids
        ) do
-    messages = SemanticPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
+    messages =
+      SemanticPrompt.build_messages(%{
+        trajectory: trajectory.steps,
+        goal: goal,
+        overlay: Config.resolve_overlay(config, :get_semantic)
+      })
 
     with {:ok, %{content: content}} <-
            llm.chat_structured(
@@ -396,7 +402,12 @@ defmodule Mnemosyne.Pipeline.Structuring do
          avg_reward,
          episodic_ids
        ) do
-    messages = ProceduralPrompt.build_messages(%{trajectory: trajectory.steps, goal: goal})
+    messages =
+      ProceduralPrompt.build_messages(%{
+        trajectory: trajectory.steps,
+        goal: goal,
+        overlay: Config.resolve_overlay(config, :get_procedural)
+      })
 
     with {:ok, %{content: content}} <-
            llm.chat_structured(
@@ -485,7 +496,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
       GetReturn.build_messages(%{
         trajectory: trajectory.steps,
         goal: goal,
-        prescriptions: prescriptions
+        prescriptions: prescriptions,
+        overlay: Config.resolve_overlay(config, :get_return)
       })
 
     with {:ok, %{content: content}} <-

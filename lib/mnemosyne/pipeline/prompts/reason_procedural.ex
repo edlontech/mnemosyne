@@ -22,7 +22,9 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonProcedural do
   end
 
   @impl true
-  def build_messages(%{query: query, nodes: nodes}) do
+  def build_messages(%{query: query, nodes: nodes} = variables) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     formatted_nodes =
       nodes
       |> Enum.with_index(1)
@@ -36,19 +38,20 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonProcedural do
     [
       %{
         role: :system,
-        content: """
-        You are an expert at synthesizing procedural knowledge into actionable guidance.
-        Given a query and a set of known procedures, analyze them and produce a synthesis.
+        content:
+          """
+          You are an expert at synthesizing procedural knowledge into actionable guidance.
+          Given a query and a set of known procedures, analyze them and produce a synthesis.
 
-        Timestamps reflect when knowledge was extracted, not when the original event occurred.
-        Return scores indicate how successful each procedure was (0.0 = failed, 1.0 = succeeded).
-        Distinguish proven procedures (high return) from failed ones (low return).
-        Identify redundant procedures and keep the most successful version.
+          Timestamps reflect when knowledge was extracted, not when the original event occurred.
+          Return scores indicate how successful each procedure was (0.0 = failed, 1.0 = succeeded).
+          Distinguish proven procedures (high return) from failed ones (low return).
+          Identify redundant procedures and keep the most successful version.
 
-        Return a JSON object with:
-        - "reasoning": your analysis of which procedures apply and their track record
-        - "information": the synthesized guidance, concise (3-5 sentences)\
-        """
+          Return a JSON object with:
+          - "reasoning": your analysis of which procedures apply and their track record
+          - "information": the synthesized guidance, concise (3-5 sentences)\
+          """ <> overlay
       },
       %{
         role: :user,

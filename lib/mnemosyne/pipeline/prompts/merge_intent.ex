@@ -20,18 +20,21 @@ defmodule Mnemosyne.Pipeline.Prompts.MergeIntent do
   end
 
   @impl true
-  def build_messages(%{existing_intent: existing, new_intent: new}) do
+  def build_messages(%{existing_intent: existing, new_intent: new} = variables) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     [
       %{
         role: :system,
-        content: """
-        You are an expert at consolidating goals and intents.
-        Given two similar intent descriptions, merge them into a single concise intent
-        that captures the meaning of both without losing important nuance.
+        content:
+          """
+          You are an expert at consolidating goals and intents.
+          Given two similar intent descriptions, merge them into a single concise intent
+          that captures the meaning of both without losing important nuance.
 
-        Return your response as a JSON object with a "merged_intent" field containing
-        the unified intent description as a single string.\
-        """
+          Return your response as a JSON object with a "merged_intent" field containing
+          the unified intent description as a single string.\
+          """ <> overlay
       },
       %{
         role: :user,

@@ -10,6 +10,20 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   alias Mnemosyne.Pipeline.Prompts.GetSubgoal
 
   describe "GetSubgoal" do
+    test "build_messages appends overlay to system message when provided" do
+      messages =
+        GetSubgoal.build_messages(%{
+          observation: "X",
+          action: "Y",
+          goal: "Test",
+          state: "some state",
+          overlay: "Focus on API contracts."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Focus on API contracts."
+    end
+
     test "build_messages includes state when provided" do
       messages =
         GetSubgoal.build_messages(%{
@@ -65,6 +79,20 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   end
 
   describe "GetReward" do
+    test "build_messages appends overlay to system message when provided" do
+      messages =
+        GetReward.build_messages(%{
+          observation: "Server responded 200",
+          action: "Send GET request",
+          subgoal: "Verify API health",
+          next_observation: "Dashboard shows green",
+          overlay: "Evaluate strictly."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Evaluate strictly."
+    end
+
     test "build_messages includes subgoal, observation, and action" do
       messages =
         GetReward.build_messages(%{
@@ -103,6 +131,20 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   end
 
   describe "GetState" do
+    test "build_messages appends overlay to system message when provided" do
+      messages =
+        GetState.build_messages(%{
+          previous_state: nil,
+          action: "Opened door",
+          observation: "Saw door",
+          goal: "Find the key",
+          overlay: "Be concise."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Be concise."
+    end
+
     test "build_messages for first step with nil previous_state" do
       messages =
         GetState.build_messages(%{
@@ -147,6 +189,20 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   end
 
   describe "GetSemantic" do
+    test "build_messages appends overlay to system message when provided" do
+      trajectory = [%{observation: "X", action: "Y", reward: 0.5}]
+
+      messages =
+        GetSemantic.build_messages(%{
+          trajectory: trajectory,
+          goal: "Test",
+          overlay: "Focus on API contracts."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Focus on API contracts."
+    end
+
     test "build_messages includes trajectory with rewards" do
       trajectory = [
         %{observation: "Database is slow", action: "Added index", reward: 0.9}
@@ -206,6 +262,20 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   end
 
   describe "GetProcedural" do
+    test "build_messages appends overlay to system message when provided" do
+      trajectory = [%{observation: "X", action: "Y", reward: 0.5}]
+
+      messages =
+        GetProcedural.build_messages(%{
+          trajectory: trajectory,
+          goal: "Test",
+          overlay: "Extract only high-level patterns."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Extract only high-level patterns."
+    end
+
     test "build_messages includes trajectory with rewards" do
       trajectory = [
         %{observation: "Timeout error", action: "Increased timeout", reward: 0.8}
@@ -273,6 +343,25 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   end
 
   describe "GetReturn" do
+    test "build_messages appends overlay to system message when provided" do
+      trajectory = [%{action: "A", observation: "O", state: nil, reward: 0.5}]
+
+      prescriptions = [
+        %{index: 0, intent: "G", instruction: "I", condition: "C", expected_outcome: "E"}
+      ]
+
+      messages =
+        GetReturn.build_messages(%{
+          trajectory: trajectory,
+          goal: "Test",
+          prescriptions: prescriptions,
+          overlay: "Score conservatively."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Score conservatively."
+    end
+
     test "build_messages includes trajectory with observations and prescriptions with intent" do
       trajectory = [
         %{action: "Step A", observation: "Saw X", state: "state A", reward: 0.8},

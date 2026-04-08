@@ -49,6 +49,8 @@ Episode
 
 Knowledge extraction runs per-trajectory, so the system produces focused, coherent facts and instructions rather than jumbled cross-topic extractions.
 
+Extraction can be further tuned with [extraction profiles](extraction-profiles.md) that steer the LLM toward domain-specific knowledge (e.g., prioritizing error patterns for coding, or factual claims for research).
+
 ## The Knowledge Graph
 
 All extracted knowledge lives in a directed graph with seven node types:
@@ -105,5 +107,6 @@ All backends implement the same 10-callback interface, so switching backends doe
 ## Next Steps
 
 - [Sessions and Episodes](sessions-and-episodes.md) - the session lifecycle in detail
+- [Extraction Profiles](extraction-profiles.md) - domain-specific extraction tuning
 - [Retrieval and Recall](retrieval-and-recall.md) - how scoring and multi-hop traversal work
 - [Custom Backends](custom-backends.md) - implementing your own graph backend

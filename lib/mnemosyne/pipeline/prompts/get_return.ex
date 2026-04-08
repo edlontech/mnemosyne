@@ -26,7 +26,11 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
 
   @doc "Builds the system and user messages for the return-scoring prompt."
   @spec build_messages(map()) :: [map()]
-  def build_messages(%{trajectory: trajectory, goal: goal, prescriptions: prescriptions}) do
+  def build_messages(
+        %{trajectory: trajectory, goal: goal, prescriptions: prescriptions} = variables
+      ) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     formatted_steps =
       trajectory
       |> Enum.with_index(1)
@@ -56,26 +60,27 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
     [
       %{
         role: :system,
-        content: """
-        You are an expert at evaluating procedural prescription quality.
-        For each prescription, assess whether its intent was achieved and how well
-        the prescription was executed based on the trajectory evidence.
+        content:
+          """
+          You are an expert at evaluating procedural prescription quality.
+          For each prescription, assess whether its intent was achieved and how well
+          the prescription was executed based on the trajectory evidence.
 
-        Grading Criteria (Score 1-10):
-        10: The prescription fully accomplishes its intent with no significant omissions.
-        8-9: Most of the intent is achieved with only minor gaps.
-        6-7: Partial completion; key elements covered but notable parts unfinished.
-        4-5: Limited progress; less than half achieved or done ineffectively.
-        2-3: Very little completion; actions barely connect to the intent.
-        1: No meaningful progress toward the intent.
+          Grading Criteria (Score 1-10):
+          10: The prescription fully accomplishes its intent with no significant omissions.
+          8-9: Most of the intent is achieved with only minor gaps.
+          6-7: Partial completion; key elements covered but notable parts unfinished.
+          4-5: Limited progress; less than half achieved or done ineffectively.
+          2-3: Very little completion; actions barely connect to the intent.
+          1: No meaningful progress toward the intent.
 
-        Base the score only on completion level and alignment with the stated intent.
-        Evaluate each prescription independently against the trajectory evidence.
+          Base the score only on completion level and alignment with the stated intent.
+          Evaluate each prescription independently against the trajectory evidence.
 
-        Return a JSON object with a "scores" array. Each entry has:
-        - "index": the prescription index (integer)
-        - "return_score": an integer from 1 to 10\
-        """
+          Return a JSON object with a "scores" array. Each entry has:
+          - "index": the prescription index (integer)
+          - "return_score": an integer from 1 to 10\
+          """ <> overlay
       },
       %{
         role: :user,

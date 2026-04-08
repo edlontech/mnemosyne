@@ -5,6 +5,18 @@ defmodule Mnemosyne.Pipeline.Prompts.MergeIntentTest do
   alias Mnemosyne.Pipeline.Prompts.MergeIntent
 
   describe "build_messages/1" do
+    test "appends overlay to system message when provided" do
+      messages =
+        MergeIntent.build_messages(%{
+          existing_intent: "Optimize queries",
+          new_intent: "Improve performance",
+          overlay: "Keep intent generic."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Keep intent generic."
+    end
+
     test "includes both intent descriptions in messages" do
       messages =
         MergeIntent.build_messages(%{

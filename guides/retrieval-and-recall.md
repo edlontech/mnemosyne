@@ -132,6 +132,8 @@ config = %Mnemosyne.Config{
 
 Procedural nodes have a high threshold (0.8) because vague procedural matches tend to be unhelpful. Semantic and episodic nodes use 0.0 to let the value function handle ranking.
 
+These defaults can be overridden per node type via [extraction profiles](extraction-profiles.md), which merge domain-specific parameter tweaks on top of config-level settings.
+
 ## Context-Aware Recall
 
 When recalling during an active session, use `recall_in_context/4`:
@@ -207,5 +209,6 @@ The `trace` field provides execution metadata: classified mode, generated tags, 
 ## Next Steps
 
 - [Core Concepts](core-concepts.md) - understand the knowledge graph structure
+- [Extraction Profiles](extraction-profiles.md) - domain-specific tuning for extraction and retrieval
 - [Graph Maintenance](graph-maintenance.md) - consolidation and decay
 - [Custom Backends](custom-backends.md) - implement your own graph backend with optimized queries

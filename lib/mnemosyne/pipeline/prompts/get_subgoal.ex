@@ -42,9 +42,13 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSubgoal do
   """
 
   @impl true
-  def build_messages(%{observation: observation, action: action, goal: goal, state: nil}) do
+  def build_messages(
+        %{observation: observation, action: action, goal: goal, state: nil} = variables
+      ) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     [
-      %{role: :system, content: @system_prompt},
+      %{role: :system, content: @system_prompt <> overlay},
       %{
         role: :user,
         content: """
@@ -57,9 +61,13 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSubgoal do
     ]
   end
 
-  def build_messages(%{observation: observation, action: action, goal: goal, state: state}) do
+  def build_messages(
+        %{observation: observation, action: action, goal: goal, state: state} = variables
+      ) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     [
-      %{role: :system, content: @system_prompt},
+      %{role: :system, content: @system_prompt <> overlay},
       %{
         role: :user,
         content: """

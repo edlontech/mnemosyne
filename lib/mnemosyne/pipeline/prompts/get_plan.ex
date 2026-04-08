@@ -9,18 +9,21 @@ defmodule Mnemosyne.Pipeline.Prompts.GetPlan do
   alias Mnemosyne.Errors.Invalid.PromptError
 
   @impl true
-  def build_messages(%{query: query, mode: mode}) do
+  def build_messages(%{query: query, mode: mode} = variables) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     [
       %{
         role: :system,
-        content: """
-        You are an expert at planning memory retrieval strategies.
-        Given a query and its classified memory mode, generate a list of search tags
-        that would help find relevant memories in a knowledge graph.
+        content:
+          """
+          You are an expert at planning memory retrieval strategies.
+          Given a query and its classified memory mode, generate a list of search tags
+          that would help find relevant memories in a knowledge graph.
 
-        Tags should be concise noun phrases or key concepts.
-        Respond with one tag per line. No numbering or bullet points.\
-        """
+          Tags should be concise noun phrases or key concepts.
+          Respond with one tag per line. No numbering or bullet points.\
+          """ <> overlay
       },
       %{
         role: :user,

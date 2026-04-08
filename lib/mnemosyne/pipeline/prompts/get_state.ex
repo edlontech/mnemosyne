@@ -11,16 +11,21 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
   alias Mnemosyne.Errors.Invalid.PromptError
 
   @impl true
-  def build_messages(%{previous_state: nil, action: action, observation: observation, goal: goal}) do
+  def build_messages(
+        %{previous_state: nil, action: action, observation: observation, goal: goal} = variables
+      ) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     [
       %{
         role: :system,
-        content: """
-        You are an expert at deriving environment state from agent interactions.
-        Given an initial observation and the agent's first action, derive the current environment state.
+        content:
+          """
+          You are an expert at deriving environment state from agent interactions.
+          Given an initial observation and the agent's first action, derive the current environment state.
 
-        Respond with ONLY the state summary as a brief paragraph. No explanation.\
-        """
+          Respond with ONLY the state summary as a brief paragraph. No explanation.\
+          """ <> overlay
       },
       %{
         role: :user,
@@ -36,21 +41,26 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
     ]
   end
 
-  def build_messages(%{
-        previous_state: prev,
-        action: action,
-        observation: observation,
-        goal: goal
-      }) do
+  def build_messages(
+        %{
+          previous_state: prev,
+          action: action,
+          observation: observation,
+          goal: goal
+        } = variables
+      ) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     [
       %{
         role: :system,
-        content: """
-        You are an expert at deriving environment state from agent interactions.
-        Given the previous environment state, the action taken, and the new observation, derive the updated environment state.
+        content:
+          """
+          You are an expert at deriving environment state from agent interactions.
+          Given the previous environment state, the action taken, and the new observation, derive the updated environment state.
 
-        Respond with ONLY the state summary as a brief paragraph. No explanation.\
-        """
+          Respond with ONLY the state summary as a brief paragraph. No explanation.\
+          """ <> overlay
       },
       %{
         role: :user,

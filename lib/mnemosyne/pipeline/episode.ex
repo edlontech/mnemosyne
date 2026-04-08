@@ -202,7 +202,8 @@ defmodule Mnemosyne.Pipeline.Episode do
         observation: observation,
         action: action,
         goal: goal,
-        state: state
+        state: state,
+        overlay: Config.resolve_overlay(config, :get_subgoal)
       })
 
     with {:ok, %{content: content}} <-
@@ -221,7 +222,8 @@ defmodule Mnemosyne.Pipeline.Episode do
         previous_state: previous_state,
         action: previous_action,
         observation: observation,
-        goal: goal
+        goal: goal,
+        overlay: Config.resolve_overlay(config, :get_state)
       })
 
     with {:ok, %{content: content}} <-
@@ -242,7 +244,8 @@ defmodule Mnemosyne.Pipeline.Episode do
         observation: observation,
         action: action,
         subgoal: subgoal,
-        next_observation: next_observation
+        next_observation: next_observation,
+        overlay: Config.resolve_overlay(config, :get_reward)
       })
 
     with {:ok, %{content: content}} <-

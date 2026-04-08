@@ -132,7 +132,12 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   defp default_top_k(:procedural), do: 10
 
   defp run_reasoning(:episodic, query, nodes, llm, llm_opts, config) do
-    messages = ReasonEpisodic.build_messages(%{query: query, nodes: nodes})
+    messages =
+      ReasonEpisodic.build_messages(%{
+        query: query,
+        nodes: nodes,
+        overlay: Config.resolve_overlay(config, :reason_episodic)
+      })
 
     with {:ok, %LLM.Response{content: content}} <-
            llm.chat_structured(
@@ -146,7 +151,12 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   end
 
   defp run_reasoning(:semantic, query, nodes, llm, llm_opts, config) do
-    messages = ReasonSemantic.build_messages(%{query: query, nodes: nodes})
+    messages =
+      ReasonSemantic.build_messages(%{
+        query: query,
+        nodes: nodes,
+        overlay: Config.resolve_overlay(config, :reason_semantic)
+      })
 
     with {:ok, %LLM.Response{content: content}} <-
            llm.chat_structured(
@@ -160,7 +170,12 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   end
 
   defp run_reasoning(:procedural, query, nodes, llm, llm_opts, config) do
-    messages = ReasonProcedural.build_messages(%{query: query, nodes: nodes})
+    messages =
+      ReasonProcedural.build_messages(%{
+        query: query,
+        nodes: nodes,
+        overlay: Config.resolve_overlay(config, :reason_procedural)
+      })
 
     with {:ok, %LLM.Response{content: content}} <-
            llm.chat_structured(

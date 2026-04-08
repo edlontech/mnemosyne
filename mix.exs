@@ -83,6 +83,7 @@ defmodule Mnemosyne.MixProject do
         {"guides/getting-started.md", title: "Getting Started"},
         {"guides/core-concepts.md", title: "Core Concepts"},
         {"guides/sessions-and-episodes.md", title: "Sessions and Episodes"},
+        {"guides/extraction-profiles.md", title: "Extraction Profiles"},
         {"guides/retrieval-and-recall.md", title: "Retrieval and Recall"},
         {"guides/graph-maintenance.md", title: "Graph Maintenance"},
         {"guides/custom-backends.md", title: "Custom Backends"},
@@ -96,6 +97,7 @@ defmodule Mnemosyne.MixProject do
           "guides/getting-started.md",
           "guides/core-concepts.md",
           "guides/sessions-and-episodes.md",
+          "guides/extraction-profiles.md",
           "guides/retrieval-and-recall.md",
           "guides/graph-maintenance.md",
           "guides/custom-backends.md",
@@ -110,7 +112,8 @@ defmodule Mnemosyne.MixProject do
       groups_for_modules: [
         "Public API": [
           Mnemosyne,
-          Mnemosyne.Config
+          Mnemosyne.Config,
+          Mnemosyne.ExtractionProfile
         ],
         Sessions: [
           Mnemosyne.Session

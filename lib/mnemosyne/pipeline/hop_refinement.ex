@@ -112,7 +112,8 @@ defmodule Mnemosyne.Pipeline.HopRefinement do
       GetRefinedQuery.build_messages(%{
         original_query: query,
         mode: mode,
-        retrieved_so_far: summaries
+        retrieved_so_far: summaries,
+        overlay: Config.resolve_overlay(ctx.config, :get_refined_query)
       })
 
     llm_opts = Config.llm_opts(ctx.config, :get_refined_query, ctx.llm_opts)

@@ -177,6 +177,11 @@ defmodule Mnemosyne.Config do
                        :summary,
                        description:
                          "Verbosity level for pipeline trace data in notifications (:summary or :detailed)"
+                     ),
+                   extraction_profile:
+                     Zoi.default(Zoi.optional(Zoi.any()), nil,
+                       description:
+                         "Optional ExtractionProfile for domain-specific prompt overlays"
                      )
                  })
 
@@ -223,6 +228,10 @@ defmodule Mnemosyne.Config do
         :summary,
         description:
           "Verbosity level for pipeline trace data in notifications (:summary or :detailed)"
+      ),
+    extraction_profile:
+      Zoi.default(Zoi.optional(Zoi.any()), nil,
+        description: "Optional ExtractionProfile for domain-specific prompt overlays"
       )
   )
 
@@ -320,8 +329,16 @@ defmodule Mnemosyne.Config do
   @spec resolve_value_function(t(), atom()) :: map()
   def resolve_value_function(%__MODULE__{} = config, node_type) do
     type_default = Map.get(@vf_param_defaults, node_type, @vf_safe_default)
-    override = Map.get(config.value_function.params, node_type, %{})
-    Map.merge(type_default, override)
+    config_override = Map.get(config.value_function.params, node_type, %{})
+    base = Map.merge(type_default, config_override)
+
+    profile_override =
+      case config.extraction_profile do
+        nil -> %{}
+        profile -> Map.get(profile.value_function_overrides, node_type, %{})
+      end
+
+    Map.merge(base, profile_override)
   end
 
   @doc """
@@ -334,6 +351,17 @@ defmodule Mnemosyne.Config do
   @spec resolve_embedding(t()) :: %{model: String.t(), opts: map()}
   def resolve_embedding(%__MODULE__{} = config) do
     %{model: config.embedding.model, opts: config.embedding.opts}
+  end
+
+  @doc """
+  Returns the overlay text for a given pipeline step, or nil if no profile or overlay exists.
+  """
+  @spec resolve_overlay(t() | nil, atom()) :: String.t() | nil
+  def resolve_overlay(nil, _step), do: nil
+  def resolve_overlay(%__MODULE__{extraction_profile: nil}, _step), do: nil
+
+  def resolve_overlay(%__MODULE__{extraction_profile: profile}, step) do
+    Map.get(profile.overlays, step)
   end
 
   @doc """

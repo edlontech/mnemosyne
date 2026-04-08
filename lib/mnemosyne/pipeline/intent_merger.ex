@@ -225,7 +225,8 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     messages =
       MergePrompt.build_messages(%{
         existing_intent: existing.description,
-        new_intent: new_intent.description
+        new_intent: new_intent.description,
+        overlay: Config.resolve_overlay(config, :merge_intent)
       })
 
     llm_opts = Config.llm_opts(config, :merge_intent, [])

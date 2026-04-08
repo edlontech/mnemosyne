@@ -33,7 +33,9 @@ defmodule Mnemosyne.Pipeline.Prompts.GetProcedural do
   end
 
   @impl true
-  def build_messages(%{trajectory: trajectory, goal: goal}) do
+  def build_messages(%{trajectory: trajectory, goal: goal} = variables) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     formatted_steps =
       trajectory
       |> Enum.with_index(1)
@@ -44,20 +46,21 @@ defmodule Mnemosyne.Pipeline.Prompts.GetProcedural do
     [
       %{
         role: :system,
-        content: """
-        You are an expert at extracting actionable instructions from agent experiences.
-        Given a trajectory segment, extract prescriptive knowledge — conditional instructions
-        the agent should follow in similar future situations.
+        content:
+          """
+          You are an expert at extracting actionable instructions from agent experiences.
+          Given a trajectory segment, extract prescriptive knowledge — conditional instructions
+          the agent should follow in similar future situations.
 
-        For each instruction, also identify the high-level intent (user goal) that this
-        instruction addresses. Intents serve as routing indices for retrieval.
+          For each instruction, also identify the high-level intent (user goal) that this
+          instruction addresses. Intents serve as routing indices for retrieval.
 
-        Return your response as a JSON object with an "instructions" array. Each instruction has:
-        - "intent": the high-level goal this addresses
-        - "condition": when to apply this instruction
-        - "instruction": what to do
-        - "expected_outcome": the expected result\
-        """
+          Return your response as a JSON object with an "instructions" array. Each instruction has:
+          - "intent": the high-level goal this addresses
+          - "condition": when to apply this instruction
+          - "instruction": what to do
+          - "expected_outcome": the expected result\
+          """ <> overlay
       },
       %{
         role: :user,

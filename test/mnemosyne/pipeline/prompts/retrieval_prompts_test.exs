@@ -9,6 +9,12 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
   alias Mnemosyne.Pipeline.Prompts.ReasonSemantic
 
   describe "GetMode" do
+    test "build_messages appends overlay to system message when provided" do
+      messages = GetMode.build_messages(%{query: "Test?", overlay: "Prefer episodic."})
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Prefer episodic."
+    end
+
     test "build_messages returns system and user messages with query" do
       messages = GetMode.build_messages(%{query: "What happened last Tuesday?"})
 
@@ -39,6 +45,14 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
   end
 
   describe "GetPlan" do
+    test "build_messages appends overlay to system message when provided" do
+      messages =
+        GetPlan.build_messages(%{query: "Test?", mode: :semantic, overlay: "Use broad tags."})
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Use broad tags."
+    end
+
     test "build_messages includes query and mode" do
       messages = GetPlan.build_messages(%{query: "How do I deploy?", mode: :procedural})
 
@@ -70,6 +84,24 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
   end
 
   describe "ReasonEpisodic" do
+    test "build_messages appends overlay to system message when provided" do
+      now = DateTime.utc_now()
+
+      nodes = [
+        %{observation: "X", action: "Y", state: "S", reward: 0.5, created_at: now}
+      ]
+
+      messages =
+        ReasonEpisodic.build_messages(%{
+          query: "Test?",
+          nodes: nodes,
+          overlay: "Focus on failures."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Focus on failures."
+    end
+
     test "build_messages formats episodic nodes" do
       now = DateTime.utc_now()
 
@@ -120,6 +152,21 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
   end
 
   describe "ReasonSemantic" do
+    test "build_messages appends overlay to system message when provided" do
+      now = DateTime.utc_now()
+      nodes = [%{proposition: "Fact", confidence: 0.9, created_at: now}]
+
+      messages =
+        ReasonSemantic.build_messages(%{
+          query: "Test?",
+          nodes: nodes,
+          overlay: "Be precise."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Be precise."
+    end
+
     test "build_messages formats semantic nodes with confidence" do
       now = DateTime.utc_now()
 
@@ -153,6 +200,30 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
   end
 
   describe "ReasonProcedural" do
+    test "build_messages appends overlay to system message when provided" do
+      now = DateTime.utc_now()
+
+      nodes = [
+        %{
+          condition: "C",
+          instruction: "I",
+          expected_outcome: "E",
+          return_score: 0.8,
+          created_at: now
+        }
+      ]
+
+      messages =
+        ReasonProcedural.build_messages(%{
+          query: "Test?",
+          nodes: nodes,
+          overlay: "Prefer proven procedures."
+        })
+
+      assert [%{role: :system, content: system}, _] = messages
+      assert system =~ "Prefer proven procedures."
+    end
+
     test "build_messages formats procedural nodes" do
       now = DateTime.utc_now()
 

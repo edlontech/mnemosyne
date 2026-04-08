@@ -184,7 +184,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   end
 
   defp classify_mode(query, llm, llm_opts, config) do
-    messages = GetMode.build_messages(%{query: query})
+    messages =
+      GetMode.build_messages(%{query: query, overlay: Config.resolve_overlay(config, :get_mode)})
 
     with {:ok, %{content: content}} <-
            llm.chat(messages, Config.llm_opts(config, :get_mode, llm_opts)) do
@@ -193,7 +194,12 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   end
 
   defp generate_plan(query, mode, llm, llm_opts, config) do
-    messages = GetPlan.build_messages(%{query: query, mode: mode})
+    messages =
+      GetPlan.build_messages(%{
+        query: query,
+        mode: mode,
+        overlay: Config.resolve_overlay(config, :get_plan)
+      })
 
     with {:ok, %{content: content}} <-
            llm.chat(messages, Config.llm_opts(config, :get_plan, llm_opts)) do

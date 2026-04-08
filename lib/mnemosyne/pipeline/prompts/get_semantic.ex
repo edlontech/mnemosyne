@@ -33,7 +33,9 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
   end
 
   @impl true
-  def build_messages(%{trajectory: trajectory, goal: goal}) do
+  def build_messages(%{trajectory: trajectory, goal: goal} = variables) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     formatted_steps =
       trajectory
       |> Enum.with_index(1)
@@ -44,28 +46,29 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
     [
       %{
         role: :system,
-        content: """
-        You are an expert at extracting factual knowledge from agent experiences.
-        Given a trajectory segment, extract propositional knowledge — facts the agent
-        learned from this experience.
+        content:
+          """
+          You are an expert at extracting factual knowledge from agent experiences.
+          Given a trajectory segment, extract propositional knowledge — facts the agent
+          learned from this experience.
 
-        Quality constraints:
-        - Coreference resolution: replace all pronouns with their explicit referents.
-          Each proposition must be self-contained and interpretable without context.
-        - Deduplication: if multiple steps yield the same fact, emit it once.
-          Prefer the most specific formulation.
-        - Atomicity: each proposition must express exactly one fact. No compound statements.
+          Quality constraints:
+          - Coreference resolution: replace all pronouns with their explicit referents.
+            Each proposition must be self-contained and interpretable without context.
+          - Deduplication: if multiple steps yield the same fact, emit it once.
+            Prefer the most specific formulation.
+          - Atomicity: each proposition must express exactly one fact. No compound statements.
 
-        For each fact, identify:
-        - "concepts": key terms (entities, topics) the fact relates to, used as semantic indices
-        - "confidence": your confidence in this proposition from 0.0 to 1.0
-          (0.0 = uncertain/inferred, 1.0 = directly stated and unambiguous)
+          For each fact, identify:
+          - "concepts": key terms (entities, topics) the fact relates to, used as semantic indices
+          - "confidence": your confidence in this proposition from 0.0 to 1.0
+            (0.0 = uncertain/inferred, 1.0 = directly stated and unambiguous)
 
-        Return your response as a JSON object with a "facts" array. Each fact has:
-        - "proposition": a self-contained factual statement
-        - "concepts": array of concept terms
-        - "confidence": float between 0.0 and 1.0\
-        """
+          Return your response as a JSON object with a "facts" array. Each fact has:
+          - "proposition": a self-contained factual statement
+          - "concepts": array of concept terms
+          - "confidence": float between 0.0 and 1.0\
+          """ <> overlay
       },
       %{
         role: :user,

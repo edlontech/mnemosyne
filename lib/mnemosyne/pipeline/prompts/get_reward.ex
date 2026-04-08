@@ -9,26 +9,31 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReward do
   alias Mnemosyne.Errors.Invalid.PromptError
 
   @impl true
-  def build_messages(%{
-        observation: observation,
-        action: action,
-        subgoal: subgoal,
-        next_observation: next_observation
-      }) do
+  def build_messages(
+        %{
+          observation: observation,
+          action: action,
+          subgoal: subgoal,
+          next_observation: next_observation
+        } = variables
+      ) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     [
       %{
         role: :system,
-        content: """
-        You are an expert at evaluating agent performance.
-        Given an observation, action, the sub-goal being pursued, and the
-        outcome that was observed after the action, rate how well this
-        action served the sub-goal.
+        content:
+          """
+          You are an expert at evaluating agent performance.
+          Given an observation, action, the sub-goal being pursued, and the
+          outcome that was observed after the action, rate how well this
+          action served the sub-goal.
 
-        Respond with ONLY a decimal number between 0.0 and 1.0.
-        0.0 = completely counterproductive
-        0.5 = neutral or uncertain
-        1.0 = perfectly serves the sub-goal\
-        """
+          Respond with ONLY a decimal number between 0.0 and 1.0.
+          0.0 = completely counterproductive
+          0.5 = neutral or uncertain
+          1.0 = perfectly serves the sub-goal\
+          """ <> overlay
       },
       %{
         role: :user,

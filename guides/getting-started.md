@@ -128,5 +128,6 @@ Mnemosyne.list_repos()
 
 - [Core Concepts](core-concepts.md) - understand episodes, trajectories, and the three memory types
 - [Sessions and Episodes](sessions-and-episodes.md) - session lifecycle in detail
+- [Extraction Profiles](extraction-profiles.md) - domain-specific extraction tuning
 - [Retrieval and Recall](retrieval-and-recall.md) - how recall works and how to tune it
 - [Custom Adapters](custom-adapters.md) - writing your own LLM and embedding adapters

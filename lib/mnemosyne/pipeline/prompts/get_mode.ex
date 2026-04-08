@@ -16,21 +16,24 @@ defmodule Mnemosyne.Pipeline.Prompts.GetMode do
   }
 
   @impl true
-  def build_messages(%{query: query}) do
+  def build_messages(%{query: query} = variables) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     [
       %{
         role: :system,
-        content: """
-        You are an expert at classifying memory retrieval queries.
-        Given a query, determine which type of memory is most relevant:
+        content:
+          """
+          You are an expert at classifying memory retrieval queries.
+          Given a query, determine which type of memory is most relevant:
 
-        - episodic: Questions about past experiences, events, or "what happened when..."
-        - semantic: Questions about facts, concepts, or general knowledge
-        - procedural: Questions about how to do something, instructions, or procedures
-        - mixed: Questions that require multiple memory types to answer fully
+          - episodic: Questions about past experiences, events, or "what happened when..."
+          - semantic: Questions about facts, concepts, or general knowledge
+          - procedural: Questions about how to do something, instructions, or procedures
+          - mixed: Questions that require multiple memory types to answer fully
 
-        Respond with ONLY one word: episodic, semantic, procedural, or mixed.\
-        """
+          Respond with ONLY one word: episodic, semantic, procedural, or mixed.\
+          """ <> overlay
       },
       %{
         role: :user,

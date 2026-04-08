@@ -22,7 +22,9 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonSemantic do
   end
 
   @impl true
-  def build_messages(%{query: query, nodes: nodes}) do
+  def build_messages(%{query: query, nodes: nodes} = variables) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     formatted_nodes =
       nodes
       |> Enum.with_index(1)
@@ -34,18 +36,19 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonSemantic do
     [
       %{
         role: :system,
-        content: """
-        You are an expert at synthesizing factual knowledge into coherent summaries.
-        Given a query and a set of known facts, analyze them and produce a synthesis.
+        content:
+          """
+          You are an expert at synthesizing factual knowledge into coherent summaries.
+          Given a query and a set of known facts, analyze them and produce a synthesis.
 
-        Timestamps reflect when knowledge was extracted, not when the original event occurred.
-        Prioritize higher-confidence facts. Identify contradictions or redundancy and resolve
-        them — prefer the most recent or highest-confidence version.
+          Timestamps reflect when knowledge was extracted, not when the original event occurred.
+          Prioritize higher-confidence facts. Identify contradictions or redundancy and resolve
+          them — prefer the most recent or highest-confidence version.
 
-        Return a JSON object with:
-        - "reasoning": your analysis of which facts are relevant and how they relate
-        - "information": the synthesized answer, concise (3-5 sentences)\
-        """
+          Return a JSON object with:
+          - "reasoning": your analysis of which facts are relevant and how they relate
+          - "information": the synthesized answer, concise (3-5 sentences)\
+          """ <> overlay
       },
       %{
         role: :user,

@@ -14,7 +14,11 @@ defmodule Mnemosyne.Pipeline.Prompts.GetRefinedQuery do
   end
 
   @impl true
-  def build_messages(%{original_query: query, mode: mode, retrieved_so_far: candidates}) do
+  def build_messages(
+        %{original_query: query, mode: mode, retrieved_so_far: candidates} = variables
+      ) do
+    overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
+
     formatted_candidates =
       candidates
       |> Enum.take(20)
@@ -26,16 +30,17 @@ defmodule Mnemosyne.Pipeline.Prompts.GetRefinedQuery do
     [
       %{
         role: :system,
-        content: """
-        You are a search refinement expert. A multi-hop retrieval is in progress for a #{mode} memory query.
-        Based on the original query and what each hop has found so far, generate refined search tags
-        that target information the current results haven't reached yet.
+        content:
+          """
+          You are a search refinement expert. A multi-hop retrieval is in progress for a #{mode} memory query.
+          Based on the original query and what each hop has found so far, generate refined search tags
+          that target information the current results haven't reached yet.
 
-        Focus on bridge concepts: entities or ideas that connect what's been found to what the query still needs.
+          Focus on bridge concepts: entities or ideas that connect what's been found to what the query still needs.
 
-        Return a JSON object with a "tags" array of 3-5 concise search terms.
-        Return an empty array if the current results are adequate.\
-        """
+          Return a JSON object with a "tags" array of 3-5 concise search terms.
+          Return an empty array if the current results are adequate.\
+          """ <> overlay
       },
       %{
         role: :user,
