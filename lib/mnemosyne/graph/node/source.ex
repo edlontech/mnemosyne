@@ -10,6 +10,7 @@ defmodule Mnemosyne.Graph.Node.Source do
     field :id, String.t()
     field :episode_id, String.t()
     field :step_index, integer()
+    field :plain_text, String.t() | nil, enforce: false, default: nil
     field :embedding, [float()] | nil, enforce: false, default: nil
     field :links, %{Edge.edge_type() => MapSet.t()}, enforce: false, default: Edge.empty_links()
     field :created_at, DateTime.t(), enforce: false, default: DateTime.utc_now()

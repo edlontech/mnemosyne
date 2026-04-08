@@ -292,6 +292,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
         id: source_id,
         episode_id: episode_id,
         step_index: step.index,
+        plain_text: step.observation,
         embedding: obs_embedding
       }
 
