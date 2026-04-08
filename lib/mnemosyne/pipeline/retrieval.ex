@@ -270,18 +270,33 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       MapSet.new(candidates, fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
 
     routing_types = routing_types_for_mode(mode)
-    expanded_nodes = expand_through_routing_nodes(candidates, backend, seen_ids, routing_types)
+
+    expanded_nodes =
+      expand_through_routing_nodes(
+        candidates,
+        backend,
+        seen_ids,
+        routing_types,
+        query_vector,
+        value_fns
+      )
 
     vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
 
     expansion_scored =
-      Enum.map(expanded_nodes, fn node ->
+      expanded_nodes
+      |> Enum.map(fn node ->
         emb = NodeProtocol.embedding(node)
         relevance = if emb, do: Similarity.cosine_similarity(query_vector, emb), else: 0.0
         type = NodeProtocol.node_type(node)
         params = get_in(value_fns, [:params, type]) || %{}
         score = vf_module.score(relevance, node, nil, params)
         TaggedCandidate.from_multi_hop(node, score, current_hop)
+      end)
+      |> Enum.filter(fn %TaggedCandidate{node: node, score: score} ->
+        type = NodeProtocol.node_type(node)
+        threshold = get_in(value_fns, [:params, type, :threshold]) || 0.0
+        score >= threshold
       end)
 
     merged =
@@ -327,8 +342,16 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   end
 
   @doc false
-  def expand_through_routing_nodes(candidates, backend, seen_ids, routing_types) do
+  def expand_through_routing_nodes(
+        candidates,
+        backend,
+        seen_ids,
+        routing_types,
+        query_vector,
+        value_fns
+      ) do
     {mod, bs} = backend
+    vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
 
     candidate_link_ids =
       candidates
@@ -341,7 +364,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
 
     routing_nodes =
       Enum.filter(linked_nodes, fn node ->
-        NodeProtocol.node_type(node) in routing_types
+        NodeProtocol.node_type(node) in routing_types and
+          routing_node_above_threshold?(node, query_vector, value_fns, vf_module)
       end)
 
     sibling_ids =
@@ -402,6 +426,16 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       candidates,
       fn %TaggedCandidate{node: node} -> NodeProtocol.node_type(node) end
     )
+  end
+
+  defp routing_node_above_threshold?(node, query_vector, value_fns, vf_module) do
+    emb = NodeProtocol.embedding(node)
+    type = NodeProtocol.node_type(node)
+    params = get_in(value_fns, [:params, type]) || %{}
+    threshold = Map.get(params, :threshold, 0.0)
+    relevance = if emb, do: Similarity.cosine_similarity(query_vector, emb), else: 0.0
+    score = vf_module.score(relevance, node, nil, params)
+    score >= threshold
   end
 
   defp build_scores_map(candidates) do

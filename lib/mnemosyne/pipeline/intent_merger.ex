@@ -154,7 +154,8 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
         {replace_or_add(acc_intents, merged), rewrites, seen, updated_meta}
 
       :error ->
-        {[intent | acc_intents], acc_rewrites, Map.put(seen, intent.id, intent), meta}
+        updated_meta = propagate_reward(meta, intent.id, existing.id)
+        {acc_intents, Map.put(acc_rewrites, intent.id, existing.id), seen, updated_meta}
     end
   end
 

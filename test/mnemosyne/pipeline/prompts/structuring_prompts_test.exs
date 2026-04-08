@@ -273,14 +273,20 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   end
 
   describe "GetReturn" do
-    test "build_messages includes trajectory and prescriptions" do
+    test "build_messages includes trajectory with observations and prescriptions with intent" do
       trajectory = [
-        %{action: "Step A", reward: 0.8},
-        %{action: "Step B", reward: 0.6}
+        %{action: "Step A", observation: "Saw X", state: "state A", reward: 0.8},
+        %{action: "Step B", observation: "Saw Y", state: nil, reward: 0.6}
       ]
 
       prescriptions = [
-        %{index: 0, instruction: "Do X", condition: "When Y", expected_outcome: "Z happens"}
+        %{
+          index: 0,
+          intent: "Goal X",
+          instruction: "Do X",
+          condition: "When Y",
+          expected_outcome: "Z happens"
+        }
       ]
 
       messages =
@@ -291,11 +297,12 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
         })
 
       assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
-      assert system =~ "prescription quality"
-      assert user =~ "2 steps"
+      assert system =~ "Score 1-10"
       assert user =~ "Complete task"
-      assert user =~ "[0] Instruction: Do X"
-      assert user =~ "Condition: When Y"
+      assert user =~ "Step A"
+      assert user =~ "Observation: Saw X"
+      assert user =~ "Intent: Goal X"
+      assert user =~ "Instruction: Do X"
     end
 
     test "schema returns a Zoi schema" do
@@ -303,14 +310,22 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
       assert is_function(schema) or is_map(schema) or is_tuple(schema)
     end
 
-    test "parse_response extracts scored prescriptions" do
-      response = %{scores: [%{index: 0, return_score: 0.72}, %{index: 1, return_score: 0.9}]}
+    test "parse_response normalizes 1-10 scores to 0.0-1.0" do
+      response = %{scores: [%{index: 0, return_score: 1}, %{index: 1, return_score: 10}]}
       assert {:ok, scores} = GetReturn.parse_response(response)
-      assert [%{index: 0, return_score: 0.72}, %{index: 1, return_score: 0.9}] = scores
+      assert [%{index: 0, return_score: +0.0}, %{index: 1, return_score: 1.0}] = scores
+    end
+
+    test "parse_response normalizes mid-range scores" do
+      response = %{scores: [%{index: 0, return_score: 5}, %{index: 1, return_score: 8}]}
+      assert {:ok, scores} = GetReturn.parse_response(response)
+      assert [%{index: 0, return_score: score_5}, %{index: 1, return_score: score_8}] = scores
+      assert_in_delta score_5, 0.4444, 0.001
+      assert_in_delta score_8, 0.7778, 0.001
     end
 
     test "parse_response clamps out-of-range values" do
-      response = %{scores: [%{index: 0, return_score: 2.5}, %{index: 1, return_score: -1.0}]}
+      response = %{scores: [%{index: 0, return_score: 15}, %{index: 1, return_score: 0}]}
       assert {:ok, scores} = GetReturn.parse_response(response)
       assert [%{return_score: 1.0}, %{return_score: +0.0}] = scores
     end

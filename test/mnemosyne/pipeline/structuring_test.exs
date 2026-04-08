@@ -136,7 +136,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
             }
 
           system_content =~ "prescription quality" ->
-            %{scores: [%{index: 0, return_score: 0.85}]}
+            %{scores: [%{index: 0, return_score: 8}]}
 
           true ->
             %{}
@@ -248,7 +248,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
               }
 
             system_content =~ "prescription quality" ->
-              %{scores: [%{index: 0, return_score: 0.85}]}
+              %{scores: [%{index: 0, return_score: 8}]}
 
             true ->
               %{}
@@ -439,7 +439,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
               }
 
             system_content =~ "prescription quality" ->
-              %{scores: [%{index: 0, return_score: 0.75}]}
+              %{scores: [%{index: 0, return_score: 7}]}
 
             true ->
               %{}
@@ -494,7 +494,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
               }
 
             system_content =~ "prescription quality" ->
-              %{scores: [%{index: 0, return_score: 0.75}]}
+              %{scores: [%{index: 0, return_score: 7}]}
 
             true ->
               %{}

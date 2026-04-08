@@ -36,6 +36,7 @@ defmodule Mnemosyne.Graph.Node.Helpers do
 
   alias Mnemosyne.Graph.Node, as: NodeProtocol
 
+  @doc "Returns a MapSet of all linked node IDs across all edge types."
   @spec all_linked_ids(NodeProtocol.t()) :: MapSet.t()
   def all_linked_ids(node) do
     node |> NodeProtocol.links() |> Map.values() |> Enum.reduce(MapSet.new(), &MapSet.union/2)

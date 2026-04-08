@@ -1,7 +1,11 @@
 defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
   @moduledoc """
-  Prompt for scoring each prescription (procedural instruction) in a trajectory
-  by how well it contributed to the goal.
+  Prompt for scoring each prescription (procedural instruction) individually
+  against its specific intent and the trajectory evidence.
+
+  Per the PlugMem paper, each prescription is evaluated on a 1-10 scale
+  assessing whether the intent was achieved and how well the prescription
+  was executed. Scores are normalized to [0.0, 1.0] for internal use.
 
   Returns structured output via `chat_structured/3` using a Zoi schema.
   """
@@ -14,7 +18,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
     Zoi.map(
       %{
         scores:
-          Zoi.list(Zoi.map(%{index: Zoi.integer(), return_score: Zoi.float()}, coerce: true))
+          Zoi.list(Zoi.map(%{index: Zoi.integer(), return_score: Zoi.integer()}, coerce: true))
       },
       coerce: true
     )
@@ -27,26 +31,50 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
       trajectory
       |> Enum.with_index(1)
       |> Enum.map_join("\n", fn {step, i} ->
-        "Step #{i}: Action: #{step.action} | Reward: #{step.reward}"
+        parts = ["Step #{i}:"]
+        parts = if step.state, do: parts ++ ["State: #{step.state}"], else: parts
+
+        parts =
+          parts ++
+            [
+              "Action: #{step.action}",
+              "Observation: #{truncate(step.observation, 500)}",
+              "Reward: #{step.reward}"
+            ]
+
+        Enum.join(parts, " | ")
       end)
 
     formatted_prescriptions =
-      Enum.map_join(prescriptions, "\n", fn p ->
-        "[#{p.index}] Instruction: #{p.instruction} | Condition: #{p.condition} | Expected: #{p.expected_outcome}"
+      Enum.map_join(prescriptions, "\n\n", fn p ->
+        "[#{p.index}] Intent: #{p.intent}\n" <>
+          "  Instruction: #{p.instruction}\n" <>
+          "  Condition: #{p.condition}\n" <>
+          "  Expected outcome: #{p.expected_outcome}"
       end)
 
     [
       %{
         role: :system,
         content: """
-        You are an expert at evaluating prescription quality for reinforcement learning.
-        Given a trajectory segment with per-step rewards, the overall goal, and a list of
-        prescriptions extracted from the trajectory, score each prescription by how well
-        it contributed to goal achievement.
+        You are an expert at evaluating procedural prescription quality.
+        For each prescription, assess whether its intent was achieved and how well
+        the prescription was executed based on the trajectory evidence.
+
+        Grading Criteria (Score 1-10):
+        10: The prescription fully accomplishes its intent with no significant omissions.
+        8-9: Most of the intent is achieved with only minor gaps.
+        6-7: Partial completion; key elements covered but notable parts unfinished.
+        4-5: Limited progress; less than half achieved or done ineffectively.
+        2-3: Very little completion; actions barely connect to the intent.
+        1: No meaningful progress toward the intent.
+
+        Base the score only on completion level and alignment with the stated intent.
+        Evaluate each prescription independently against the trajectory evidence.
 
         Return a JSON object with a "scores" array. Each entry has:
         - "index": the prescription index (integer)
-        - "return_score": a float between 0.0 and 1.0\
+        - "return_score": an integer from 1 to 10\
         """
       },
       %{
@@ -57,31 +85,36 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReturn do
         Trajectory (#{length(trajectory)} steps):
         #{formatted_steps}
 
-        Prescriptions:
+        Prescriptions to evaluate:
         #{formatted_prescriptions}
 
-        Score each prescription:\
+        Score each prescription independently:\
         """
       }
     ]
   end
 
-  @doc "Parses and clamps the scored prescriptions from the LLM response."
+  @doc "Parses and normalizes the scored prescriptions from the LLM response."
   @spec parse_response(map()) :: {:ok, [map()]} | {:error, PromptError.t()}
   def parse_response(%{scores: [_ | _] = scores}) do
-    clamped =
+    normalized =
       Enum.map(scores, fn %{index: idx, return_score: score} ->
-        %{index: idx, return_score: clamp(score)}
+        %{index: idx, return_score: normalize(score)}
       end)
 
-    {:ok, clamped}
+    {:ok, normalized}
   end
 
   def parse_response(_) do
     {:error, PromptError.exception(prompt: :get_return, reason: :no_scores_extracted)}
   end
 
-  defp clamp(value) when value < 0.0, do: 0.0
-  defp clamp(value) when value > 1.0, do: 1.0
-  defp clamp(value), do: value
+  defp normalize(score) when is_integer(score), do: normalize(score / 1)
+  defp normalize(score) when score < 1.0, do: 0.0
+  defp normalize(score) when score > 10.0, do: 1.0
+  defp normalize(score), do: Float.round((score - 1.0) / 9.0, 4)
+
+  defp truncate(nil, _max), do: ""
+  defp truncate(text, max) when byte_size(text) <= max, do: text
+  defp truncate(text, max), do: String.slice(text, 0, max) <> "..."
 end

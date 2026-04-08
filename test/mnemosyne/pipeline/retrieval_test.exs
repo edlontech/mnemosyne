@@ -390,14 +390,29 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     end
   end
 
-  describe "expand_through_routing_nodes/4" do
+  describe "expand_through_routing_nodes/6" do
+    @routing_vf %{
+      module: Mnemosyne.ValueFunction.Default,
+      params: %{tag: %{threshold: 0.0, top_k: 10}, intent: %{threshold: 0.0, top_k: 10}}
+    }
+
     test "discovers sibling semantic nodes through shared tags" do
       graph = build_routing_test_graph()
       backend = {InMemory, %InMemory{graph: graph}}
       candidates = [TaggedCandidate.from_hop_0(Graph.get_node(graph, "sem_pasta"), 0.9)]
       seen = MapSet.new(["sem_pasta"])
+      query_vec = List.duplicate(0.1, 128)
 
-      siblings = Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:tag])
+      siblings =
+        Retrieval.expand_through_routing_nodes(
+          candidates,
+          backend,
+          seen,
+          [:tag],
+          query_vec,
+          @routing_vf
+        )
+
       sibling_ids = Enum.map(siblings, &NodeProtocol.id/1)
 
       assert "sem_risotto" in sibling_ids
@@ -410,8 +425,18 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       backend = {InMemory, %InMemory{graph: graph}}
       candidates = [TaggedCandidate.from_hop_0(Graph.get_node(graph, "proc_migrate"), 0.9)]
       seen = MapSet.new(["proc_migrate"])
+      query_vec = List.duplicate(0.1, 128)
 
-      siblings = Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:intent])
+      siblings =
+        Retrieval.expand_through_routing_nodes(
+          candidates,
+          backend,
+          seen,
+          [:intent],
+          query_vec,
+          @routing_vf
+        )
+
       sibling_ids = Enum.map(siblings, &NodeProtocol.id/1)
 
       assert "proc_rollback" in sibling_ids
@@ -423,8 +448,18 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       backend = {InMemory, %InMemory{graph: graph}}
       candidates = [TaggedCandidate.from_hop_0(Graph.get_node(graph, "sem_pasta"), 0.9)]
       seen = MapSet.new(["sem_pasta"])
+      query_vec = List.duplicate(0.1, 128)
 
-      siblings = Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:tag])
+      siblings =
+        Retrieval.expand_through_routing_nodes(
+          candidates,
+          backend,
+          seen,
+          [:tag],
+          query_vec,
+          @routing_vf
+        )
+
       sibling_types = Enum.map(siblings, &NodeProtocol.node_type/1)
 
       refute :tag in sibling_types
@@ -435,15 +470,33 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       backend = {InMemory, %InMemory{graph: graph}}
       candidates = [TaggedCandidate.from_hop_0(Graph.get_node(graph, "src_orphan"), 0.5)]
       seen = MapSet.new(["src_orphan"])
+      query_vec = List.duplicate(0.1, 128)
 
-      assert [] == Retrieval.expand_through_routing_nodes(candidates, backend, seen, [:tag])
+      assert [] ==
+               Retrieval.expand_through_routing_nodes(
+                 candidates,
+                 backend,
+                 seen,
+                 [:tag],
+                 query_vec,
+                 @routing_vf
+               )
     end
 
     test "returns empty list for empty candidates" do
       graph = build_routing_test_graph()
       backend = {InMemory, %InMemory{graph: graph}}
+      query_vec = List.duplicate(0.1, 128)
 
-      assert [] == Retrieval.expand_through_routing_nodes([], backend, MapSet.new(), [:tag])
+      assert [] ==
+               Retrieval.expand_through_routing_nodes(
+                 [],
+                 backend,
+                 MapSet.new(),
+                 [:tag],
+                 query_vec,
+                 @routing_vf
+               )
     end
   end
 

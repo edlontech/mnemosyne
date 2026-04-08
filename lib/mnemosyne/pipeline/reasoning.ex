@@ -100,7 +100,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   end
 
   defp maybe_reason(type, candidates, query, llm, llm_opts, config) do
-    nodes = extract_nodes(candidates, type)
+    nodes = extract_nodes(candidates, type, config)
 
     if nodes == [] do
       nil
@@ -111,11 +111,26 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     end
   end
 
-  defp extract_nodes(candidates, type) do
+  defp extract_nodes(candidates, type, config) do
+    top_k = resolve_top_k(type, config)
+
     candidates
     |> Map.get(type, [])
+    |> Enum.sort_by(& &1.score, :desc)
+    |> Enum.take(top_k)
     |> Enum.map(fn %TaggedCandidate{node: node} -> node end)
   end
+
+  defp resolve_top_k(type, nil), do: default_top_k(type)
+
+  defp resolve_top_k(type, %Config{} = config) do
+    Config.resolve_value_function(config, type).top_k
+  end
+
+  defp default_top_k(:episodic), do: 30
+  defp default_top_k(:semantic), do: 20
+  defp default_top_k(:procedural), do: 10
+  defp default_top_k(_), do: 20
 
   defp run_reasoning(:episodic, query, nodes, llm, llm_opts, config) do
     messages = ReasonEpisodic.build_messages(%{query: query, nodes: nodes})

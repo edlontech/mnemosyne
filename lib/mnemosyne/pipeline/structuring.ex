@@ -473,6 +473,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
       |> Enum.map(fn {instr, idx} ->
         %{
           index: idx,
+          intent: instr.intent,
           instruction: instr.instruction,
           condition: instr.condition,
           expected_outcome: instr.expected_outcome

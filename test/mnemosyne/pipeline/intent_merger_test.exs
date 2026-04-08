@@ -171,7 +171,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
   end
 
   describe "merge/2 with LLM failure" do
-    test "falls back to keeping new intent when LLM merge fails" do
+    test "falls back to identity rewrite when LLM merge fails" do
       new_intent = make_intent("int_new", "Deploy app", [0.9, 0.1, 0.0])
       existing_intent = make_intent("int_existing", "Deploy service", [0.9, 0.1, 0.0])
       proc = make_procedural("proc_1")
@@ -195,8 +195,9 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
       assert {:ok, result} = IntentMerger.merge(cs, @base_opts)
 
       intent_nodes = Enum.filter(result.additions, &match?(%Intent{}, &1))
-      assert [%Intent{id: "int_new", description: "Deploy app"}] = intent_nodes
-      assert {"int_new", "proc_1", :hierarchical} in result.links
+      assert intent_nodes == []
+      assert {"int_existing", "proc_1", :hierarchical} in result.links
+      refute {"int_new", "proc_1", :hierarchical} in result.links
     end
   end
 

@@ -93,7 +93,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
             }
 
           system_content =~ "prescription quality" ->
-            %{scores: [%{index: 0, return_score: 0.85}]}
+            %{scores: [%{index: 0, return_score: 8}]}
 
           true ->
             %{}
