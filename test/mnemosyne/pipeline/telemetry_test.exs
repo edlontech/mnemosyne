@@ -39,6 +39,14 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
     |> stub(:chat, fn _messages, _opts ->
       {:ok, %LLM.Response{content: "0.8", model: "mock:test", usage: %{}}}
     end)
+    |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      {:ok,
+       %LLM.Response{
+         content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+         model: "mock:test",
+         usage: %{}
+       }}
+    end)
 
     Mnemosyne.MockEmbedding
     |> stub(:embed, fn _text, _opts ->
@@ -61,6 +69,9 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
 
       content =
         cond do
+          system_content =~ "subgoal" ->
+            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+
           system_content =~ "factual knowledge" ->
             %{
               facts: [

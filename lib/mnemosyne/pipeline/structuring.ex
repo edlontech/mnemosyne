@@ -203,6 +203,14 @@ defmodule Mnemosyne.Pipeline.Structuring do
   end
 
   defp derive_progressive_states(trajectory, llm, llm_opts, config) do
+    if Enum.all?(trajectory.steps, &(&1.state != nil)) do
+      {:ok, trajectory}
+    else
+      do_derive_progressive_states(trajectory, llm, llm_opts, config)
+    end
+  end
+
+  defp do_derive_progressive_states(trajectory, llm, llm_opts, config) do
     trajectory.steps
     |> Enum.reduce_while({:ok, []}, fn step, {:ok, acc} ->
       previous_state =

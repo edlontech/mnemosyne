@@ -15,7 +15,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     overrides: %{}
   }
 
-  defp stub_llm_responses(responses) do
+  defp stub_chat_responses(responses) do
     {:ok, agent} = Agent.start_link(fn -> responses end)
 
     Mnemosyne.MockLLM
@@ -24,6 +24,21 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
         Agent.get_and_update(agent, fn
           [head | tail] -> {head, tail}
           [] -> {"default", []}
+        end)
+
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    end)
+  end
+
+  defp stub_chat_structured_responses(responses) do
+    {:ok, agent} = Agent.start_link(fn -> responses end)
+
+    Mnemosyne.MockLLM
+    |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      content =
+        Agent.get_and_update(agent, fn
+          [head | tail] -> {head, tail}
+          [] -> {%{}, []}
         end)
 
       {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
@@ -42,8 +57,9 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     end)
   end
 
-  defp stub_subgoal_only(subgoal \\ "Navigate to config") do
-    stub_llm_responses([subgoal])
+  defp stub_first_append(subgoal \\ "Navigate to config") do
+    stub_chat_responses(["The agent is in the initial state"])
+    stub_chat_structured_responses([%{"reasoning" => "analysis", "subgoal" => subgoal}])
     stub_embedding()
   end
 
@@ -61,8 +77,8 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
   end
 
   describe "append/4" do
-    test "first append stores step with nil reward" do
-      stub_subgoal_only()
+    test "first append stores step with derived state and subgoal" do
+      stub_first_append()
       episode = Episode.new("Test goal")
 
       assert {:ok, episode, _trace} =
@@ -72,21 +88,27 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       assert step.observation == "saw something"
       assert step.action == "did something"
       assert step.subgoal == "Navigate to config"
+      assert step.state == "The agent is in the initial state"
       assert step.reward == nil
       assert step.index == 0
       assert is_list(step.embedding)
     end
 
     test "second append scores the previous step using current observation" do
-      # First append: subgoal only (no reward call)
-      stub_subgoal_only("Navigate to config")
+      stub_first_append("Navigate to config")
       episode = Episode.new("Test goal")
 
       {:ok, episode, _trace} =
         Episode.append(episode, "saw something", "did something", @default_opts)
 
-      # Second append: subgoal for step 1 + reward for step 0
-      stub_llm_responses(["Explore options", "0.8"])
+      # Second append: chat calls = [state derivation, reward for step 0]
+      # chat_structured calls = [subgoal for step 1]
+      stub_chat_responses(["Agent has navigated to config", "0.8"])
+
+      stub_chat_structured_responses([
+        %{"reasoning" => "analysis", "subgoal" => "Explore options"}
+      ])
+
       stub_embedding()
 
       {:ok, episode, _trace} =
@@ -95,6 +117,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       assert [step_0, step_1] = episode.steps
       assert step_0.reward == 0.8
       assert step_1.reward == nil
+      assert step_1.state == "Agent has navigated to config"
     end
 
     test "rejects append on closed episode" do
@@ -111,7 +134,17 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       Mnemosyne.MockLLM
       |> stub(:chat, fn _messages, opts ->
         assert Keyword.get(opts, :model) == "test:model"
-        {:ok, %LLM.Response{content: "subgoal", model: "mock:test", usage: %{}}}
+        {:ok, %LLM.Response{content: "derived state", model: "mock:test", usage: %{}}}
+      end)
+      |> stub(:chat_structured, fn _messages, _schema, opts ->
+        assert Keyword.get(opts, :model) == "test:model"
+
+        {:ok,
+         %LLM.Response{
+           content: %{"reasoning" => "r", "subgoal" => "subgoal"},
+           model: "mock:test",
+           usage: %{}
+         }}
       end)
 
       episode = Episode.new("Test goal")
@@ -121,9 +154,21 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
                Episode.append(episode, "saw something", "did something", opts)
     end
 
-    test "propagates LLM errors" do
+    test "propagates LLM errors from state derivation" do
       Mnemosyne.MockLLM
       |> stub(:chat, fn _messages, _opts -> {:error, :llm_failure} end)
+
+      episode = Episode.new("Test goal")
+
+      assert {:error, :llm_failure} =
+               Episode.append(episode, "obs", "act", @default_opts)
+    end
+
+    test "propagates LLM errors from subgoal inference" do
+      stub_chat_responses(["derived state"])
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts -> {:error, :llm_failure} end)
 
       episode = Episode.new("Test goal")
 
@@ -134,13 +179,13 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
   describe "score_pending_reward/2" do
     test "scores the last step with sentinel" do
-      stub_subgoal_only()
+      stub_first_append()
       episode = Episode.new("Test goal")
       {:ok, episode, _} = Episode.append(episode, "saw something", "did something", @default_opts)
 
       assert hd(episode.steps).reward == nil
 
-      stub_llm_responses(["0.7"])
+      stub_chat_responses(["0.7"])
       assert {:ok, episode} = Episode.score_pending_reward(episode, @default_opts)
       assert hd(episode.steps).reward == 0.7
     end
@@ -151,11 +196,10 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     end
 
     test "is no-op when reward already scored" do
-      stub_subgoal_only()
+      stub_first_append()
       episode = Episode.new("Test goal")
       {:ok, episode, _} = Episode.append(episode, "obs", "act", @default_opts)
 
-      # Manually set reward
       [step] = episode.steps
       episode = %{episode | steps: [%{step | reward: 0.9}]}
 
@@ -164,7 +208,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     end
 
     test "falls back to 0.5 on LLM error" do
-      stub_subgoal_only()
+      stub_first_append()
       episode = Episode.new("Test goal")
       {:ok, episode, _} = Episode.append(episode, "obs", "act", @default_opts)
 
@@ -254,17 +298,18 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
   describe "close/1" do
     test "closes episode and builds trajectories" do
-      stub_subgoal_only()
+      stub_first_append()
       episode = Episode.new("Test goal")
       {:ok, episode, _trace} = Episode.append(episode, "obs1", "act1", @default_opts)
 
-      # Second append: subgoal + reward for step 0
-      stub_llm_responses(["Same subgoal", "0.9"])
+      # Second append: chat = [state, reward], chat_structured = [subgoal]
+      stub_chat_responses(["Updated state", "0.9"])
+      stub_chat_structured_responses([%{"reasoning" => "r", "subgoal" => "Same subgoal"}])
       stub_embedding()
       {:ok, episode, _trace} = Episode.append(episode, "obs2", "act2", @default_opts)
 
       # Score last pending step before close
-      stub_llm_responses(["0.8"])
+      stub_chat_responses(["0.8"])
       {:ok, episode} = Episode.score_pending_reward(episode, @default_opts)
 
       {:ok, closed} = Episode.close(episode)

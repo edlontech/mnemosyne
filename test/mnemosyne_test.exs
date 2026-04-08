@@ -26,6 +26,15 @@ defmodule MnemosyneTest do
       {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
     end)
 
+    stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+      {:ok,
+       %LLM.Response{
+         content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+         model: "test",
+         usage: %{}
+       }}
+    end)
+
     stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
       {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
     end)
@@ -44,6 +53,9 @@ defmodule MnemosyneTest do
 
       content =
         cond do
+          String.contains?(system_content, "subgoal") ->
+            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
 
@@ -234,41 +246,48 @@ defmodule MnemosyneTest do
           |> Enum.find(%{content: ""}, &(&1.role == :system))
           |> Map.get(:content, "")
 
-        if count < 4 do
-          {:error, :transient_failure}
-        else
-          cond do
-            String.contains?(system_content, "factual knowledge") ->
-              {:ok,
-               %LLM.Response{
-                 content: %{facts: [%{proposition: "a fact", concepts: ["c1", "c2"]}]},
-                 model: "test",
-                 usage: %{}
-               }}
+        cond do
+          String.contains?(system_content, "subgoal") ->
+            {:ok,
+             %LLM.Response{
+               content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+               model: "test",
+               usage: %{}
+             }}
 
-            String.contains?(system_content, "actionable instructions") ->
-              {:ok,
-               %LLM.Response{
-                 content: %{
-                   instructions: [
-                     %{intent: "goal", condition: "c", instruction: "a", expected_outcome: "o"}
-                   ]
-                 },
-                 model: "test",
-                 usage: %{}
-               }}
+          count < 4 ->
+            {:error, :transient_failure}
 
-            String.contains?(system_content, "prescription quality") ->
-              {:ok,
-               %LLM.Response{
-                 content: %{scores: [%{index: 0, return_score: 0.85}]},
-                 model: "test",
-                 usage: %{}
-               }}
+          String.contains?(system_content, "factual knowledge") ->
+            {:ok,
+             %LLM.Response{
+               content: %{facts: [%{proposition: "a fact", concepts: ["c1", "c2"]}]},
+               model: "test",
+               usage: %{}
+             }}
 
-            true ->
-              {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
-          end
+          String.contains?(system_content, "actionable instructions") ->
+            {:ok,
+             %LLM.Response{
+               content: %{
+                 instructions: [
+                   %{intent: "goal", condition: "c", instruction: "a", expected_outcome: "o"}
+                 ]
+               },
+               model: "test",
+               usage: %{}
+             }}
+
+          String.contains?(system_content, "prescription quality") ->
+            {:ok,
+             %LLM.Response{
+               content: %{scores: [%{index: 0, return_score: 0.85}]},
+               model: "test",
+               usage: %{}
+             }}
+
+          true ->
+            {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
         end
       end)
 

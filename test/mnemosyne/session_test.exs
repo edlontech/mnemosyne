@@ -81,6 +81,15 @@ defmodule Mnemosyne.SessionTest do
       {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
     end)
 
+    stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+      {:ok,
+       %LLM.Response{
+         content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+         model: "test",
+         usage: %{}
+       }}
+    end)
+
     stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
       {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
     end)
@@ -99,6 +108,9 @@ defmodule Mnemosyne.SessionTest do
 
       content =
         cond do
+          String.contains?(system_content, "subgoal") ->
+            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
 
@@ -490,6 +502,15 @@ defmodule Mnemosyne.SessionTest do
       {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
     end)
 
+    stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+      {:ok,
+       %LLM.Response{
+         content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+         model: "test",
+         usage: %{}
+       }}
+    end)
+
     stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
       count = :counters.get(call_count, 1)
       :counters.add(call_count, 1, 1)
@@ -519,6 +540,9 @@ defmodule Mnemosyne.SessionTest do
 
       content =
         cond do
+          String.contains?(system_content, "subgoal") ->
+            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
 
@@ -597,8 +621,22 @@ defmodule Mnemosyne.SessionTest do
     test "failed trajectory extraction keeps session in :collecting", %{tmp_dir: tmp_dir} do
       stub_llm_for_episode_with_boundary()
 
-      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        {:error, :extraction_failed}
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
+
+        if String.contains?(system_content, "subgoal") do
+          {:ok,
+           %LLM.Response{
+             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             model: "test",
+             usage: %{}
+           }}
+        else
+          {:error, :extraction_failed}
+        end
       end)
 
       infra = start_infra_with_auto_commit(tmp_dir, true)
@@ -614,8 +652,22 @@ defmodule Mnemosyne.SessionTest do
     test "trajectory extraction crash keeps session in :collecting", %{tmp_dir: tmp_dir} do
       stub_llm_for_episode_with_boundary()
 
-      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        raise "crash during extraction"
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
+
+        if String.contains?(system_content, "subgoal") do
+          {:ok,
+           %LLM.Response{
+             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             model: "test",
+             usage: %{}
+           }}
+        else
+          raise "crash during extraction"
+        end
       end)
 
       infra = start_infra_with_auto_commit(tmp_dir, true)
@@ -631,8 +683,22 @@ defmodule Mnemosyne.SessionTest do
     test "stopping flag with failed extraction terminates session", %{tmp_dir: tmp_dir} do
       stub_llm_for_episode()
 
-      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        {:error, :extraction_failed}
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
+
+        if String.contains?(system_content, "subgoal") do
+          {:ok,
+           %LLM.Response{
+             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             model: "test",
+             usage: %{}
+           }}
+        else
+          {:error, :extraction_failed}
+        end
       end)
 
       infra = start_infra_with_timeouts(tmp_dir, true, 50, 100)
@@ -650,9 +716,23 @@ defmodule Mnemosyne.SessionTest do
     test "rejects close when trajectory extraction is in-flight", %{tmp_dir: tmp_dir} do
       stub_llm_for_episode_with_boundary()
 
-      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        Process.sleep(500)
-        {:ok, %LLM.Response{content: %{facts: []}, model: "test", usage: %{}}}
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content, "")
+
+        if String.contains?(system_content, "subgoal") do
+          {:ok,
+           %LLM.Response{
+             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             model: "test",
+             usage: %{}
+           }}
+        else
+          Process.sleep(500)
+          {:ok, %LLM.Response{content: %{facts: []}, model: "test", usage: %{}}}
+        end
       end)
 
       stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
@@ -813,38 +893,47 @@ defmodule Mnemosyne.SessionTest do
       stub_llm_for_episode()
 
       stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
-        Process.sleep(200)
-
         system_content =
           messages
           |> Enum.find(%{content: ""}, &(&1.role == :system))
           |> Map.get(:content, "")
 
-        content =
-          cond do
-            String.contains?(system_content, "factual knowledge") ->
-              %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
+        if String.contains?(system_content, "subgoal") do
+          {:ok,
+           %LLM.Response{
+             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             model: "test",
+             usage: %{}
+           }}
+        else
+          Process.sleep(200)
 
-            String.contains?(system_content, "actionable instructions") ->
-              %{
-                instructions: [
-                  %{
-                    intent: "goal",
-                    condition: "condition",
-                    instruction: "action",
-                    expected_outcome: "outcome"
-                  }
-                ]
-              }
+          content =
+            cond do
+              String.contains?(system_content, "factual knowledge") ->
+                %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
 
-            String.contains?(system_content, "prescription quality") ->
-              %{scores: [%{index: 0, return_score: 0.85}]}
+              String.contains?(system_content, "actionable instructions") ->
+                %{
+                  instructions: [
+                    %{
+                      intent: "goal",
+                      condition: "condition",
+                      instruction: "action",
+                      expected_outcome: "outcome"
+                    }
+                  ]
+                }
 
-            true ->
-              %{}
-          end
+              String.contains?(system_content, "prescription quality") ->
+                %{scores: [%{index: 0, return_score: 0.85}]}
 
-        {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+              true ->
+                %{}
+            end
+
+          {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+        end
       end)
 
       stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
@@ -948,6 +1037,9 @@ defmodule Mnemosyne.SessionTest do
 
       content =
         cond do
+          String.contains?(system_content, "subgoal") ->
+            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "extracted fact", concepts: ["concept_a", "concept_b"]}]}
 
@@ -1118,6 +1210,9 @@ defmodule Mnemosyne.SessionTest do
 
         content =
           cond do
+            String.contains?(system_content, "subgoal") ->
+              %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+
             String.contains?(system_content, "factual knowledge") ->
               %{facts: [%{proposition: "rapid fact", concepts: ["rapid_concept"]}]}
 
@@ -1432,38 +1527,47 @@ defmodule Mnemosyne.SessionTest do
       stub_llm_for_episode_with_boundary()
 
       stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
-        Process.sleep(500)
-
         system_content =
           messages
           |> Enum.find(%{content: ""}, &(&1.role == :system))
           |> Map.get(:content, "")
 
-        content =
-          cond do
-            String.contains?(system_content, "factual knowledge") ->
-              %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
+        if String.contains?(system_content, "subgoal") do
+          {:ok,
+           %LLM.Response{
+             content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+             model: "test",
+             usage: %{}
+           }}
+        else
+          Process.sleep(500)
 
-            String.contains?(system_content, "actionable instructions") ->
-              %{
-                instructions: [
-                  %{
-                    intent: "goal",
-                    condition: "condition",
-                    instruction: "action",
-                    expected_outcome: "outcome"
-                  }
-                ]
-              }
+          content =
+            cond do
+              String.contains?(system_content, "factual knowledge") ->
+                %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
 
-            String.contains?(system_content, "prescription quality") ->
-              %{scores: [%{index: 0, return_score: 0.85}]}
+              String.contains?(system_content, "actionable instructions") ->
+                %{
+                  instructions: [
+                    %{
+                      intent: "goal",
+                      condition: "condition",
+                      instruction: "action",
+                      expected_outcome: "outcome"
+                    }
+                  ]
+                }
 
-            true ->
-              %{}
-          end
+              String.contains?(system_content, "prescription quality") ->
+                %{scores: [%{index: 0, return_score: 0.85}]}
 
-        {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+              true ->
+                %{}
+            end
+
+          {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+        end
       end)
 
       stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->

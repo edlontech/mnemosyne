@@ -10,28 +10,57 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   alias Mnemosyne.Pipeline.Prompts.GetSubgoal
 
   describe "GetSubgoal" do
-    test "build_messages returns system and user messages with interpolated variables" do
+    test "build_messages includes state when provided" do
       messages =
         GetSubgoal.build_messages(%{
           observation: "The file exists",
           action: "Read the file",
-          goal: "Extract data from logs"
+          goal: "Extract data from logs",
+          state: "Agent has identified the log directory"
         })
 
       assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
-      assert system =~ "sub-goal"
+      assert system =~ "subgoal"
       assert user =~ "Extract data from logs"
       assert user =~ "The file exists"
       assert user =~ "Read the file"
+      assert user =~ "Agent has identified the log directory"
     end
 
-    test "parse_response returns trimmed subgoal string" do
+    test "build_messages handles nil state for initial step" do
+      messages =
+        GetSubgoal.build_messages(%{
+          observation: "The file exists",
+          action: "Read the file",
+          goal: "Extract data from logs",
+          state: nil
+        })
+
+      assert [%{role: :system, content: _}, %{role: :user, content: user}] = messages
+      assert user =~ "initial state"
+    end
+
+    test "schema returns a valid Zoi schema with reasoning and subgoal" do
+      schema = GetSubgoal.schema()
+      assert {:ok, _} = Zoi.parse(schema, %{"reasoning" => "r", "subgoal" => "s"})
+    end
+
+    test "parse_response extracts subgoal from structured output" do
       assert {:ok, "Navigate to the config directory"} =
-               GetSubgoal.parse_response("  Navigate to the config directory  \n")
+               GetSubgoal.parse_response(%{
+                 "reasoning" => "analysis",
+                 "subgoal" => "  Navigate to the config directory  "
+               })
     end
 
-    test "parse_response rejects empty response" do
-      assert {:error, %PromptError{reason: :empty_response}} = GetSubgoal.parse_response("   ")
+    test "parse_response rejects empty subgoal" do
+      assert {:error, %PromptError{reason: :empty_response}} =
+               GetSubgoal.parse_response(%{"reasoning" => "analysis", "subgoal" => "   "})
+    end
+
+    test "parse_response rejects invalid schema" do
+      assert {:error, %PromptError{reason: :invalid_schema}} =
+               GetSubgoal.parse_response(%{"wrong" => "format"})
     end
   end
 

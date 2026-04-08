@@ -16,6 +16,7 @@ defmodule Mnemosyne.Pipeline.Episode do
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.Notifier.Trace.Episode, as: EpisodeTrace
   alias Mnemosyne.Pipeline.Prompts.GetReward
+  alias Mnemosyne.Pipeline.Prompts.GetState
   alias Mnemosyne.Pipeline.Prompts.GetSubgoal
   alias Mnemosyne.Telemetry
 
@@ -82,8 +83,21 @@ defmodule Mnemosyne.Pipeline.Episode do
         verbosity = if config, do: config.trace_verbosity, else: :summary
         start_time = System.monotonic_time(:microsecond)
 
-        with {:ok, subgoal} <-
-               infer_subgoal(llm, observation, action, episode.goal, config, llm_opts),
+        previous_state = previous_step_state(episode.steps)
+        previous_action = previous_step_action(episode.steps)
+
+        with {:ok, state} <-
+               derive_state(
+                 llm,
+                 previous_state,
+                 previous_action,
+                 observation,
+                 episode.goal,
+                 config,
+                 llm_opts
+               ),
+             {:ok, subgoal} <-
+               infer_subgoal(llm, observation, action, episode.goal, state, config, llm_opts),
              {:ok, %Embedding.Response{vectors: [subgoal_embedding | _]}} <-
                embedding.embed(subgoal, Config.embedding_opts(config)),
              {:ok, episode} <-
@@ -93,7 +107,7 @@ defmodule Mnemosyne.Pipeline.Episode do
             observation: observation,
             action: action,
             subgoal: subgoal,
-            state: nil,
+            state: state,
             reward: nil,
             embedding: subgoal_embedding,
             trajectory_id: episode.current_trajectory_id
@@ -182,14 +196,45 @@ defmodule Mnemosyne.Pipeline.Episode do
     {:ok, %{episode | closed: true, trajectories: trajectories}}
   end
 
-  defp infer_subgoal(llm, observation, action, goal, config, llm_opts) do
-    messages = GetSubgoal.build_messages(%{observation: observation, action: action, goal: goal})
+  defp infer_subgoal(llm, observation, action, goal, state, config, llm_opts) do
+    messages =
+      GetSubgoal.build_messages(%{
+        observation: observation,
+        action: action,
+        goal: goal,
+        state: state
+      })
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :get_subgoal, llm_opts)) do
+           llm.chat_structured(
+             messages,
+             GetSubgoal.schema(),
+             Config.llm_opts(config, :get_subgoal, llm_opts)
+           ) do
       GetSubgoal.parse_response(content)
     end
   end
+
+  defp derive_state(llm, previous_state, previous_action, observation, goal, config, llm_opts) do
+    messages =
+      GetState.build_messages(%{
+        previous_state: previous_state,
+        action: previous_action,
+        observation: observation,
+        goal: goal
+      })
+
+    with {:ok, %{content: content}} <-
+           llm.chat(messages, Config.llm_opts(config, :get_state, llm_opts)) do
+      GetState.parse_response(content)
+    end
+  end
+
+  defp previous_step_state([]), do: nil
+  defp previous_step_state(steps), do: List.last(steps).state
+
+  defp previous_step_action([]), do: nil
+  defp previous_step_action(steps), do: List.last(steps).action
 
   defp evaluate_reward(llm, observation, action, subgoal, next_observation, config, llm_opts) do
     messages =

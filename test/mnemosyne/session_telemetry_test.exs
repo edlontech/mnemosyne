@@ -74,6 +74,15 @@ defmodule Mnemosyne.SessionTelemetryTest do
       {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
     end)
 
+    stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+      {:ok,
+       %LLM.Response{
+         content: %{"reasoning" => "analysis", "subgoal" => "test subgoal"},
+         model: "test",
+         usage: %{}
+       }}
+    end)
+
     stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
       {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
     end)
@@ -92,6 +101,9 @@ defmodule Mnemosyne.SessionTelemetryTest do
 
       content =
         cond do
+          String.contains?(system_content, "subgoal") ->
+            %{"reasoning" => "analysis", "subgoal" => "test subgoal"}
+
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
 

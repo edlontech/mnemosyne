@@ -37,11 +37,12 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
   end
 
   defp stub_append_cycle(subgoal \\ "Optimize queries", reward \\ "0.8") do
-    stub_llm_responses([subgoal, reward])
+    stub_chat_responses(["Derived state", reward])
+    stub_chat_structured_responses([%{"reasoning" => "analysis", "subgoal" => subgoal}])
     stub_default_embedding()
   end
 
-  defp stub_llm_responses(responses) do
+  defp stub_chat_responses(responses) do
     {:ok, agent} = Agent.start_link(fn -> responses end)
 
     Mnemosyne.MockLLM
@@ -50,6 +51,21 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         Agent.get_and_update(agent, fn
           [head | tail] -> {head, tail}
           [] -> {"default", []}
+        end)
+
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    end)
+  end
+
+  defp stub_chat_structured_responses(responses) do
+    {:ok, agent} = Agent.start_link(fn -> responses end)
+
+    Mnemosyne.MockLLM
+    |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      content =
+        Agent.get_and_update(agent, fn
+          [head | tail] -> {head, tail}
+          [] -> {%{}, []}
         end)
 
       {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
