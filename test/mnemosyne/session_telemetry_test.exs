@@ -1,5 +1,6 @@
 defmodule Mnemosyne.SessionTelemetryTest do
   use ExUnit.Case, async: false
+  use AssertEventually, timeout: 500, interval: 10
 
   import Mimic
 
@@ -251,8 +252,7 @@ defmodule Mnemosyne.SessionTelemetryTest do
       end)
 
       :ok = Session.close(pid)
-      Process.sleep(200)
-      assert Session.state(pid) == :failed
+      assert_eventually(Session.state(pid) == :failed)
 
       :ok = Session.discard(pid)
 
@@ -273,8 +273,7 @@ defmodule Mnemosyne.SessionTelemetryTest do
       :ok = Session.append(pid, "saw something", "did something")
       :ok = Session.close(pid)
 
-      Process.sleep(200)
-      assert Session.state(pid) == :ready
+      assert_eventually(Session.state(pid) == :ready)
 
       :ok = Session.commit(pid)
 
@@ -295,8 +294,7 @@ defmodule Mnemosyne.SessionTelemetryTest do
       :ok = Session.append(pid, "saw something", "did something")
       :ok = Session.close(pid)
 
-      Process.sleep(200)
-      assert Session.state(pid) == :ready
+      assert_eventually(Session.state(pid) == :ready)
 
       :ok = Session.discard(pid)
 
@@ -325,8 +323,7 @@ defmodule Mnemosyne.SessionTelemetryTest do
       end)
 
       :ok = Session.close(pid)
-      Process.sleep(200)
-      assert Session.state(pid) == :failed
+      assert_eventually(Session.state(pid) == :failed)
 
       stub_extraction_success()
       :ok = Session.commit(pid)

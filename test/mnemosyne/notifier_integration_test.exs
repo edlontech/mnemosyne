@@ -369,8 +369,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       :ok = Session.append(pid, "saw something", "did something")
       :ok = Session.close(pid)
 
-      Process.sleep(300)
-      assert Session.state(pid) == :ready
+      assert_eventually(Session.state(pid) == :ready)
 
       events = TestNotifier.events(infra.repo_id)
 
@@ -395,8 +394,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       :ok = Session.append(pid, "saw something", "did something")
       :ok = Session.close(pid)
 
-      Process.sleep(300)
-      assert Session.state(pid) == :ready
+      assert_eventually(Session.state(pid) == :ready)
 
       :ok = Session.commit(pid)
 
@@ -561,8 +559,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       :ok = Session.append(pid, "saw something", "did something")
       :ok = Session.close(pid)
 
-      Process.sleep(300)
-      assert Session.state(pid) == :idle
+      assert_eventually(Session.state(pid) == :idle)
 
       events = TestNotifier.events(infra.repo_id)
 
@@ -595,8 +592,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
 
       :ok = Session.close(pid)
 
-      Process.sleep(300)
-      assert Session.state(pid) == :failed
+      assert_eventually(Session.state(pid) == :failed)
 
       events = TestNotifier.events(infra.repo_id)
 
@@ -621,8 +617,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
 
       :ok = Session.close(pid)
 
-      Process.sleep(300)
-      assert Session.state(pid) == :failed
+      assert_eventually(Session.state(pid) == :failed)
 
       :ok = Session.discard(pid)
 
@@ -644,8 +639,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
       :ok = Session.append(pid, "saw something", "did something")
       :ok = Session.close(pid)
 
-      Process.sleep(300)
-      assert Session.state(pid) == :ready
+      assert_eventually(Session.state(pid) == :ready)
 
       :ok = Session.discard(pid)
 
@@ -698,8 +692,7 @@ defmodule Mnemosyne.NotifierSessionIntegrationTest do
 
       :ok = Session.close(pid)
 
-      Process.sleep(300)
-      assert Session.state(pid) == :failed
+      assert_eventually(Session.state(pid) == :failed)
 
       stub_extraction_success()
       :ok = Session.commit(pid)

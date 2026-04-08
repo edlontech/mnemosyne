@@ -256,14 +256,10 @@ defmodule Mnemosyne.SessionTest do
       :ok = Session.start_episode(pid, "test goal")
       :ok = Session.append(pid, "saw something", "did something")
 
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        Process.sleep(500)
-        {:ok, %LLM.Response{content: "test", model: "test", usage: %{}}}
-      end)
-
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        Process.sleep(500)
-        {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
+        receive do
+          :unblock -> {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
+        end
       end)
 
       :ok = Session.close(pid)
@@ -397,14 +393,10 @@ defmodule Mnemosyne.SessionTest do
       :ok = Session.start_episode(pid, "test goal")
       :ok = Session.append(pid, "saw something", "did something")
 
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        Process.sleep(500)
-        {:ok, %LLM.Response{content: "test", model: "test", usage: %{}}}
-      end)
-
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        Process.sleep(500)
-        {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
+        receive do
+          :unblock -> {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
+        end
       end)
 
       :ok = Session.close(pid)
@@ -730,8 +722,9 @@ defmodule Mnemosyne.SessionTest do
              usage: %{}
            }}
         else
-          Process.sleep(500)
-          {:ok, %LLM.Response{content: %{facts: []}, model: "test", usage: %{}}}
+          receive do
+            :unblock -> {:ok, %LLM.Response{content: %{facts: []}, model: "test", usage: %{}}}
+          end
         end
       end)
 
@@ -811,7 +804,7 @@ defmodule Mnemosyne.SessionTest do
 
       stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
         if :counters.get(slow_append, 1) > 0 do
-          Process.sleep(200)
+          Process.sleep(80)
         end
 
         {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
@@ -906,7 +899,7 @@ defmodule Mnemosyne.SessionTest do
              usage: %{}
            }}
         else
-          Process.sleep(200)
+          Process.sleep(120)
 
           content =
             cond do
@@ -1268,12 +1261,12 @@ defmodule Mnemosyne.SessionTest do
   describe "pending ops queue" do
     defp stub_slow_extraction do
       stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        Process.sleep(500)
+        Process.sleep(50)
         {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
       end)
 
       stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
-        Process.sleep(500)
+        Process.sleep(50)
 
         system_content =
           messages
@@ -1399,12 +1392,12 @@ defmodule Mnemosyne.SessionTest do
       :ok = Session.append(pid, "obs", "act")
 
       stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        Process.sleep(300)
+        Process.sleep(30)
         {:error, :extraction_boom}
       end)
 
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        Process.sleep(300)
+        Process.sleep(30)
         {:error, :extraction_boom}
       end)
 
@@ -1540,7 +1533,7 @@ defmodule Mnemosyne.SessionTest do
              usage: %{}
            }}
         else
-          Process.sleep(500)
+          Process.sleep(50)
 
           content =
             cond do

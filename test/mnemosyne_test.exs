@@ -406,14 +406,10 @@ defmodule MnemosyneTest do
       {:ok, session_id} = Mnemosyne.start_session("test goal", repo: repo)
       :ok = Mnemosyne.append(session_id, "saw something", "did something")
 
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        Process.sleep(:timer.seconds(30))
-        {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
-      end)
-
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        Process.sleep(:timer.seconds(30))
-        {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
+        receive do
+          :unblock -> :ok
+        end
       end)
 
       assert {:error, %PipelineError{reason: :extraction_timeout}} =
