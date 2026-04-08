@@ -52,6 +52,8 @@ defmodule Mnemosyne.Notifier do
           | {:session_expired, session_id :: String.t(), metadata()}
           | {:trajectory_extraction_failed, session_id :: String.t(), trajectory_id :: String.t(),
              reason :: term(), metadata()}
+          | {:write_failed, operation :: atom(), reason :: term(), metadata()}
+          | {:write_crashed, operation :: atom(), reason :: term(), metadata()}
 
   @callback notify(repo_id :: String.t(), event()) :: :ok
 

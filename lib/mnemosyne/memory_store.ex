@@ -437,7 +437,9 @@ defmodule Mnemosyne.MemoryStore do
       {{:ok, {:delete_nodes, node_ids}}, {:delete_nodes, from}} ->
         delete_nodes_from_backend(node_ids, from, state)
 
-      {{:error, _} = error, {_op_type, from}} ->
+      {{:error, reason} = error, {op_type, from}} ->
+        Logger.error("Write task failed (#{op_type}): #{inspect(reason)}")
+        notify_write_failure(op_type, reason, state)
         reply_and_dispatch(from, error, state)
     end
   end
@@ -451,7 +453,10 @@ defmodule Mnemosyne.MemoryStore do
       if from, do: GenServer.reply(from, :ok)
       {:noreply, dispatch_write(%{state | backend: {backend_mod, final_bs}})}
     else
-      {:error, _} = error -> reply_and_dispatch(from, error, state)
+      {:error, reason} = error ->
+        Logger.error("Backend apply_changeset failed: #{inspect(reason)}")
+        notify_write_failure(:apply_changeset, reason, state)
+        reply_and_dispatch(from, error, state)
     end
   end
 
@@ -464,7 +469,9 @@ defmodule Mnemosyne.MemoryStore do
         if from, do: GenServer.reply(from, :ok)
         {:noreply, dispatch_write(%{state | backend: {backend_mod, new_bs}})}
 
-      {:error, _} = error ->
+      {:error, reason} = error ->
+        Logger.error("Backend delete_nodes failed: #{inspect(reason)}")
+        notify_write_failure(:delete_nodes, reason, state)
         reply_and_dispatch(from, error, state)
     end
   end
@@ -474,11 +481,25 @@ defmodule Mnemosyne.MemoryStore do
     {:noreply, dispatch_write(%{state | write_active: nil})}
   end
 
+  defp notify_write_failure(operation, reason, state) do
+    Notifier.safe_notify(
+      state.notifier,
+      state.repo_id,
+      {:write_failed, operation, reason, %{}}
+    )
+  end
+
   defp handle_write_crash(ref, reason, state) do
     Process.demonitor(ref, [:flush])
-    {_ref, {_op_type, from}} = state.write_active
+    {_ref, {op_type, from}} = state.write_active
 
-    Logger.error("Write task crashed: #{inspect(reason)}")
+    Logger.error("Write task crashed (#{op_type}): #{inspect(reason)}")
+
+    Notifier.safe_notify(
+      state.notifier,
+      state.repo_id,
+      {:write_crashed, op_type, reason, %{}}
+    )
 
     if from do
       GenServer.reply(from, {:error, PipelineError.exception(reason: {:task_crashed, reason})})
