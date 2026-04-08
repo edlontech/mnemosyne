@@ -130,7 +130,6 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   defp default_top_k(:episodic), do: 30
   defp default_top_k(:semantic), do: 20
   defp default_top_k(:procedural), do: 10
-  defp default_top_k(_), do: 20
 
   defp run_reasoning(:episodic, query, nodes, llm, llm_opts, config) do
     messages = ReasonEpisodic.build_messages(%{query: query, nodes: nodes})

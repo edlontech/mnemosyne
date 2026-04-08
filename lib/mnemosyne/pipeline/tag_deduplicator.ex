@@ -92,8 +92,6 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
     {Enum.reverse(kept), rewrites}
   end
 
-  defp deduplicate_by_embedding(tags, rewrites) when length(tags) < 2, do: {tags, rewrites}
-
   defp deduplicate_by_embedding(tags, rewrites) do
     {kept, new_rewrites} =
       Enum.reduce(tags, {[], rewrites}, fn tag, {acc, rw} ->
@@ -121,7 +119,7 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
           NodeProtocol.embedding(existing)
         )
 
-      if is_float(score) and score >= @embedding_similarity_threshold do
+      if score >= @embedding_similarity_threshold do
         existing.id
       end
     end)
@@ -167,22 +165,16 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
     end
   end
 
-  defp remove_replaced_tags(tags, rewrites) when map_size(rewrites) == 0, do: {tags, rewrites}
-
   defp remove_replaced_tags(tags, rewrites) do
     surviving = Enum.reject(tags, &Map.has_key?(rewrites, &1.id))
     {surviving, rewrites}
   end
-
-  defp rewrite_links(links, rewrites) when map_size(rewrites) == 0, do: links
 
   defp rewrite_links(links, rewrites) do
     Enum.map(links, fn {from, to, type} ->
       {Map.get(rewrites, from, from), Map.get(rewrites, to, to), type}
     end)
   end
-
-  defp clean_metadata(metadata, rewrites) when map_size(rewrites) == 0, do: metadata
 
   defp clean_metadata(metadata, rewrites) do
     Enum.reduce(rewrites, metadata, fn {source_id, target_id}, acc ->
@@ -192,7 +184,7 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
 
   defp propagate_reward(metadata, source_id, target_id) do
     case Map.get(metadata, source_id) do
-      %NodeMetadata{cumulative_reward: reward, reward_count: rc} when rc > 0 ->
+      %NodeMetadata{cumulative_reward: reward} ->
         target_meta = Map.get(metadata, target_id, NodeMetadata.new())
         updated_target = NodeMetadata.update_reward(target_meta, reward)
 
@@ -200,7 +192,7 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
         |> Map.delete(source_id)
         |> Map.put(target_id, updated_target)
 
-      _ ->
+      nil ->
         Map.delete(metadata, source_id)
     end
   end
