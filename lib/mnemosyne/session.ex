@@ -411,19 +411,28 @@ defmodule Mnemosyne.Session do
   end
 
   def collecting(:info, {ref, {:error, _} = error}, %{append_task: ref} = data) do
-    Logger.debug(
-      "session #{data.id} append task failed: #{inspect(error)}, queue_size=#{:queue.len(data.append_queue)}"
-    )
+    Logger.warning("session #{data.id} append task failed: #{inspect(error)}")
 
     Process.demonitor(ref, [:flush])
+
+    Notifier.safe_notify(
+      data.notifier,
+      data.repo_id,
+      {:append_failed, data.id, %{error: error}}
+    )
+
     notify_append_caller(data.append_caller, error)
     data = %{data | append_task: nil, append_caller: nil}
     {:keep_state, dispatch_append(data)}
   end
 
   def collecting(:info, {:DOWN, ref, :process, _pid, reason}, %{append_task: ref} = data) do
-    Logger.error(
-      "session #{data.id} append task crashed: #{inspect(reason)}, queue_size=#{:queue.len(data.append_queue)}"
+    Logger.error("session #{data.id} append task crashed: #{inspect(reason)}")
+
+    Notifier.safe_notify(
+      data.notifier,
+      data.repo_id,
+      {:append_failed, data.id, %{error: reason}}
     )
 
     error = {:error, SessionError.exception(reason: :append_crashed)}
