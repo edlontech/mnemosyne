@@ -840,6 +840,7 @@ defmodule Mnemosyne.Session do
       Notifier.safe_notify(data.notifier, data.repo_id, {:session_expired, data.id, %{}})
       {:stop, :normal, data}
     else
+      data = reschedule_flush_if_needed(data)
       {:keep_state, data}
     end
   end
@@ -863,6 +864,16 @@ defmodule Mnemosyne.Session do
 
   defp schedule_timer(_msg, :infinity), do: nil
   defp schedule_timer(msg, ms) when is_integer(ms), do: Process.send_after(self(), msg, ms)
+
+  defp reschedule_flush_if_needed(data) do
+    if auto_commit_enabled?(data) and data.flush_timer == nil and
+         uncommitted_current_steps(data) != [] do
+      flush_ref = schedule_timer(:flush_timeout, data.config.session.flush_timeout_ms)
+      %{data | flush_timer: flush_ref}
+    else
+      data
+    end
+  end
 
   defp uncommitted_current_steps(data) do
     current_traj_id = data.episode.current_trajectory_id
@@ -1122,23 +1133,23 @@ defmodule Mnemosyne.Session do
         {:keep_state, data}
 
       {{:value, {op, callback}}, rest} ->
-        case project_transition(current_state, op) do
-          {:invalid, _} ->
-            if callback,
-              do: callback.({:error, SessionError.exception(reason: :invalid_operation)})
+        drain_pending_op(current_state, %{data | pending_ops: rest}, op, callback)
+    end
+  end
 
-            new_data =
-              flush_pending_ops(
-                %{data | pending_ops: rest},
-                SessionError.exception(reason: :preceding_op_failed)
-              )
+  defp drain_pending_op(current_state, data, op, callback) do
+    case project_transition(current_state, op) do
+      {:invalid, _} ->
+        if callback,
+          do: callback.({:error, SessionError.exception(reason: :invalid_operation)})
 
-            {:keep_state, new_data}
+        new_data =
+          flush_pending_ops(data, SessionError.exception(reason: :preceding_op_failed))
 
-          _ ->
-            data = %{data | pending_ops: rest}
-            apply_drained_op(execute_drain_op(op, data), callback, data)
-        end
+        {:keep_state, new_data}
+
+      _ ->
+        apply_drained_op(execute_drain_op(op, data), callback, data)
     end
   end
 
@@ -1163,14 +1174,16 @@ defmodule Mnemosyne.Session do
          [{:reply, from, {:error, SessionError.exception(reason: :invalid_operation)}}]}
 
       _ ->
-        case execute_drain_op(op, data) do
-          {:ok, result, next_state, new_data} ->
-            if callback, do: callback.({:ok, result})
-            {:next_state, next_state, new_data, [{:reply, from, :ok}]}
-
-          {:error, error} ->
-            {:keep_state_and_data, [{:reply, from, {:error, error}}]}
-        end
+        run_async_op(execute_drain_op(op, data), callback, from)
     end
+  end
+
+  defp run_async_op({:ok, result, next_state, new_data}, callback, from) do
+    if callback, do: callback.({:ok, result})
+    {:next_state, next_state, new_data, [{:reply, from, :ok}]}
+  end
+
+  defp run_async_op({:error, error}, _callback, from) do
+    {:keep_state_and_data, [{:reply, from, {:error, error}}]}
   end
 end
