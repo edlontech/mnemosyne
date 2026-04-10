@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.3...mnemosyne-v0.1.4) (2026-04-10)
+
+
+### Features
+
+* inject repo_id into backend opts and support default backend ([a45762e](https://github.com/edlontech/mnemosyne/commit/a45762ee3999d701f2c359b19ad261934ba4c783))
+
 ## [0.1.3](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.2...mnemosyne-v0.1.3) (2026-04-10)
 
 
