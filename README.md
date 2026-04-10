@@ -11,7 +11,7 @@ Add `mnemosyne` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:mnemosyne, github: "edlontech/mnemosyne"}
+    {:mnemosyne, "~> 0.1.2"} # x-release-please-version
   ]
 end
 ```

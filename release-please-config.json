@@ -5,7 +5,13 @@
   "packages": {
     ".": {
       "package-name": "mnemosyne",
-      "changelogpath": "CHANGELOG.md"
+      "changelogpath": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "README.md"
+        }
+      ]
     }
   }
 }
