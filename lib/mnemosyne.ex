@@ -110,7 +110,7 @@ defmodule Mnemosyne do
     store_opts = [
       name: via,
       repo_id: repo_id,
-      backend: Keyword.fetch!(opts, :backend),
+      backend: Keyword.get(opts, :backend, defaults.backend),
       config: Keyword.get(opts, :config, defaults.config),
       llm: Keyword.get(opts, :llm, defaults.llm),
       embedding: Keyword.get(opts, :embedding, defaults.embedding),

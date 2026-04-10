@@ -147,6 +147,8 @@ defmodule Mnemosyne.MemoryStore do
   @impl true
   def init(opts) do
     {backend_mod, backend_opts} = Keyword.fetch!(opts, :backend)
+    repo_id = Keyword.get(opts, :repo_id)
+    backend_opts = Keyword.put_new(backend_opts, :repo_id, repo_id)
 
     case backend_mod.init(backend_opts) do
       {:ok, backend_state} ->

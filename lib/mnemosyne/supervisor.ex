@@ -29,7 +29,8 @@ defmodule Mnemosyne.Supervisor do
       config: Keyword.fetch!(opts, :config),
       llm: Keyword.fetch!(opts, :llm),
       embedding: Keyword.fetch!(opts, :embedding),
-      notifier: Keyword.get(opts, :notifier, Mnemosyne.Notifier.Noop)
+      notifier: Keyword.get(opts, :notifier, Mnemosyne.Notifier.Noop),
+      backend: Keyword.get(opts, :backend)
     }
 
     :persistent_term.put({__MODULE__, name, :defaults}, defaults)
