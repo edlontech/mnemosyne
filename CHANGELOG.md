@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.1.3](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.2...mnemosyne-v0.1.3) (2026-04-10)
+
+
+### Features
+
+* add extraction profiles for domain-specific memory tuning ([537f644](https://github.com/edlontech/mnemosyne/commit/537f644aee39c025efc7fc463606a59438372299))
+* add per-hop query refinement to retrieval pipeline ([fbbf01b](https://github.com/edlontech/mnemosyne/commit/fbbf01bc4d2e719d9c6b80c9831aefa22a5c78c4))
+* add plain_text field to Source node for debugging ([9f29fa7](https://github.com/edlontech/mnemosyne/commit/9f29fa72876fad1b41072ac164e7ef7b90e7dc71))
+* add recall observability with TaggedCandidate and TouchedNode structs ([2c7116d](https://github.com/edlontech/mnemosyne/commit/2c7116d56f02aed940257876179036351b376cec))
+* close memory graph structure gaps (typed edges, source embeddings, reward stamping, episodic validation) ([f967e07](https://github.com/edlontech/mnemosyne/commit/f967e07ab58f94a1bffee39f8b2fa9c26a632399))
+* close remaining plugmem implementation gaps ([b742ffa](https://github.com/edlontech/mnemosyne/commit/b742ffa1471ea67048db3d41cd9a4d9dc3ec14b7))
+* condition subgoal inference on derived state s_t ([8116d1a](https://github.com/edlontech/mnemosyne/commit/8116d1a5354366d5e33d27fee054f48b68396e46))
+
+
+### Bug Fixes
+
+* add idle :info catch-all and async op state validation in Session ([4d4b85b](https://github.com/edlontech/mnemosyne/commit/4d4b85b1fbc6e50ffd1b32bcea91552feacbd433))
+* Added missing append states ([b7c52bb](https://github.com/edlontech/mnemosyne/commit/b7c52bb9e643a91871bfb0ac0e611b7b36cb582a))
+* emit notifier events on write lane failures ([6ba2200](https://github.com/edlontech/mnemosyne/commit/6ba2200c5efa007f26f313eb83807f86beeaf1cb))
+* guard close drain op against nil episode ([1edeff9](https://github.com/edlontech/mnemosyne/commit/1edeff908957c582b9771130cd88457fd492bf13))
+* log append failures at warning level and emit notifier events ([54542cd](https://github.com/edlontech/mnemosyne/commit/54542cded945e138d481f551e4879d2ba578b2cb))
+* remove embedding-based tag dedup that collapsed all tags into one ([6c9be89](https://github.com/edlontech/mnemosyne/commit/6c9be8989817ca5ef9779f537a187b0e68815b4a))
+* reschedule flush timer after trajectory extraction failure ([c884d9e](https://github.com/edlontech/mnemosyne/commit/c884d9e4254b45fd426cb953b5385fbaab5c6db1))
+* resolve dialyzer warnings ([7517951](https://github.com/edlontech/mnemosyne/commit/751795103c73e45655f02eac3626f29f7c6e0127))
+* use atom keys in GetSubgoal.parse_response to match Zoi output ([d884cf7](https://github.com/edlontech/mnemosyne/commit/d884cf7488651098d2f9678ce2b8fa2ed7965c4f))
+
+
+### Performance Improvements
+
+* reduce test suite from ~47s to ~5s by eliminating unnecessary sleeps ([2871078](https://github.com/edlontech/mnemosyne/commit/28710786aaf8facadb5c028999678fed3c4980e1))
+
 ## [0.1.2](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.1...mnemosyne-v0.1.2) (2026-03-23)
 
 
