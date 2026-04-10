@@ -8,6 +8,7 @@ defmodule Mnemosyne.MixProject do
       package: package(),
       version: "0.1.3",
       elixir: "~> 1.19",
+      test_coverage: [tool: ExCoveralls],
       docs: docs(),
       dialyzer: [
         plt_core_path: "_plts/core"
