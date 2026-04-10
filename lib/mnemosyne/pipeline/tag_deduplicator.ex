@@ -11,12 +11,8 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
   require Logger
 
   alias Mnemosyne.Graph.Changeset
-  alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Node.Tag
-  alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.NodeMetadata
-
-  @embedding_similarity_threshold 0.9
 
   @doc "Deduplicates Tag nodes in the changeset against both the batch and the existing graph."
   @spec deduplicate(Changeset.t(), keyword()) :: {:ok, Changeset.t()} | {:error, term()}
@@ -41,7 +37,6 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
 
   defp do_deduplicate(tags, other_nodes, %Changeset{} = changeset, opts) do
     {kept_tags, rewrites} = deduplicate_batch(tags)
-    {kept_tags, rewrites} = deduplicate_by_embedding(kept_tags, rewrites)
 
     rewrites = maybe_deduplicate_against_graph(kept_tags, rewrites, opts)
 
@@ -66,7 +61,7 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
     case fetch_graph_tags(opts) do
       {:ok, graph_tags} ->
         graph_lookup = build_graph_lookup(graph_tags)
-        deduplicate_against_graph(kept_tags, graph_lookup, graph_tags, rewrites)
+        deduplicate_against_graph(kept_tags, graph_lookup, rewrites)
 
       :error ->
         rewrites
@@ -92,39 +87,6 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
     {Enum.reverse(kept), rewrites}
   end
 
-  defp deduplicate_by_embedding(tags, rewrites) do
-    {kept, new_rewrites} =
-      Enum.reduce(tags, {[], rewrites}, fn tag, {acc, rw} ->
-        case find_embedding_match(tag, acc) do
-          nil ->
-            {[tag | acc], rw}
-
-          existing_id ->
-            {acc, Map.put(rw, tag.id, existing_id)}
-        end
-      end)
-
-    {Enum.reverse(kept), new_rewrites}
-  end
-
-  defp find_embedding_match(%Tag{embedding: nil}, _candidates), do: nil
-
-  defp find_embedding_match(%Tag{} = tag, candidates) do
-    candidates
-    |> Enum.filter(&(&1.embedding != nil))
-    |> Enum.find_value(fn existing ->
-      score =
-        Similarity.cosine_similarity(
-          NodeProtocol.embedding(tag),
-          NodeProtocol.embedding(existing)
-        )
-
-      if score >= @embedding_similarity_threshold do
-        existing.id
-      end
-    end)
-  end
-
   defp fetch_graph_tags(opts) do
     {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
 
@@ -142,27 +104,15 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
     Map.new(graph_tags, fn tag -> {normalize_label(tag.label), tag.id} end)
   end
 
-  defp deduplicate_against_graph(kept_tags, graph_lookup, graph_tags, rewrites) do
+  defp deduplicate_against_graph(kept_tags, graph_lookup, rewrites) do
     Enum.reduce(kept_tags, rewrites, fn tag, acc ->
       normalized = normalize_label(tag.label)
 
       case Map.get(graph_lookup, normalized) do
-        nil ->
-          maybe_embedding_match_graph(tag, graph_tags, acc)
-
-        existing_id ->
-          Map.put(acc, tag.id, existing_id)
+        nil -> acc
+        existing_id -> Map.put(acc, tag.id, existing_id)
       end
     end)
-  end
-
-  defp maybe_embedding_match_graph(%Tag{embedding: nil}, _graph_tags, rewrites), do: rewrites
-
-  defp maybe_embedding_match_graph(%Tag{} = tag, graph_tags, rewrites) do
-    case find_embedding_match(tag, graph_tags) do
-      nil -> rewrites
-      existing_id -> Map.put(rewrites, tag.id, existing_id)
-    end
   end
 
   defp remove_replaced_tags(tags, rewrites) do
