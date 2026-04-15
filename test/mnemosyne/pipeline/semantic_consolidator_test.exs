@@ -3,6 +3,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Graph.Changeset
+  alias Mnemosyne.Graph.Node, as: NodeProtocol
+  alias Mnemosyne.Graph.Node.Episodic
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Tag
   alias Mnemosyne.GraphBackends.InMemory
@@ -293,6 +295,468 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
       {:ok, deleted, _} = InMemory.get_node("sem_b", final_bs)
       assert surviving.id == "sem_a"
       assert is_nil(deleted)
+    end
+  end
+
+  describe "consolidate/1 link transfer" do
+    test "winner inherits loser's tag memberships" do
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: similar_embedding()
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional language",
+        confidence: 1.0,
+        embedding: similar_embedding_2()
+      }
+
+      tag_shared = %Tag{id: "tag_shared", label: "elixir", embedding: [0.5, 0.5, 0.0]}
+      tag_only_b = %Tag{id: "tag_only_b", label: "functional", embedding: [0.3, 0.7, 0.0]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(tag_shared)
+        |> Changeset.add_node(tag_only_b)
+        |> Changeset.add_link("sem_a", "tag_shared", :membership)
+        |> Changeset.add_link("sem_b", "tag_shared", :membership)
+        |> Changeset.add_link("sem_b", "tag_only_b", :membership)
+
+      high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
+      low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
+
+      bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
+
+      {:ok, _result, {InMemory, final_bs}} =
+        SemanticConsolidator.consolidate(
+          backend: {InMemory, bs},
+          config: @config
+        )
+
+      {:ok, survivor, _} = InMemory.get_node("sem_a", final_bs)
+      membership_links = NodeProtocol.links(survivor, :membership)
+
+      assert MapSet.member?(membership_links, "tag_shared")
+      assert MapSet.member?(membership_links, "tag_only_b")
+
+      {:ok, tag_b, _} = InMemory.get_node("tag_only_b", final_bs)
+      tag_b_links = NodeProtocol.links(tag_b, :membership)
+      assert MapSet.member?(tag_b_links, "sem_a")
+      refute MapSet.member?(tag_b_links, "sem_b")
+    end
+
+    test "winner inherits loser's provenance links" do
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: similar_embedding()
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional language",
+        confidence: 1.0,
+        embedding: similar_embedding_2()
+      }
+
+      ep_a = %Episodic{
+        id: "ep_a",
+        observation: "obs a",
+        action: "act a",
+        state: "state a",
+        subgoal: "goal a",
+        reward: 1.0,
+        trajectory_id: "t1"
+      }
+
+      ep_b = %Episodic{
+        id: "ep_b",
+        observation: "obs b",
+        action: "act b",
+        state: "state b",
+        subgoal: "goal b",
+        reward: 1.0,
+        trajectory_id: "t2"
+      }
+
+      tag = %Tag{id: "tag_1", label: "elixir", embedding: [0.5, 0.5, 0.0]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(ep_a)
+        |> Changeset.add_node(ep_b)
+        |> Changeset.add_node(tag)
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
+        |> Changeset.add_link("sem_a", "ep_a", :provenance)
+        |> Changeset.add_link("sem_b", "ep_b", :provenance)
+
+      high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
+      low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
+
+      bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
+
+      {:ok, _result, {InMemory, final_bs}} =
+        SemanticConsolidator.consolidate(
+          backend: {InMemory, bs},
+          config: @config
+        )
+
+      {:ok, survivor, _} = InMemory.get_node("sem_a", final_bs)
+      provenance_links = NodeProtocol.links(survivor, :provenance)
+
+      assert MapSet.member?(provenance_links, "ep_a")
+      assert MapSet.member?(provenance_links, "ep_b")
+
+      {:ok, ep_b_node, _} = InMemory.get_node("ep_b", final_bs)
+      ep_b_provenance = NodeProtocol.links(ep_b_node, :provenance)
+      assert MapSet.member?(ep_b_provenance, "sem_a")
+      refute MapSet.member?(ep_b_provenance, "sem_b")
+    end
+
+    test "winner inherits loser's sibling links" do
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: similar_embedding()
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional language",
+        confidence: 1.0,
+        embedding: similar_embedding_2()
+      }
+
+      sem_c = %Semantic{
+        id: "sem_c",
+        proposition: "Rust is fast",
+        confidence: 1.0,
+        embedding: dissimilar_embedding()
+      }
+
+      tag = %Tag{id: "tag_1", label: "programming", embedding: [0.5, 0.5, 0.0]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(sem_c)
+        |> Changeset.add_node(tag)
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
+        |> Changeset.add_link("sem_c", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "sem_c", :sibling)
+
+      high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
+      low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
+
+      bs =
+        build_backend(cs, %{
+          "sem_a" => high_meta,
+          "sem_b" => low_meta,
+          "sem_c" => base_metadata(access_count: 3)
+        })
+
+      {:ok, _result, {InMemory, final_bs}} =
+        SemanticConsolidator.consolidate(
+          backend: {InMemory, bs},
+          config: @config
+        )
+
+      {:ok, survivor, _} = InMemory.get_node("sem_a", final_bs)
+      sibling_links = NodeProtocol.links(survivor, :sibling)
+
+      assert MapSet.member?(sibling_links, "sem_c")
+
+      {:ok, sem_c_node, _} = InMemory.get_node("sem_c", final_bs)
+      sem_c_siblings = NodeProtocol.links(sem_c_node, :sibling)
+      assert MapSet.member?(sem_c_siblings, "sem_a")
+      refute MapSet.member?(sem_c_siblings, "sem_b")
+    end
+  end
+
+  describe "consolidate/1 metadata merging" do
+    test "winner metadata accumulates loser's counts and rewards" do
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: similar_embedding()
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional language",
+        confidence: 1.0,
+        embedding: similar_embedding_2()
+      }
+
+      tag = %Tag{id: "tag_1", label: "elixir", embedding: [0.5, 0.5, 0.0]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(tag)
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
+
+      winner_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
+      loser_meta = base_metadata(access_count: 3, cumulative_reward: 1.5, reward_count: 1)
+
+      bs = build_backend(cs, %{"sem_a" => winner_meta, "sem_b" => loser_meta})
+
+      {:ok, _result, {InMemory, final_bs}} =
+        SemanticConsolidator.consolidate(
+          backend: {InMemory, bs},
+          config: @config
+        )
+
+      {:ok, meta, _} = InMemory.get_metadata(["sem_a"], final_bs)
+      merged = Map.fetch!(meta, "sem_a")
+
+      assert merged.access_count == 13
+      assert merged.cumulative_reward == 6.5
+      assert merged.reward_count == 3
+    end
+  end
+
+  describe "consolidate/1 orphan cleanup" do
+    test "removes tags with no remaining children" do
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: similar_embedding()
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional language",
+        confidence: 1.0,
+        embedding: similar_embedding_2()
+      }
+
+      tag_shared = %Tag{id: "tag_shared", label: "elixir", embedding: [0.5, 0.5, 0.0]}
+      tag_only_b = %Tag{id: "tag_only_b", label: "functional", embedding: [0.3, 0.7, 0.0]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(tag_shared)
+        |> Changeset.add_node(tag_only_b)
+        |> Changeset.add_link("sem_a", "tag_shared", :membership)
+        |> Changeset.add_link("sem_b", "tag_shared", :membership)
+        |> Changeset.add_link("sem_b", "tag_only_b", :membership)
+
+      high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
+      low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
+
+      bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
+
+      {:ok, result, {InMemory, final_bs}} =
+        SemanticConsolidator.consolidate(
+          backend: {InMemory, bs},
+          config: @config
+        )
+
+      # tag_only_b's link was transferred to sem_a, so it should survive
+      {:ok, tag_b, _} = InMemory.get_node("tag_only_b", final_bs)
+      assert tag_b.id == "tag_only_b"
+
+      # Both tags should still exist since winner inherited the links
+      {:ok, tag_s, _} = InMemory.get_node("tag_shared", final_bs)
+      assert tag_s.id == "tag_shared"
+
+      # Only sem_b was deleted (not tags, since links were transferred)
+      assert result.deleted == 1
+    end
+
+    test "removes truly orphaned tags" do
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: similar_embedding()
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional language",
+        confidence: 1.0,
+        embedding: similar_embedding_2()
+      }
+
+      tag = %Tag{id: "tag_1", label: "elixir", embedding: [0.5, 0.5, 0.0]}
+      orphan_tag = %Tag{id: "tag_orphan", label: "orphan", embedding: [0.1, 0.1, 0.1]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(tag)
+        |> Changeset.add_node(orphan_tag)
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
+
+      high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
+      low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
+
+      bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
+
+      {:ok, result, {InMemory, final_bs}} =
+        SemanticConsolidator.consolidate(
+          backend: {InMemory, bs},
+          config: @config
+        )
+
+      {:ok, orphan, _} = InMemory.get_node("tag_orphan", final_bs)
+      assert is_nil(orphan)
+
+      # sem_b + tag_orphan
+      assert result.deleted == 2
+      assert "tag_orphan" in result.deleted_ids
+    end
+  end
+
+  describe "consolidate/1 cross-loser link remapping" do
+    test "sibling link between two losers is remapped to their winners" do
+      # sem_b ~ sem_a (winner: sem_a), sem_d ~ sem_c (winner: sem_c)
+      # sem_b has sibling link to sem_d
+      # After merge: sem_a should have sibling link to sem_c
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: [1.0, 0.0, 0.0]
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional lang",
+        confidence: 1.0,
+        embedding: [0.99, 0.1, 0.0]
+      }
+
+      sem_c = %Semantic{
+        id: "sem_c",
+        proposition: "Rust is fast",
+        confidence: 1.0,
+        embedding: [0.0, 1.0, 0.0]
+      }
+
+      sem_d = %Semantic{
+        id: "sem_d",
+        proposition: "Rust is very fast",
+        confidence: 1.0,
+        embedding: [0.0, 0.99, 0.1]
+      }
+
+      tag = %Tag{id: "tag_1", label: "programming", embedding: [0.5, 0.5, 0.0]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(sem_c)
+        |> Changeset.add_node(sem_d)
+        |> Changeset.add_node(tag)
+        |> Changeset.add_link("sem_a", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "tag_1", :membership)
+        |> Changeset.add_link("sem_c", "tag_1", :membership)
+        |> Changeset.add_link("sem_d", "tag_1", :membership)
+        |> Changeset.add_link("sem_b", "sem_d", :sibling)
+
+      a_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
+      b_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
+      c_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
+      d_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
+
+      bs =
+        build_backend(cs, %{
+          "sem_a" => a_meta,
+          "sem_b" => b_meta,
+          "sem_c" => c_meta,
+          "sem_d" => d_meta
+        })
+
+      {:ok, _result, {InMemory, final_bs}} =
+        SemanticConsolidator.consolidate(
+          backend: {InMemory, bs},
+          config: @config
+        )
+
+      {:ok, node_a, _} = InMemory.get_node("sem_a", final_bs)
+      {:ok, node_c, _} = InMemory.get_node("sem_c", final_bs)
+
+      assert node_a != nil
+      assert node_c != nil
+
+      a_siblings = NodeProtocol.links(node_a, :sibling)
+      c_siblings = NodeProtocol.links(node_c, :sibling)
+
+      assert MapSet.member?(a_siblings, "sem_c")
+      assert MapSet.member?(c_siblings, "sem_a")
+    end
+  end
+
+  describe "consolidate/1 pairwise discovery" do
+    test "finds duplicates even without shared tags" do
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: similar_embedding()
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional language",
+        confidence: 1.0,
+        embedding: similar_embedding_2()
+      }
+
+      tag_a = %Tag{id: "tag_a", label: "elixir", embedding: [0.5, 0.5, 0.0]}
+      tag_b = %Tag{id: "tag_b", label: "functional", embedding: [0.3, 0.7, 0.0]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(tag_a)
+        |> Changeset.add_node(tag_b)
+        |> Changeset.add_link("sem_a", "tag_a", :membership)
+        |> Changeset.add_link("sem_b", "tag_b", :membership)
+
+      high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
+      low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
+
+      bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
+
+      assert {:ok, %{deleted: deleted}, {InMemory, final_bs}} =
+               SemanticConsolidator.consolidate(
+                 backend: {InMemory, bs},
+                 config: @config
+               )
+
+      assert deleted >= 1
+
+      {:ok, survivor, _} = InMemory.get_node("sem_a", final_bs)
+      assert survivor.id == "sem_a"
+
+      {:ok, deleted_node, _} = InMemory.get_node("sem_b", final_bs)
+      assert is_nil(deleted_node)
     end
   end
 end

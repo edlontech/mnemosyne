@@ -1,11 +1,14 @@
 defmodule Mnemosyne.Pipeline.SemanticConsolidator do
   @moduledoc """
   Discovers near-duplicate semantic nodes via embedding similarity
-  and deletes the lower-scored one using decay-based scoring.
+  and merges the lower-scored one into the higher-scored survivor.
 
-  No LLM calls -- pure embedding similarity + metadata scoring.
+  Transfers all graph connections (tag memberships, sibling links,
+  provenance links) from the loser to the winner and merges metadata.
+  Cleans up orphaned tags after consolidation.
   """
 
+  alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Node.Helpers, as: NodeHelpers
   alias Mnemosyne.Graph.Similarity
@@ -14,11 +17,11 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
   @default_threshold 0.85
 
   @doc """
-  Finds near-duplicate semantic nodes and deletes the lower-scored one.
+  Finds near-duplicate semantic nodes and merges them.
 
-  Discovers candidates by walking shared tag neighbors, compares embeddings,
-  and condemns the node with the lower decay score when similarity exceeds
-  the threshold.
+  Performs pairwise embedding comparison across all semantic nodes,
+  transfers the loser's links and metadata to the winner, then
+  deletes losers and any orphaned tags.
 
   ## Options
 
@@ -44,17 +47,24 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     with {:ok, sem_nodes, bs} <- backend_mod.get_nodes_by_type([:semantic], backend_state),
          sem_ids = Enum.map(sem_nodes, &NodeProtocol.id/1),
          {:ok, all_meta, bs} <- backend_mod.get_metadata(sem_ids, bs) do
-      sem_by_id = Map.new(sem_nodes, &{NodeProtocol.id(&1), &1})
       params = semantic_params(config)
 
-      condemned =
-        find_all_duplicates(sem_nodes, sem_by_id, all_meta, backend_mod, bs, params, threshold)
+      merge_pairs = find_merge_pairs(sem_nodes, all_meta, params, threshold)
+      loser_ids = Enum.map(merge_pairs, &elem(&1, 1))
+      merge_map = Map.new(merge_pairs, fn {winner, loser} -> {loser, winner} end)
 
-      to_delete = MapSet.to_list(condemned)
+      {transfer_cs, merged_meta} = build_merge_ops(merge_pairs, merge_map, sem_nodes, all_meta)
 
-      with {:ok, bs} <- backend_mod.delete_nodes(to_delete, bs),
-           {:ok, bs} <- backend_mod.delete_metadata(to_delete, bs) do
-        {:ok, %{deleted: length(to_delete), checked: length(sem_nodes), deleted_ids: to_delete},
+      with {:ok, bs} <- apply_if_nonempty(transfer_cs, backend_mod, bs),
+           {:ok, bs} <- update_if_nonempty(merged_meta, backend_mod, bs),
+           {:ok, bs} <- backend_mod.delete_nodes(loser_ids, bs),
+           {:ok, bs} <- backend_mod.delete_metadata(loser_ids, bs),
+           {:ok, orphan_ids, bs} <- find_orphaned_tags(backend_mod, bs),
+           {:ok, bs} <- delete_if_nonempty(orphan_ids, backend_mod, bs) do
+        all_deleted = loser_ids ++ orphan_ids
+
+        {:ok,
+         %{deleted: length(all_deleted), checked: length(sem_nodes), deleted_ids: all_deleted},
          {backend_mod, bs}}
       end
     end
@@ -65,71 +75,142 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
       %{lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
   end
 
-  defp find_all_duplicates(sem_nodes, sem_by_id, all_meta, backend_mod, bs, params, threshold) do
-    Enum.reduce(sem_nodes, MapSet.new(), fn node, condemned ->
-      node_id = NodeProtocol.id(node)
+  defp find_merge_pairs(sem_nodes, all_meta, params, threshold) do
+    embeddable = Enum.filter(sem_nodes, &(NodeProtocol.embedding(&1) != nil))
 
-      if MapSet.member?(condemned, node_id) do
-        condemned
-      else
-        neighbors = tag_neighbors(node, backend_mod, bs)
-        check_neighbors(neighbors, node_id, sem_by_id, all_meta, params, threshold, condemned)
-      end
-    end)
+    {pairs, _condemned} =
+      embeddable
+      |> Enum.with_index()
+      |> Enum.reduce({[], MapSet.new()}, fn {node_a, idx_a}, acc ->
+        scan_candidates(node_a, idx_a, embeddable, all_meta, params, threshold, acc)
+      end)
+
+    pairs
   end
 
-  defp check_neighbors(neighbors, node_id, sem_by_id, all_meta, params, threshold, condemned) do
-    Enum.reduce(neighbors, condemned, fn neighbor_id, acc ->
-      if neighbor_id == node_id or MapSet.member?(acc, neighbor_id),
-        do: acc,
-        else:
-          compare_and_condemn(node_id, neighbor_id, sem_by_id, all_meta, params, threshold, acc)
-    end)
-  end
+  defp scan_candidates(node_a, idx_a, embeddable, all_meta, params, threshold, {pairs, condemned}) do
+    id_a = NodeProtocol.id(node_a)
 
-  defp tag_neighbors(node, backend_mod, bs) do
-    linked_ids = node |> NodeHelpers.all_linked_ids() |> MapSet.to_list()
-    {:ok, linked_nodes, _bs} = backend_mod.get_linked_nodes(linked_ids, nil, bs)
-
-    tags = Enum.filter(linked_nodes, &(NodeProtocol.node_type(&1) == :tag))
-
-    Enum.flat_map(tags, fn tag ->
-      tag_linked_ids = tag |> NodeHelpers.all_linked_ids() |> MapSet.to_list()
-      {:ok, tag_neighbors, _bs} = backend_mod.get_linked_nodes(tag_linked_ids, nil, bs)
-
-      tag_neighbors
-      |> Enum.filter(&(NodeProtocol.node_type(&1) == :semantic))
-      |> Enum.map(&NodeProtocol.id/1)
-    end)
-    |> Enum.uniq()
-  end
-
-  defp compare_and_condemn(id_a, id_b, sem_by_id, all_meta, params, threshold, condemned) do
-    node_a = Map.get(sem_by_id, id_a)
-    node_b = Map.get(sem_by_id, id_b)
-
-    emb_a = NodeProtocol.embedding(node_a)
-    emb_b = NodeProtocol.embedding(node_b)
-
-    if is_nil(emb_a) or is_nil(emb_b) do
-      condemned
+    if MapSet.member?(condemned, id_a) do
+      {pairs, condemned}
     else
-      similarity = Similarity.cosine_similarity(emb_a, emb_b)
+      embeddable
+      |> Enum.drop(idx_a + 1)
+      |> Enum.reduce({pairs, condemned}, fn node_b, acc ->
+        compare_pair(node_a, node_b, all_meta, params, threshold, acc)
+      end)
+    end
+  end
+
+  defp compare_pair(node_a, node_b, all_meta, params, threshold, {pairs, condemned}) do
+    id_b = NodeProtocol.id(node_b)
+
+    if MapSet.member?(condemned, id_b) do
+      {pairs, condemned}
+    else
+      similarity =
+        Similarity.cosine_similarity(
+          NodeProtocol.embedding(node_a),
+          NodeProtocol.embedding(node_b)
+        )
 
       if similarity > threshold do
-        loser = pick_loser(id_a, id_b, all_meta, params)
-        MapSet.put(condemned, loser)
+        id_a = NodeProtocol.id(node_a)
+        {winner_id, loser_id} = pick_winner_loser(id_a, id_b, all_meta, params)
+        {[{winner_id, loser_id} | pairs], MapSet.put(condemned, loser_id)}
       else
-        condemned
+        {pairs, condemned}
       end
     end
   end
 
-  defp pick_loser(id_a, id_b, all_meta, params) do
+  defp pick_winner_loser(id_a, id_b, all_meta, params) do
     score_a = decay_score(Map.get(all_meta, id_a), params)
     score_b = decay_score(Map.get(all_meta, id_b), params)
+    if score_a >= score_b, do: {id_a, id_b}, else: {id_b, id_a}
+  end
 
-    if score_a >= score_b, do: id_b, else: id_a
+  defp build_merge_ops([], _merge_map, _sem_nodes, _all_meta), do: {Changeset.new(), %{}}
+
+  defp build_merge_ops(merge_pairs, merge_map, sem_nodes, all_meta) do
+    nodes_by_id = Map.new(sem_nodes, &{NodeProtocol.id(&1), &1})
+
+    Enum.reduce(merge_pairs, {Changeset.new(), %{}}, fn {winner_id, loser_id},
+                                                        {cs, meta_updates} ->
+      loser = Map.get(nodes_by_id, loser_id)
+      cs = transfer_links(cs, winner_id, loser, merge_map)
+
+      winner_meta =
+        Map.get(meta_updates, winner_id) || Map.get(all_meta, winner_id, NodeMetadata.new())
+
+      loser_meta = Map.get(all_meta, loser_id)
+      merged = merge_metadata(winner_meta, loser_meta)
+
+      {cs, Map.put(meta_updates, winner_id, merged)}
+    end)
+  end
+
+  defp transfer_links(cs, winner_id, loser, merge_map) do
+    loser_id = NodeProtocol.id(loser)
+
+    loser
+    |> NodeProtocol.links()
+    |> Enum.reduce(cs, fn {edge_type, linked_ids}, acc ->
+      transfer_edge_links(acc, winner_id, loser_id, edge_type, linked_ids, merge_map)
+    end)
+  end
+
+  defp transfer_edge_links(cs, winner_id, loser_id, edge_type, linked_ids, merge_map) do
+    Enum.reduce(linked_ids, cs, fn linked_id, acc ->
+      target_id = Map.get(merge_map, linked_id, linked_id)
+
+      if target_id == winner_id or target_id == loser_id,
+        do: acc,
+        else: Changeset.add_link(acc, winner_id, target_id, edge_type)
+    end)
+  end
+
+  defp merge_metadata(winner_meta, nil), do: winner_meta
+
+  defp merge_metadata(%NodeMetadata{} = winner, %NodeMetadata{} = loser) do
+    %NodeMetadata{
+      winner
+      | access_count: winner.access_count + loser.access_count,
+        cumulative_reward: winner.cumulative_reward + loser.cumulative_reward,
+        reward_count: winner.reward_count + loser.reward_count,
+        last_accessed_at: latest(winner.last_accessed_at, loser.last_accessed_at),
+        created_at: earliest(winner.created_at, loser.created_at)
+    }
+  end
+
+  defp latest(nil, b), do: b
+  defp latest(a, nil), do: a
+  defp latest(a, b), do: if(DateTime.compare(a, b) == :gt, do: a, else: b)
+
+  defp earliest(a, b), do: if(DateTime.compare(a, b) == :lt, do: a, else: b)
+
+  defp find_orphaned_tags(backend_mod, bs) do
+    with {:ok, tags, bs} <- backend_mod.get_nodes_by_type([:tag], bs) do
+      orphans =
+        tags
+        |> Enum.filter(&(NodeHelpers.all_linked_ids(&1) |> MapSet.size() == 0))
+        |> Enum.map(&NodeProtocol.id/1)
+
+      {:ok, orphans, bs}
+    end
+  end
+
+  defp apply_if_nonempty(%Changeset{links: []}, _mod, bs), do: {:ok, bs}
+  defp apply_if_nonempty(cs, mod, bs), do: mod.apply_changeset(cs, bs)
+
+  defp update_if_nonempty(meta, _mod, bs) when map_size(meta) == 0, do: {:ok, bs}
+  defp update_if_nonempty(meta, mod, bs), do: mod.update_metadata(meta, bs)
+
+  defp delete_if_nonempty([], _mod, bs), do: {:ok, bs}
+
+  defp delete_if_nonempty(ids, mod, bs) do
+    {:ok, bs} = mod.delete_nodes(ids, bs)
+    mod.delete_metadata(ids, bs)
   end
 
   defp decay_score(nil, _params), do: 0.0
