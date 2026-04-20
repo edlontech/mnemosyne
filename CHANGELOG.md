@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.4...mnemosyne-v0.1.5) (2026-04-20)
+
+
+### Bug Fixes
+
+* rewrite semantic consolidator to preserve graph connections on merge ([2655be9](https://github.com/edlontech/mnemosyne/commit/2655be927cfc60f2f5ee6c23d2ec4542192c3f8f))
+* skip condemned node_a in consolidator pair discovery ([f4c7cb7](https://github.com/edlontech/mnemosyne/commit/f4c7cb7ed107b81dd95bb5e487ecfc01b6196c10))
+
 ## [0.1.4](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.3...mnemosyne-v0.1.4) (2026-04-10)
 
 
