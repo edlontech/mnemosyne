@@ -3,18 +3,26 @@ defmodule Mnemosyne.Graph.Node.Subgoal do
   Subgoal node representing a decomposed objective, optionally
   linked to a parent goal.
   """
-  use TypedStruct
-
   alias Mnemosyne.Graph.Edge
 
-  typedstruct enforce: true do
-    field :id, String.t()
-    field :description, String.t()
-    field :parent_goal, String.t() | nil, enforce: false, default: nil
-    field :embedding, [float()] | nil, enforce: false, default: nil
-    field :links, %{Edge.edge_type() => MapSet.t()}, enforce: false, default: Edge.empty_links()
-    field :created_at, DateTime.t(), enforce: false, default: DateTime.utc_now()
-  end
+  @enforce_keys [:id, :description]
+  defstruct [
+    :id,
+    :description,
+    parent_goal: nil,
+    embedding: nil,
+    links: Edge.empty_links(),
+    created_at: DateTime.utc_now()
+  ]
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          description: String.t(),
+          parent_goal: String.t() | nil,
+          embedding: [float()] | nil,
+          links: %{Edge.edge_type() => MapSet.t()},
+          created_at: DateTime.t()
+        }
 
   defimpl Mnemosyne.Graph.Node do
     def id(node), do: node.id

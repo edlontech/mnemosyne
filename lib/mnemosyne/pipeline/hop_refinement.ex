@@ -16,18 +16,24 @@ defmodule Mnemosyne.Pipeline.HopRefinement do
   alias Mnemosyne.Pipeline.Prompts.GetRefinedQuery
   alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
-  use TypedStruct
-
-  typedstruct module: State do
+  defmodule State do
     @moduledoc """
     Tracks refinement state across hops during retrieval.
     """
 
-    field :budget_remaining, non_neg_integer(), default: 0
-    field :previous_best_score, float(), default: 0.6
-    field :plateau_delta, float(), default: 0.05
-    field :refinement_count, non_neg_integer(), default: 0
-    field :refinements, [map()], default: []
+    defstruct budget_remaining: 0,
+              previous_best_score: 0.6,
+              plateau_delta: 0.05,
+              refinement_count: 0,
+              refinements: []
+
+    @type t :: %__MODULE__{
+            budget_remaining: non_neg_integer(),
+            previous_best_score: float(),
+            plateau_delta: float(),
+            refinement_count: non_neg_integer(),
+            refinements: [map()]
+          }
   end
 
   @doc """

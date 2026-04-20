@@ -5,20 +5,20 @@ defmodule Mnemosyne.Graph do
   Stores nodes indexed by ID, type, tag label, and subgoal description.
   Supports bidirectional linking between nodes and batch mutation via changesets.
   """
-  use TypedStruct
-
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Edge
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
 
-  typedstruct do
-    field :nodes, %{String.t() => struct()}, default: %{}
-    field :by_type, %{atom() => MapSet.t()}, default: %{}
-    field :by_tag, %{String.t() => MapSet.t()}, default: %{}
-    field :by_subgoal, %{String.t() => MapSet.t()}, default: %{}
-  end
+  defstruct nodes: %{}, by_type: %{}, by_tag: %{}, by_subgoal: %{}
+
+  @type t :: %__MODULE__{
+          nodes: %{String.t() => struct()},
+          by_type: %{atom() => MapSet.t()},
+          by_tag: %{String.t() => MapSet.t()},
+          by_subgoal: %{String.t() => MapSet.t()}
+        }
 
   @doc "Creates an empty graph."
   @spec new() :: t()

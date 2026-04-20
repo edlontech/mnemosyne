@@ -3,17 +3,24 @@ defmodule Mnemosyne.Graph.Node.Intent do
   Intent node representing a high-level goal that links to
   procedural prescription nodes for hierarchical retrieval.
   """
-  use TypedStruct
-
   alias Mnemosyne.Graph.Edge
 
-  typedstruct enforce: true do
-    field :id, String.t()
-    field :description, String.t()
-    field :embedding, [float()] | nil, enforce: false, default: nil
-    field :links, %{Edge.edge_type() => MapSet.t()}, enforce: false, default: Edge.empty_links()
-    field :created_at, DateTime.t(), enforce: false, default: DateTime.utc_now()
-  end
+  @enforce_keys [:id, :description]
+  defstruct [
+    :id,
+    :description,
+    embedding: nil,
+    links: Edge.empty_links(),
+    created_at: DateTime.utc_now()
+  ]
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          description: String.t(),
+          embedding: [float()] | nil,
+          links: %{Edge.edge_type() => MapSet.t()},
+          created_at: DateTime.t()
+        }
 
   defimpl Mnemosyne.Graph.Node do
     def id(node), do: node.id

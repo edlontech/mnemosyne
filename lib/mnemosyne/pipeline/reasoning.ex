@@ -18,17 +18,19 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   alias Mnemosyne.Pipeline.Retrieval
   alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
-  use TypedStruct
-
-  typedstruct module: ReasonedMemory do
+  defmodule ReasonedMemory do
     @moduledoc """
     Result of reasoning over retrieved memory candidates.
     Each field is nil when no candidates of that type were found.
     """
 
-    field :episodic, String.t() | nil, default: nil
-    field :semantic, String.t() | nil, default: nil
-    field :procedural, String.t() | nil, default: nil
+    defstruct episodic: nil, semantic: nil, procedural: nil
+
+    @type t :: %__MODULE__{
+            episodic: String.t() | nil,
+            semantic: String.t() | nil,
+            procedural: String.t() | nil
+          }
   end
 
   @doc """

@@ -20,18 +20,22 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   alias Mnemosyne.Pipeline.Prompts.GetPlan
   alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
-  use TypedStruct
-
-  typedstruct module: Result do
+  defmodule Result do
     @moduledoc """
     Result of a retrieval operation containing the classified mode,
     generated tags, and scored candidate nodes partitioned by type.
     """
 
-    field :mode, atom()
-    field :tags, [String.t()]
-    field :candidates, %{atom() => [TaggedCandidate.t()]}, default: %{}
-    field :phases, map(), default: %{}
+    alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
+
+    defstruct [:mode, :tags, candidates: %{}, phases: %{}]
+
+    @type t :: %__MODULE__{
+            mode: atom(),
+            tags: [String.t()],
+            candidates: %{atom() => [TaggedCandidate.t()]},
+            phases: map()
+          }
   end
 
   @default_max_hops 2

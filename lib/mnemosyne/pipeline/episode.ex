@@ -6,8 +6,6 @@ defmodule Mnemosyne.Pipeline.Episode do
   into trajectories. Trajectory boundaries are detected when subgoal
   embedding similarity drops below a threshold.
   """
-  use TypedStruct
-
   require Logger
 
   alias Mnemosyne.Config
@@ -22,15 +20,26 @@ defmodule Mnemosyne.Pipeline.Episode do
 
   @trajectory_similarity_threshold 0.75
 
-  typedstruct do
-    field :id, String.t(), enforce: true
-    field :goal, String.t(), enforce: true
-    field :steps, [step()], default: []
-    field :trajectories, [trajectory()], default: []
-    field :current_trajectory_id, String.t(), default: nil
-    field :current_subgoal_embedding, [float()] | nil, default: nil
-    field :closed, boolean(), default: false
-  end
+  @enforce_keys [:id, :goal]
+  defstruct [
+    :id,
+    :goal,
+    steps: [],
+    trajectories: [],
+    current_trajectory_id: nil,
+    current_subgoal_embedding: nil,
+    closed: false
+  ]
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          goal: String.t(),
+          steps: [step()],
+          trajectories: [trajectory()],
+          current_trajectory_id: String.t(),
+          current_subgoal_embedding: [float()] | nil,
+          closed: boolean()
+        }
 
   @typedoc "A single observation-action step within an episode"
   @type step :: %{

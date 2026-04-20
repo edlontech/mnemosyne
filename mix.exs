@@ -63,7 +63,6 @@ defmodule Mnemosyne.MixProject do
       {:sycophant, "~> 0.1", optional: true},
       {:telemetry, "~> 1.3"},
       {:tidewave, "~> 0.5", only: :dev, runtime: false},
-      {:typedstruct, "~> 0.5"},
       {:zoi, "~> 0.11"},
       {:zoi_defstruct, "~> 0.2"}
     ]

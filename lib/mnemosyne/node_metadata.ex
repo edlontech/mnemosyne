@@ -6,15 +6,22 @@ defmodule Mnemosyne.NodeMetadata do
   rewards to enable recency, frequency, and reward-based scoring.
   """
 
-  use TypedStruct
+  @enforce_keys [:created_at]
+  defstruct [
+    :created_at,
+    access_count: 0,
+    last_accessed_at: nil,
+    cumulative_reward: 0.0,
+    reward_count: 0
+  ]
 
-  typedstruct do
-    field :access_count, non_neg_integer(), default: 0
-    field :last_accessed_at, DateTime.t() | nil, default: nil
-    field :created_at, DateTime.t(), enforce: true
-    field :cumulative_reward, float(), default: 0.0
-    field :reward_count, non_neg_integer(), default: 0
-  end
+  @type t :: %__MODULE__{
+          access_count: non_neg_integer(),
+          last_accessed_at: DateTime.t() | nil,
+          created_at: DateTime.t(),
+          cumulative_reward: float(),
+          reward_count: non_neg_integer()
+        }
 
   @doc "Creates a new metadata struct with the given options."
   @spec new(keyword()) :: t()

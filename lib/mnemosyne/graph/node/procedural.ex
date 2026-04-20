@@ -3,20 +3,30 @@ defmodule Mnemosyne.Graph.Node.Procedural do
   Procedural memory node encoding an instruction with its
   triggering condition and expected outcome.
   """
-  use TypedStruct
-
   alias Mnemosyne.Graph.Edge
 
-  typedstruct enforce: true do
-    field :id, String.t()
-    field :instruction, String.t()
-    field :condition, String.t()
-    field :expected_outcome, String.t()
-    field :return_score, float() | nil, enforce: false, default: nil
-    field :embedding, [float()] | nil, enforce: false, default: nil
-    field :links, %{Edge.edge_type() => MapSet.t()}, enforce: false, default: Edge.empty_links()
-    field :created_at, DateTime.t(), enforce: false, default: DateTime.utc_now()
-  end
+  @enforce_keys [:id, :instruction, :condition, :expected_outcome]
+  defstruct [
+    :id,
+    :instruction,
+    :condition,
+    :expected_outcome,
+    return_score: nil,
+    embedding: nil,
+    links: Edge.empty_links(),
+    created_at: DateTime.utc_now()
+  ]
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          instruction: String.t(),
+          condition: String.t(),
+          expected_outcome: String.t(),
+          return_score: float() | nil,
+          embedding: [float()] | nil,
+          links: %{Edge.edge_type() => MapSet.t()},
+          created_at: DateTime.t()
+        }
 
   defimpl Mnemosyne.Graph.Node do
     def id(node), do: node.id

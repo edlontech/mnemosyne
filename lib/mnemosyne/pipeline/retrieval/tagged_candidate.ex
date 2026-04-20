@@ -4,14 +4,15 @@ defmodule Mnemosyne.Pipeline.Retrieval.TaggedCandidate do
   Replaces raw `{node, score}` tuples in the retrieval pipeline.
   """
 
-  use TypedStruct
+  @enforce_keys [:node, :score, :phase]
+  defstruct [:node, :score, :phase, :hop]
 
-  typedstruct do
-    field :node, struct(), enforce: true
-    field :score, float(), enforce: true
-    field :phase, atom(), enforce: true
-    field :hop, non_neg_integer() | nil
-  end
+  @type t :: %__MODULE__{
+          node: struct(),
+          score: float(),
+          phase: atom(),
+          hop: non_neg_integer() | nil
+        }
 
   @doc "Builds a tagged candidate from the initial retrieval phase (hop 0)."
   @spec from_hop_0(struct(), float()) :: t()

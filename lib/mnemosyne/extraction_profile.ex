@@ -7,14 +7,15 @@ defmodule Mnemosyne.ExtractionProfile do
   and optional value function parameter overrides.
   """
 
-  use TypedStruct
+  @enforce_keys [:name]
+  defstruct [:name, :domain_context, overlays: %{}, value_function_overrides: %{}]
 
-  typedstruct do
-    field :name, atom(), enforce: true
-    field :domain_context, String.t()
-    field :overlays, %{atom() => String.t()}, default: %{}
-    field :value_function_overrides, %{atom() => map()}, default: %{}
-  end
+  @type t :: %__MODULE__{
+          name: atom(),
+          domain_context: String.t(),
+          overlays: %{atom() => String.t()},
+          value_function_overrides: %{atom() => map()}
+        }
 
   @doc "Returns a profile tuned for software engineering interactions."
   @spec coding() :: t()

@@ -5,17 +5,17 @@ defmodule Mnemosyne.Embedding do
   Implementations must convert text into vector representations
   suitable for similarity search.
   """
-  use TypedStruct
-
   defmodule Response do
     @moduledoc "Struct returned by embedding generation calls."
-    use TypedStruct
 
-    typedstruct do
-      field :vectors, [[float()]], enforce: true
-      field :model, String.t()
-      field :usage, map(), default: %{}
-    end
+    @enforce_keys [:vectors]
+    defstruct [:vectors, :model, usage: %{}]
+
+    @type t :: %__MODULE__{
+            vectors: [[float()]],
+            model: String.t(),
+            usage: map()
+          }
   end
 
   @callback embed(text :: String.t(), opts :: keyword()) ::

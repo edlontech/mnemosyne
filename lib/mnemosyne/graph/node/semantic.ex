@@ -2,18 +2,26 @@ defmodule Mnemosyne.Graph.Node.Semantic do
   @moduledoc """
   Semantic memory node representing a proposition with a confidence score.
   """
-  use TypedStruct
-
   alias Mnemosyne.Graph.Edge
 
-  typedstruct enforce: true do
-    field :id, String.t()
-    field :proposition, String.t()
-    field :confidence, float()
-    field :embedding, [float()] | nil, enforce: false, default: nil
-    field :links, %{Edge.edge_type() => MapSet.t()}, enforce: false, default: Edge.empty_links()
-    field :created_at, DateTime.t(), enforce: false, default: DateTime.utc_now()
-  end
+  @enforce_keys [:id, :proposition, :confidence]
+  defstruct [
+    :id,
+    :proposition,
+    :confidence,
+    embedding: nil,
+    links: Edge.empty_links(),
+    created_at: DateTime.utc_now()
+  ]
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          proposition: String.t(),
+          confidence: float(),
+          embedding: [float()] | nil,
+          links: %{Edge.edge_type() => MapSet.t()},
+          created_at: DateTime.t()
+        }
 
   defimpl Mnemosyne.Graph.Node do
     def id(node), do: node.id

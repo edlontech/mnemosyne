@@ -3,22 +3,31 @@ defmodule Mnemosyne.Notifier.Trace.Recall do
   Trace struct capturing recall pipeline execution details.
   """
 
-  use TypedStruct
+  defstruct verbosity: :summary,
+            mode: nil,
+            tags: [],
+            candidate_count: 0,
+            hops: 0,
+            result_count: 0,
+            duration_us: 0,
+            candidates_per_hop: nil,
+            scores: nil,
+            rejected: nil,
+            phase_timings: nil,
+            refinements: []
 
-  typedstruct do
-    field :verbosity, :summary | :detailed, default: :summary
-
-    field :mode, atom()
-    field :tags, [String.t()], default: []
-    field :candidate_count, non_neg_integer(), default: 0
-    field :hops, non_neg_integer(), default: 0
-    field :result_count, non_neg_integer(), default: 0
-    field :duration_us, non_neg_integer(), default: 0
-
-    field :candidates_per_hop, %{non_neg_integer() => non_neg_integer()} | nil, default: nil
-    field :scores, %{String.t() => float()} | nil, default: nil
-    field :rejected, %{atom() => non_neg_integer()} | nil, default: nil
-    field :phase_timings, %{atom() => non_neg_integer()} | nil, default: nil
-    field :refinements, [map()], default: []
-  end
+  @type t :: %__MODULE__{
+          verbosity: :summary | :detailed,
+          mode: atom(),
+          tags: [String.t()],
+          candidate_count: non_neg_integer(),
+          hops: non_neg_integer(),
+          result_count: non_neg_integer(),
+          duration_us: non_neg_integer(),
+          candidates_per_hop: %{non_neg_integer() => non_neg_integer()} | nil,
+          scores: %{String.t() => float()} | nil,
+          rejected: %{atom() => non_neg_integer()} | nil,
+          phase_timings: %{atom() => non_neg_integer()} | nil,
+          refinements: [map()]
+        }
 end

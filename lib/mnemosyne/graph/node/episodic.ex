@@ -3,22 +3,34 @@ defmodule Mnemosyne.Graph.Node.Episodic do
   Episodic memory node capturing an observation-action-reward tuple
   within a trajectory.
   """
-  use TypedStruct
-
   alias Mnemosyne.Graph.Edge
 
-  typedstruct enforce: true do
-    field :id, String.t()
-    field :observation, String.t()
-    field :action, String.t()
-    field :state, String.t()
-    field :subgoal, String.t()
-    field :reward, float()
-    field :trajectory_id, String.t()
-    field :embedding, [float()] | nil, enforce: false, default: nil
-    field :links, %{Edge.edge_type() => MapSet.t()}, enforce: false, default: Edge.empty_links()
-    field :created_at, DateTime.t(), enforce: false, default: DateTime.utc_now()
-  end
+  @enforce_keys [:id, :observation, :action, :state, :subgoal, :reward, :trajectory_id]
+  defstruct [
+    :id,
+    :observation,
+    :action,
+    :state,
+    :subgoal,
+    :reward,
+    :trajectory_id,
+    embedding: nil,
+    links: Edge.empty_links(),
+    created_at: DateTime.utc_now()
+  ]
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          observation: String.t(),
+          action: String.t(),
+          state: String.t(),
+          subgoal: String.t(),
+          reward: float(),
+          trajectory_id: String.t(),
+          embedding: [float()] | nil,
+          links: %{Edge.edge_type() => MapSet.t()},
+          created_at: DateTime.t()
+        }
 
   defimpl Mnemosyne.Graph.Node do
     def id(node), do: node.id

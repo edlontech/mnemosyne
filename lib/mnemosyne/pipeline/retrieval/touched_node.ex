@@ -3,19 +3,20 @@ defmodule Mnemosyne.Pipeline.Retrieval.TouchedNode do
   Caller-facing projection of a retrieved candidate node.
   """
 
-  use TypedStruct
-
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
-  typedstruct do
-    field :id, String.t(), enforce: true
-    field :type, atom(), enforce: true
-    field :score, float(), enforce: true
-    field :phase, atom(), enforce: true
-    field :hop, non_neg_integer() | nil
-    field :node, struct() | nil
-  end
+  @enforce_keys [:id, :type, :score, :phase]
+  defstruct [:id, :type, :score, :phase, :hop, :node]
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          type: atom(),
+          score: float(),
+          phase: atom(),
+          hop: non_neg_integer() | nil,
+          node: struct() | nil
+        }
 
   @doc "Projects a `TaggedCandidate` into a caller-facing `TouchedNode` at the given verbosity level."
   @spec from_tagged(TaggedCandidate.t(), :summary | :detailed) :: t()

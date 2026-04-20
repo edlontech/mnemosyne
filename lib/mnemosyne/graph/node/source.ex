@@ -2,19 +2,28 @@ defmodule Mnemosyne.Graph.Node.Source do
   @moduledoc """
   Source node linking back to a specific step within an episode.
   """
-  use TypedStruct
-
   alias Mnemosyne.Graph.Edge
 
-  typedstruct enforce: true do
-    field :id, String.t()
-    field :episode_id, String.t()
-    field :step_index, integer()
-    field :plain_text, String.t() | nil, enforce: false, default: nil
-    field :embedding, [float()] | nil, enforce: false, default: nil
-    field :links, %{Edge.edge_type() => MapSet.t()}, enforce: false, default: Edge.empty_links()
-    field :created_at, DateTime.t(), enforce: false, default: DateTime.utc_now()
-  end
+  @enforce_keys [:id, :episode_id, :step_index]
+  defstruct [
+    :id,
+    :episode_id,
+    :step_index,
+    plain_text: nil,
+    embedding: nil,
+    links: Edge.empty_links(),
+    created_at: DateTime.utc_now()
+  ]
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          episode_id: String.t(),
+          step_index: integer(),
+          plain_text: String.t() | nil,
+          embedding: [float()] | nil,
+          links: %{Edge.edge_type() => MapSet.t()},
+          created_at: DateTime.t()
+        }
 
   defimpl Mnemosyne.Graph.Node do
     def id(node), do: node.id

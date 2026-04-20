@@ -8,17 +8,17 @@ defmodule Mnemosyne.GraphBackends.InMemory do
 
   @behaviour Mnemosyne.GraphBackend
 
-  use TypedStruct
-
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Similarity
 
-  typedstruct do
-    field :graph, Graph.t(), default: Graph.new()
-    field :persistence, {module(), term()} | nil, default: nil
-    field :metadata, %{String.t() => Mnemosyne.NodeMetadata.t()}, default: %{}
-  end
+  defstruct graph: Graph.new(), persistence: nil, metadata: %{}
+
+  @type t :: %__MODULE__{
+          graph: Graph.t(),
+          persistence: {module(), term()} | nil,
+          metadata: %{String.t() => Mnemosyne.NodeMetadata.t()}
+        }
 
   @impl true
   def init(opts) do

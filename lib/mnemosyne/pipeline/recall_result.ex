@@ -4,15 +4,15 @@ defmodule Mnemosyne.Pipeline.RecallResult do
   touched nodes, and execution trace.
   """
 
-  use TypedStruct
-
   alias Mnemosyne.Notifier.Trace.Recall, as: RecallTrace
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
   alias Mnemosyne.Pipeline.Retrieval.TouchedNode
 
-  typedstruct do
-    field :reasoned, ReasonedMemory.t()
-    field :touched_nodes, [TouchedNode.t()], default: []
-    field :trace, RecallTrace.t()
-  end
+  defstruct [:reasoned, :trace, touched_nodes: []]
+
+  @type t :: %__MODULE__{
+          reasoned: ReasonedMemory.t(),
+          touched_nodes: [TouchedNode.t()],
+          trace: RecallTrace.t()
+        }
 end

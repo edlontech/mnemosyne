@@ -3,19 +3,25 @@ defmodule Mnemosyne.Notifier.Trace.Episode do
   Trace struct capturing episode pipeline execution details.
   """
 
-  use TypedStruct
+  defstruct verbosity: :summary,
+            step_index: 0,
+            trajectory_id: nil,
+            boundary_detected: false,
+            reward: 0.0,
+            duration_us: 0,
+            subgoal: nil,
+            similarity_score: nil,
+            similarity_threshold: nil
 
-  typedstruct do
-    field :verbosity, :summary | :detailed, default: :summary
-
-    field :step_index, non_neg_integer(), default: 0
-    field :trajectory_id, String.t()
-    field :boundary_detected, boolean(), default: false
-    field :reward, float(), default: 0.0
-    field :duration_us, non_neg_integer(), default: 0
-
-    field :subgoal, String.t(), default: nil
-    field :similarity_score, float(), default: nil
-    field :similarity_threshold, float(), default: nil
-  end
+  @type t :: %__MODULE__{
+          verbosity: :summary | :detailed,
+          step_index: non_neg_integer(),
+          trajectory_id: String.t(),
+          boundary_detected: boolean(),
+          reward: float(),
+          duration_us: non_neg_integer(),
+          subgoal: String.t(),
+          similarity_score: float(),
+          similarity_threshold: float()
+        }
 end

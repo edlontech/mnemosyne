@@ -5,16 +5,16 @@ defmodule Mnemosyne.Graph.Changeset do
   A changeset accumulates node additions and link operations that can
   be applied atomically to a `Mnemosyne.Graph`.
   """
-  use TypedStruct
-
   alias Mnemosyne.Graph.Edge
   alias Mnemosyne.NodeMetadata
 
-  typedstruct do
-    field :additions, [struct()], default: []
-    field :links, [{String.t(), String.t(), Edge.edge_type()}], default: []
-    field :metadata, %{String.t() => NodeMetadata.t()}, default: %{}
-  end
+  defstruct additions: [], links: [], metadata: %{}
+
+  @type t :: %__MODULE__{
+          additions: [struct()],
+          links: [{String.t(), String.t(), Edge.edge_type()}],
+          metadata: %{String.t() => NodeMetadata.t()}
+        }
 
   @doc "Creates an empty changeset."
   @spec new() :: t()
