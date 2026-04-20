@@ -759,4 +759,77 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
       assert is_nil(deleted_node)
     end
   end
+
+  describe "consolidate/1 when a node is both winner and loser in different pairs" do
+    test "tag links are preserved when node loses to higher-scored and wins against lower-scored" do
+      # Order in embeddable list matters: A appears before B, B before C.
+      # A (score 5) compared against B (score 10): B wins, A condemned.
+      # Inner loop continues for A: A compared against C (score 1): A "wins", C condemned.
+      # Tag is linked only to C. The tag's connection must end up on the true surviving node (B),
+      # not on A (which is being deleted).
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: [1.0, 0.0, 0.0]
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional language",
+        confidence: 1.0,
+        embedding: [0.99, 0.1, 0.0]
+      }
+
+      sem_c = %Semantic{
+        id: "sem_c",
+        proposition: "Elixir is functional programming",
+        confidence: 1.0,
+        embedding: [0.98, 0.15, 0.0]
+      }
+
+      tag_only_c = %Tag{id: "tag_only_c", label: "c_tag", embedding: [0.2, 0.8, 0.0]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(sem_c)
+        |> Changeset.add_node(tag_only_c)
+        |> Changeset.add_link("sem_c", "tag_only_c", :membership)
+
+      mid_meta = base_metadata(access_count: 5, cumulative_reward: 2.0, reward_count: 1)
+      high_meta = base_metadata(access_count: 20, cumulative_reward: 10.0, reward_count: 4)
+      low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
+
+      bs =
+        build_backend(cs, %{
+          "sem_a" => mid_meta,
+          "sem_b" => high_meta,
+          "sem_c" => low_meta
+        })
+
+      {:ok, _result, {InMemory, final_bs}} =
+        SemanticConsolidator.consolidate(
+          backend: {InMemory, bs},
+          config: @config
+        )
+
+      {:ok, survivor_b, _} = InMemory.get_node("sem_b", final_bs)
+      assert survivor_b != nil, "highest-scored node must survive"
+
+      {:ok, tag, _} = InMemory.get_node("tag_only_c", final_bs)
+
+      assert tag != nil,
+             "tag linked to a condemned loser must be preserved, attached to the surviving winner"
+
+      tag_links = NodeProtocol.links(tag, :membership)
+
+      assert MapSet.member?(tag_links, "sem_b"),
+             "tag must be linked to the true surviving winner (sem_b)"
+
+      b_links = NodeProtocol.links(survivor_b, :membership)
+      assert MapSet.member?(b_links, "tag_only_c")
+    end
+  end
 end

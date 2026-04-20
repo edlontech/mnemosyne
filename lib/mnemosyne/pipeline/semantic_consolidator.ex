@@ -102,11 +102,12 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     end
   end
 
-  defp compare_pair(node_a, node_b, all_meta, params, threshold, {pairs, condemned}) do
+  defp compare_pair(node_a, node_b, all_meta, params, threshold, {pairs, condemned} = acc) do
+    id_a = NodeProtocol.id(node_a)
     id_b = NodeProtocol.id(node_b)
 
-    if MapSet.member?(condemned, id_b) do
-      {pairs, condemned}
+    if MapSet.member?(condemned, id_a) or MapSet.member?(condemned, id_b) do
+      acc
     else
       similarity =
         Similarity.cosine_similarity(
@@ -115,11 +116,10 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
         )
 
       if similarity > threshold do
-        id_a = NodeProtocol.id(node_a)
         {winner_id, loser_id} = pick_winner_loser(id_a, id_b, all_meta, params)
         {[{winner_id, loser_id} | pairs], MapSet.put(condemned, loser_id)}
       else
-        {pairs, condemned}
+        acc
       end
     end
   end
