@@ -78,6 +78,62 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
 
       :dets.close(state.ref)
     end
+
+    test "strips back-references from surviving nodes after reload", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "delete_backrefs.dets")
+      {:ok, state} = PersistenceDETS.init(path: path)
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(semantic_node("s1"))
+        |> Changeset.add_node(semantic_node("s2"))
+        |> Changeset.add_node(semantic_node("s3"))
+        |> Changeset.add_link("s1", "s2", :sibling)
+        |> Changeset.add_link("s1", "s3", :sibling)
+        |> Changeset.add_link("s2", "s3", :sibling)
+
+      :ok = PersistenceDETS.save(changeset, state)
+      :ok = PersistenceDETS.delete(["s1"], state)
+
+      {:ok, graph, _metadata} = PersistenceDETS.load(state)
+      s2_siblings = Map.get(graph.nodes["s2"].links, :sibling, MapSet.new())
+      s3_siblings = Map.get(graph.nodes["s3"].links, :sibling, MapSet.new())
+
+      refute MapSet.member?(s2_siblings, "s1")
+      refute MapSet.member?(s3_siblings, "s1")
+      assert MapSet.member?(s2_siblings, "s3")
+      assert MapSet.member?(s3_siblings, "s2")
+
+      :dets.close(state.ref)
+    end
+
+    test "strips back-references across multiple link types and batched deletes",
+         %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "delete_batch.dets")
+      {:ok, state} = PersistenceDETS.init(path: path)
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(semantic_node("dead1"))
+        |> Changeset.add_node(semantic_node("dead2"))
+        |> Changeset.add_node(semantic_node("survivor"))
+        |> Changeset.add_link("survivor", "dead1", :sibling)
+        |> Changeset.add_link("survivor", "dead2", :membership)
+        |> Changeset.add_link("dead1", "dead2", :provenance)
+
+      :ok = PersistenceDETS.save(changeset, state)
+      :ok = PersistenceDETS.delete(["dead1", "dead2"], state)
+
+      {:ok, graph, _metadata} = PersistenceDETS.load(state)
+      assert is_nil(graph.nodes["dead1"])
+      assert is_nil(graph.nodes["dead2"])
+
+      survivor_links = graph.nodes["survivor"].links
+      assert MapSet.size(Map.get(survivor_links, :sibling, MapSet.new())) == 0
+      assert MapSet.size(Map.get(survivor_links, :membership, MapSet.new())) == 0
+
+      :dets.close(state.ref)
+    end
   end
 
   describe "save_metadata/2 and load/1" do

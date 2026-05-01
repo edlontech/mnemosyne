@@ -54,10 +54,19 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
     end
   end
 
-  @doc "Removes nodes by ID from DETS."
+  @doc """
+  Removes nodes by ID from DETS and strips any back-references to those IDs
+  from every surviving node's link sets. Without the strip pass, surviving
+  rows retain dangling references that re-materialize on reload.
+  """
   @spec delete([String.t()], map()) :: :ok | {:error, term()}
+  def delete([], _state), do: :ok
+
   def delete(node_ids, %{ref: ref}) do
-    with :ok <- do_delete_nodes(node_ids, ref) do
+    dead = MapSet.new(node_ids)
+
+    with :ok <- strip_dead_refs(ref, dead),
+         :ok <- do_delete_nodes(node_ids, ref) do
       :dets.sync(ref)
     end
   end
@@ -136,5 +145,34 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
         {:error, _} = error -> {:halt, error}
       end
     end)
+  end
+
+  defp strip_dead_refs(ref, dead) do
+    updates =
+      :dets.foldl(
+        fn record, acc -> collect_strip(record, dead, acc) end,
+        [],
+        ref
+      )
+
+    Enum.reduce_while(updates, :ok, fn node, :ok ->
+      case :dets.insert(ref, {NodeProtocol.id(node), node}) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp collect_strip({{:meta, _id}, _meta}, _dead, acc), do: acc
+
+  defp collect_strip({id, %{links: links} = node}, dead, acc) when is_binary(id) do
+    if MapSet.member?(dead, id), do: acc, else: maybe_strip(node, links, dead, acc)
+  end
+
+  defp collect_strip(_other, _dead, acc), do: acc
+
+  defp maybe_strip(node, links, dead, acc) do
+    stripped = Map.new(links, fn {type, ids} -> {type, MapSet.difference(ids, dead)} end)
+    if stripped == links, do: acc, else: [%{node | links: stripped} | acc]
   end
 end
