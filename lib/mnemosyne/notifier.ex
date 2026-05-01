@@ -35,6 +35,14 @@ defmodule Mnemosyne.Notifier do
                penalized: non_neg_integer(),
                orphaned: non_neg_integer()
              }, metadata()}
+          | {:repair_completed,
+             %{
+               checked: non_neg_integer(),
+               repaired_nodes: non_neg_integer(),
+               dangling_refs: non_neg_integer(),
+               orphans_deleted: non_neg_integer(),
+               orphan_ids: [String.t()]
+             }, metadata()}
           | {:session_transition, session_id :: String.t(), old_state :: atom(),
              new_state :: atom(), metadata()}
           | {:recall_executed, query :: String.t(), results :: term(), metadata()}
