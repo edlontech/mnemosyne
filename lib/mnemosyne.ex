@@ -638,6 +638,27 @@ defmodule Mnemosyne do
   end
 
   @doc """
+  Strips dangling link references and removes orphaned tags/intents from
+  the repo's graph asynchronously.
+
+  Use this after upgrading from a release whose persistence layer left
+  back-references behind on delete, or any time the graph is suspected to
+  carry stale link IDs. Returns immediately; repair runs in the background.
+  Subscribe to Notifier events (`:repair_completed`) to observe results.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+  """
+  @spec repair_graph(String.t(), keyword()) ::
+          :ok | {:error, NotFoundError.t()}
+  def repair_graph(repo_id, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.repair_graph(pid, opts)
+    end
+  end
+
+  @doc """
   Validates episodic grounding of abstract nodes in the repo's graph asynchronously.
 
   Walks provenance chains from semantic/procedural nodes to source nodes

@@ -22,6 +22,7 @@ defmodule Mnemosyne.MemoryStore do
   alias Mnemosyne.Notifier
   alias Mnemosyne.Pipeline.Decay
   alias Mnemosyne.Pipeline.EpisodicValidation
+  alias Mnemosyne.Pipeline.GraphRepair
   alias Mnemosyne.Pipeline.IntentMerger
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.RecallResult
@@ -91,6 +92,12 @@ defmodule Mnemosyne.MemoryStore do
   @spec validate_episodic(GenServer.server(), keyword()) :: :ok
   def validate_episodic(server, opts \\ []) do
     GenServer.cast(server, {:validate_episodic, opts})
+  end
+
+  @doc "Strips dangling link references and deletes orphaned routing nodes."
+  @spec repair_graph(GenServer.server(), keyword()) :: :ok
+  def repair_graph(server, opts \\ []) do
+    GenServer.cast(server, {:repair_graph, opts})
   end
 
   @doc "Fetches a single node by ID from the backend."
@@ -218,6 +225,19 @@ defmodule Mnemosyne.MemoryStore do
       {:noreply, new_state}
     else
       Logger.debug("maintenance already active, dropping validation request")
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:repair_graph, opts}, state) do
+    if state.maintenance_active == nil do
+      {ref, operation} = spawn_maintenance_task({:repair_graph, opts, nil}, state)
+      new_state = %{state | maintenance_active: {ref, operation}}
+      emit_queue_telemetry(new_state, :maintenance_start)
+      {:noreply, new_state}
+    else
+      Logger.debug("maintenance already active, dropping repair request")
       {:noreply, state}
     end
   end
@@ -563,6 +583,22 @@ defmodule Mnemosyne.MemoryStore do
     {task.ref, {:validate_episodic, from}}
   end
 
+  defp spawn_maintenance_task({:repair_graph, opts, from}, state) do
+    backend = state.backend
+    repo_id = state.repo_id
+
+    task =
+      Task.Supervisor.async_nolink(state.task_supervisor, fn ->
+        repair_opts = Keyword.put(opts, :backend, backend)
+
+        Telemetry.span([:graph_repair, :repair], %{repo_id: repo_id}, fn ->
+          run_repair(&GraphRepair.repair/1, repair_opts)
+        end)
+      end)
+
+    {task.ref, {:repair_graph, from}}
+  end
+
   defp run_maintenance(fun, opts) do
     case fun.(opts) do
       {:ok, result, updated_backend} ->
@@ -578,6 +614,22 @@ defmodule Mnemosyne.MemoryStore do
       {:ok, result, updated_backend} ->
         {{:ok, result, updated_backend},
          %{checked: result.checked, penalized: result.penalized, orphaned: result.orphaned}}
+
+      {:error, _} = error ->
+        {error, %{}}
+    end
+  end
+
+  defp run_repair(fun, opts) do
+    case fun.(opts) do
+      {:ok, result, updated_backend} ->
+        {{:ok, result, updated_backend},
+         %{
+           checked: result.checked,
+           repaired_nodes: result.repaired_nodes,
+           dangling_refs: result.dangling_refs,
+           orphans_deleted: result.orphans_deleted
+         }}
 
       {:error, _} = error ->
         {error, %{}}
@@ -634,6 +686,21 @@ defmodule Mnemosyne.MemoryStore do
       state.repo_id,
       {:decay_completed,
        %{checked: result.checked, deleted: result.deleted, deleted_ids: result.deleted_ids}, %{}}
+    )
+  end
+
+  defp notify_maintenance(:repair_graph, result, state) do
+    Notifier.safe_notify(
+      state.notifier,
+      state.repo_id,
+      {:repair_completed,
+       %{
+         checked: result.checked,
+         repaired_nodes: result.repaired_nodes,
+         dangling_refs: result.dangling_refs,
+         orphans_deleted: result.orphans_deleted,
+         orphan_ids: result.orphan_ids
+       }, %{}}
     )
   end
 
