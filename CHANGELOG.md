@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.5](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.4...mnemosyne-v0.1.5) (2026-05-01)
+
+
+### Features
+
+* add GraphRepair maintenance op to scrub dangling link refs ([3317a78](https://github.com/edlontech/mnemosyne/commit/3317a78c32db1d5ef46a4f38a2c27c171b0e09f4))
+
+
+### Bug Fixes
+
+* add :repair_completed to Notifier event type ([3d389b6](https://github.com/edlontech/mnemosyne/commit/3d389b6d56be8cd5f1222650e02e43e4790ee4a1))
+* only stamp reward signal when trajectory had real reward observations ([643594a](https://github.com/edlontech/mnemosyne/commit/643594a95328cdbfc0da0fd01b8b64a945d507ab))
+* rewrite semantic consolidator to preserve graph connections on merge ([2655be9](https://github.com/edlontech/mnemosyne/commit/2655be927cfc60f2f5ee6c23d2ec4542192c3f8f))
+* skip condemned node_a in consolidator pair discovery ([f4c7cb7](https://github.com/edlontech/mnemosyne/commit/f4c7cb7ed107b81dd95bb5e487ecfc01b6196c10))
+* strip back-references when deleting nodes from DETS ([2d2b0e8](https://github.com/edlontech/mnemosyne/commit/2d2b0e8495e926e60834e650d3b7b7a4ff1c735e))
+
 ## [0.1.4](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.3...mnemosyne-v0.1.4) (2026-04-10)
 
 
