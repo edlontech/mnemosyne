@@ -245,11 +245,19 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end
   end
 
-  defp trajectory_avg_reward(%{steps: []}), do: 0.0
-
   defp trajectory_avg_reward(%{steps: steps}) do
-    total = Enum.reduce(steps, 0.0, fn step, acc -> acc + (step.reward || 0.0) end)
-    total / length(steps)
+    rewards = steps |> Enum.map(& &1.reward) |> Enum.reject(&is_nil/1)
+
+    case rewards do
+      [] -> nil
+      rs -> Enum.sum(rs) / length(rs)
+    end
+  end
+
+  defp reward_meta(nil), do: NodeMetadata.new()
+
+  defp reward_meta(avg) when is_float(avg) or is_integer(avg) do
+    NodeMetadata.new(cumulative_reward: avg / 1, reward_count: 1)
   end
 
   defp build_base_changeset(goal, episode_id, trajectory, episodic_ids, embedding, config) do
@@ -336,7 +344,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
       all_concepts = facts |> Enum.flat_map(& &1.concepts) |> Enum.uniq()
       concept_map = build_concept_map(all_concepts, embedding, config)
 
-      reward_meta = NodeMetadata.new(cumulative_reward: avg_reward, reward_count: 1)
+      reward_meta = reward_meta(avg_reward)
 
       {cs, sem_ids} =
         facts
@@ -358,10 +366,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
           acc
           |> Changeset.add_node(tag)
-          |> Changeset.put_metadata(
-            tag.id,
-            NodeMetadata.new(cumulative_reward: tag_reward, reward_count: 1)
-          )
+          |> Changeset.put_metadata(tag.id, reward_meta(tag_reward))
         end)
 
       {:ok, cs}
@@ -424,7 +429,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
       all_intents = instructions |> Enum.map(& &1.intent) |> Enum.uniq()
       intent_map = build_intent_map(all_intents, embedding, config)
 
-      reward_meta = NodeMetadata.new(cumulative_reward: avg_reward, reward_count: 1)
+      reward_meta = reward_meta(avg_reward)
 
       {cs, proc_ids} =
         instructions
@@ -443,10 +448,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
           acc
           |> Changeset.add_node(intent)
-          |> Changeset.put_metadata(
-            intent.id,
-            NodeMetadata.new(cumulative_reward: intent_reward, reward_count: 1)
-          )
+          |> Changeset.put_metadata(intent.id, reward_meta(intent_reward))
         end)
 
       {:ok, cs, instructions}
@@ -634,17 +636,17 @@ defmodule Mnemosyne.Pipeline.Structuring do
     |> Enum.map(fn {_from, to, _type} -> to end)
   end
 
-  defp compute_avg_child_reward([], _metadata), do: 0.0
+  defp compute_avg_child_reward([], _metadata), do: nil
 
   defp compute_avg_child_reward(child_ids, metadata) do
     rewards =
       child_ids
       |> Enum.map(&Map.get(metadata, &1))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(& &1.cumulative_reward)
+      |> Enum.reject(&(is_nil(&1) or &1.reward_count == 0))
+      |> Enum.map(&NodeMetadata.avg_reward/1)
 
     case rewards do
-      [] -> 0.0
+      [] -> nil
       rs -> Enum.sum(rs) / length(rs)
     end
   end

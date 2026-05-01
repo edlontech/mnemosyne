@@ -36,6 +36,36 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
     closed
   end
 
+  defp build_closed_episode_with_rewards(rewards) do
+    traj_id = "traj_test"
+
+    steps =
+      rewards
+      |> Enum.with_index()
+      |> Enum.map(fn {reward, idx} ->
+        %{
+          index: idx,
+          observation: "obs_#{idx}",
+          action: "act_#{idx}",
+          subgoal: "Optimize queries",
+          state: "state_#{idx}",
+          reward: reward,
+          embedding: List.duplicate(0.1, 128),
+          trajectory_id: traj_id
+        }
+      end)
+
+    episode = %Episode{
+      id: "ep_test",
+      goal: "Optimize the database",
+      steps: steps,
+      current_trajectory_id: traj_id
+    }
+
+    {:ok, closed} = Episode.close(episode)
+    closed
+  end
+
   defp stub_append_cycle(subgoal \\ "Optimize queries", reward \\ "0.8") do
     stub_chat_responses(["Derived state", reward])
     stub_chat_structured_responses([%{reasoning: "analysis", subgoal: subgoal}])
@@ -383,6 +413,68 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         assert %NodeMetadata{reward_count: rc} = meta
         assert rc > 0
       end)
+    end
+
+    test "leaves reward_count at 0 for trajectory-derived nodes when no step had any reward signal" do
+      episode = build_closed_episode_with_rewards([nil, nil])
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      meta_for = fn type ->
+        cs.additions
+        |> Enum.filter(&match?(%^type{}, &1))
+        |> Enum.map(&Map.get(cs.metadata, &1.id))
+      end
+
+      sem_metas = meta_for.(Mnemosyne.Graph.Node.Semantic)
+      tag_metas = meta_for.(Mnemosyne.Graph.Node.Tag)
+      intent_metas = meta_for.(Mnemosyne.Graph.Node.Intent)
+
+      assert sem_metas != []
+      assert tag_metas != []
+      assert intent_metas != []
+
+      for meta <- sem_metas ++ tag_metas ++ intent_metas do
+        assert %NodeMetadata{reward_count: 0, cumulative_reward: +0.0} = meta
+      end
+    end
+
+    test "averages over real rewards only, ignoring nil-reward steps" do
+      episode = build_closed_episode_with_rewards([0.6, nil, 1.0])
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      sem_metas =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> Enum.map(&Map.get(cs.metadata, &1.id))
+
+      assert sem_metas != []
+
+      for meta <- sem_metas do
+        assert %NodeMetadata{reward_count: 1, cumulative_reward: cum} = meta
+        assert_in_delta cum, 0.8, 1.0e-6
+      end
+    end
+
+    test "stamps an explicit zero-reward signal when all steps were scored zero" do
+      episode = build_closed_episode_with_rewards([0.0, 0.0])
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      sem_metas =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> Enum.map(&Map.get(cs.metadata, &1.id))
+
+      assert sem_metas != []
+
+      for meta <- sem_metas do
+        assert %NodeMetadata{reward_count: 1, cumulative_reward: +0.0} = meta
+      end
     end
 
     test "adds pairwise sibling links between semantic nodes from same trajectory" do
