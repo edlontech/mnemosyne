@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.6](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.5...mnemosyne-v0.1.6) (2026-05-08)
+
+
+### Bug Fixes
+
+* Fixing Tidewave leaking on non-dev envs ([72c8dd7](https://github.com/edlontech/mnemosyne/commit/72c8dd795c44b9529da01b6e6ea5165e7abd0772))
+* Updating dependencies ([bd6faf6](https://github.com/edlontech/mnemosyne/commit/bd6faf625dbdc84e098cf52219e35e2bfd9d36ad))
+
 ## [0.1.5](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.4...mnemosyne-v0.1.5) (2026-05-01)
 
 
