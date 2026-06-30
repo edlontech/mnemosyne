@@ -52,7 +52,7 @@ defmodule Mnemosyne.Pipeline.Decay do
           type = NodeProtocol.node_type(node)
           meta = Map.get(all_meta, id)
           score = decay_score(meta, type, config)
-          not is_float(score) or score < threshold
+          score < threshold
         end)
         |> Enum.map(&NodeProtocol.id/1)
 

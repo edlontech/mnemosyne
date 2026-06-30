@@ -766,7 +766,7 @@ defmodule Mnemosyne.MemoryStore do
     session_id = Keyword.get(opts, :session_id)
     backend = state.backend
     repo_id = state.repo_id
-    verbosity = if config, do: config.trace_verbosity, else: :summary
+    verbosity = config.trace_verbosity
 
     Task.Supervisor.async_nolink(state.task_supervisor, fn ->
       retrieval_opts = [
