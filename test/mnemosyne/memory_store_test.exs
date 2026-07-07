@@ -271,6 +271,15 @@ defmodule Mnemosyne.MemoryStoreTest do
 
   describe "consolidate_semantics/2" do
     test "consolidates near-duplicate semantic nodes", %{tmp_dir: tmp_dir} do
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{merged_statement: "Elixir is great", relationship: "SAME_TOPIC_MERGE_WELL"},
+           model: "mock:test",
+           usage: %{}
+         }}
+      end)
+
       pid = start_store(tmp_dir)
 
       emb = List.duplicate(0.5, 128)

@@ -346,18 +346,18 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
       reward_meta = reward_meta(avg_reward)
 
-      {cs, sem_ids} =
+      {cs, fact_provenance} =
         facts
         |> Enum.zip(prop_embeddings)
-        |> Enum.reduce({Changeset.new(), []}, fn fact_emb, {acc_cs, acc_ids} ->
+        |> Enum.reduce({Changeset.new(), []}, fn {fact, _emb} = fact_emb, {acc_cs, acc} ->
           {node, updated_cs} = add_semantic_node(fact_emb, acc_cs, concept_map, reward_meta)
-          {updated_cs, [node.id | acc_ids]}
+          {updated_cs, [{node.id, resolve_source_steps(fact, episodic_ids)} | acc]}
         end)
 
       cs =
         cs
-        |> add_sibling_links(sem_ids)
-        |> add_provenance_links(sem_ids, episodic_ids)
+        |> add_step_sibling_links(fact_provenance)
+        |> add_fact_provenance_links(fact_provenance)
 
       cs =
         Enum.reduce(Map.values(concept_map), cs, fn tag, acc ->
@@ -610,9 +610,39 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end
   end
 
-  defp add_sibling_links(cs, ids) do
-    ids
-    |> pairs()
+  # Maps the 1-based step numbers reported by the LLM to the episodic node
+  # ids at those positions. Facts with no valid steps fall back to the whole
+  # trajectory so they never lose grounding.
+  defp resolve_source_steps(%{source_steps: steps}, episodic_ids) when is_list(steps) do
+    resolved =
+      steps
+      |> Enum.filter(&(is_integer(&1) and &1 >= 1 and &1 <= length(episodic_ids)))
+      |> Enum.map(&Enum.at(episodic_ids, &1 - 1))
+      |> Enum.uniq()
+
+    case resolved do
+      [] -> episodic_ids
+      ids -> ids
+    end
+  end
+
+  defp resolve_source_steps(_fact, episodic_ids), do: episodic_ids
+
+  defp add_fact_provenance_links(cs, fact_provenance) do
+    for {sem_id, ep_ids} <- fact_provenance, e_id <- ep_ids, reduce: cs do
+      acc -> Changeset.add_link(acc, sem_id, e_id, :provenance)
+    end
+  end
+
+  # Sibling edges connect propositions that originate from the same
+  # episodic unit, preserving local co-occurrence structure.
+  defp add_step_sibling_links(cs, fact_provenance) do
+    fact_provenance
+    |> Enum.flat_map(fn {sem_id, ep_ids} -> Enum.map(ep_ids, &{&1, sem_id}) end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Map.values()
+    |> Enum.flat_map(&pairs/1)
+    |> Enum.uniq_by(fn {a, b} -> if a <= b, do: {a, b}, else: {b, a} end)
     |> Enum.reduce(cs, fn {a, b}, acc -> Changeset.add_link(acc, a, b, :sibling) end)
   end
 

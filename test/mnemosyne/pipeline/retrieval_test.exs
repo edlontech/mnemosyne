@@ -898,15 +898,13 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         llm: %{model: "test:model", opts: %{}},
         embedding: %{model: "test:embed", opts: %{}},
         value_function: %{module: Mnemosyne.ValueFunction.Default, params: %{}},
-        refinement_threshold: Keyword.get(opts, :threshold, 0.6),
-        refinement_budget: Keyword.get(opts, :budget, 1),
-        plateau_delta: Keyword.get(opts, :plateau_delta, 0.05)
+        refinement_budget: Keyword.get(opts, :budget, 1)
       }
     end
 
-    test "triggers refinement when score plateaus during multi-hop" do
+    test "regenerates tags during multi-hop when budget allows" do
       graph = build_low_similarity_graph()
-      config = refinement_config(threshold: 0.99, budget: 1, plateau_delta: 0.05)
+      config = refinement_config(budget: 1)
 
       stub_retrieval_llm("semantic", "weak concept")
 
@@ -948,7 +946,14 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       end)
 
       Mnemosyne.MockLLM
-      |> reject(:chat_structured, 3)
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{enough: false, top_indices: []},
+           model: "mock:test",
+           usage: %{}
+         }}
+      end)
 
       {:ok, result, trace} =
         Retrieval.retrieve(
@@ -962,7 +967,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
 
     test "handles empty refined tags gracefully" do
       graph = build_low_similarity_graph()
-      config = refinement_config(threshold: 0.99, budget: 1)
+      config = refinement_config(budget: 1)
 
       stub_retrieval_llm("semantic", "weak concept")
 
@@ -991,7 +996,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
 
     test "handles refinement LLM error gracefully" do
       graph = build_low_similarity_graph()
-      config = refinement_config(threshold: 0.99, budget: 1)
+      config = refinement_config(budget: 1)
 
       stub_retrieval_llm("semantic", "weak concept")
 
@@ -1015,6 +1020,102 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         )
 
       assert result.mode == :semantic
+    end
+  end
+
+  describe "multi-hop control" do
+    test "stops early when the controller reports sufficiency" do
+      graph = build_test_graph()
+      stub_retrieval_llm("semantic", "deployment")
+      stub_default_embedding()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{enough: true, top_indices: []},
+           model: "mock:test",
+           usage: %{}
+         }}
+      end)
+
+      {:ok, result, trace} =
+        Retrieval.retrieve("What about deployment?", retrieval_opts(graph, max_hops: 2))
+
+      assert trace.stopped_early_at == 1
+      assert is_map(result.candidates)
+    end
+
+    test "controller focus candidates drive the next-hop query embedding" do
+      graph = build_test_graph()
+      stub_retrieval_llm("semantic", "deployment")
+
+      test_pid = self()
+
+      Mnemosyne.MockEmbedding
+      |> stub(:embed, fn text, _opts ->
+        send(test_pid, {:embed, text})
+        {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+      end)
+      |> stub(:embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> @test_vector end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
+      end)
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{enough: false, top_indices: [0]},
+           model: "mock:test",
+           usage: %{}
+         }}
+      end)
+
+      {:ok, _result, trace} =
+        Retrieval.retrieve("deployment query", retrieval_opts(graph, max_hops: 1))
+
+      assert trace.stopped_early_at == nil
+
+      embeds = collect_embeds([])
+      assert Enum.any?(embeds, &(&1 =~ "deployment query\n"))
+    end
+
+    test "episodic mode maps semantic candidates to provenance-linked episodes" do
+      graph = build_provenance_graph()
+      stub_retrieval_llm("episodic", "pooling")
+      stub_default_embedding()
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve("What happened with pooling?", retrieval_opts(graph, max_hops: 2))
+
+      assert result.mode == :episodic
+      ids = candidate_ids(result)
+
+      assert "ep_1" in ids
+      assert "ep_2" in ids
+      refute "sem_pool" in ids
+      refute "sem_throughput" in ids
+    end
+
+    test "episodic mode falls back to direct search without semantic provenance" do
+      graph = build_test_graph()
+      stub_retrieval_llm("episodic", "server crash")
+      stub_default_embedding()
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve("What happened during the crash?", retrieval_opts(graph, max_hops: 2))
+
+      ids = candidate_ids(result)
+      assert "ep_1" in ids or "ep_2" in ids
+    end
+  end
+
+  defp collect_embeds(acc) do
+    receive do
+      {:embed, text} -> collect_embeds([text | acc])
+    after
+      0 -> Enum.reverse(acc)
     end
   end
 end

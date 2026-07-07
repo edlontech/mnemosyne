@@ -54,6 +54,8 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonEpisodic do
       %{
         role: :user,
         content: """
+        Current Date: #{Calendar.strftime(DateTime.utc_now(), "%Y-%m-%d")}
+
         Query: #{query}
 
         Retrieved Episodes:

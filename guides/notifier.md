@@ -52,7 +52,7 @@ All notifier calls are wrapped in `Mnemosyne.Notifier.safe_notify/3`, which resc
 | `{:changeset_applied, changeset}` | `Mnemosyne.Graph.Changeset` with added/updated nodes | MemoryStore |
 | `{:nodes_deleted, node_ids}` | List of deleted node ID strings | MemoryStore |
 | `{:decay_completed, summary}` | `%{checked: integer, deleted: integer, deleted_ids: [String.t()]}` | MemoryStore |
-| `{:consolidation_completed, summary}` | `%{checked: integer, deleted: integer, deleted_ids: [String.t()]}` | MemoryStore |
+| `{:consolidation_completed, summary}` | `%{checked: integer, deleted: integer, merged: integer, deleted_ids: [String.t()]}` | MemoryStore |
 | `{:recall_executed, query, results}` | Query string and retrieval results | MemoryStore |
 | `{:session_transition, session_id, old_state, new_state}` | State machine transition (e.g. `:idle` to `:collecting`) | Session |
 

@@ -600,10 +600,12 @@ defmodule Mnemosyne do
   @doc """
   Consolidates near-duplicate semantic nodes in the repo's graph asynchronously.
 
-  Discovers semantically similar nodes via tag-neighbor similarity and
-  deletes the lower-scored one. Returns immediately; the consolidation runs
-  in the background. Subscribe to Notifier events (`:consolidation_completed`)
-  to observe results.
+  Discovers semantically similar nodes via tag-neighbor similarity and merges
+  each pair through an LLM-synthesized statement: the higher-scored node
+  survives with the merged proposition while the other's links and metadata
+  transfer to it. Weakly related pairs are kept separate. Returns immediately;
+  the consolidation runs in the background. Subscribe to Notifier events
+  (`:consolidation_completed`) to observe results.
 
   ## Options
 

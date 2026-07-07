@@ -297,6 +297,116 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       assert [_ | _] = cs.links
     end
 
+    test "links facts to their source steps and creates per-step sibling links" do
+      episode = build_closed_episode()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content)
+
+        content =
+          cond do
+            system_content =~ "factual knowledge" ->
+              %{
+                facts: [
+                  %{proposition: "Fact one", concepts: ["c1"], source_steps: [1]},
+                  %{proposition: "Fact two", concepts: ["c2"], source_steps: [2]},
+                  %{proposition: "Fact three", concepts: ["c3"], source_steps: [1]}
+                ]
+              }
+
+            system_content =~ "actionable instructions" ->
+              %{
+                instructions: [
+                  %{
+                    intent: "Optimize slow database queries",
+                    condition: "Query exceeds 1s",
+                    instruction: "Add an index",
+                    expected_outcome: "Sub-100ms response"
+                  }
+                ]
+              }
+
+            system_content =~ "prescription quality" ->
+              %{scores: [%{index: 0, return_score: 8}]}
+
+            true ->
+              %{}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      stub_default_embedding()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      episodic_by_obs =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Episodic{}, &1))
+        |> Map.new(&{&1.observation, &1.id})
+
+      step_1_id = Map.fetch!(episodic_by_obs, "Slow query found")
+      step_2_id = Map.fetch!(episodic_by_obs, "Index applied")
+
+      sem_by_prop =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> Map.new(&{&1.proposition, &1.id})
+
+      provenance = fn sem_id ->
+        cs.links
+        |> Enum.filter(fn {from, _to, type} -> from == sem_id and type == :provenance end)
+        |> Enum.map(fn {_from, to, _type} -> to end)
+      end
+
+      assert provenance.(sem_by_prop["Fact one"]) == [step_1_id]
+      assert provenance.(sem_by_prop["Fact two"]) == [step_2_id]
+      assert provenance.(sem_by_prop["Fact three"]) == [step_1_id]
+
+      sibling_pairs =
+        cs.links
+        |> Enum.filter(fn {_from, _to, type} -> type == :sibling end)
+        |> Enum.map(fn {from, to, _type} -> MapSet.new([from, to]) end)
+
+      same_step_pair = MapSet.new([sem_by_prop["Fact one"], sem_by_prop["Fact three"]])
+      cross_step_pair = MapSet.new([sem_by_prop["Fact one"], sem_by_prop["Fact two"]])
+
+      assert same_step_pair in sibling_pairs
+      refute cross_step_pair in sibling_pairs
+    end
+
+    test "facts without source steps fall back to whole-trajectory provenance" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      episodic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Episodic{}, &1))
+        |> Enum.map(& &1.id)
+        |> Enum.sort()
+
+      semantic_ids =
+        cs.additions
+        |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+        |> Enum.map(& &1.id)
+
+      Enum.each(semantic_ids, fn sem_id ->
+        linked =
+          cs.links
+          |> Enum.filter(fn {from, _to, type} -> from == sem_id and type == :provenance end)
+          |> Enum.map(fn {_from, to, _type} -> to end)
+          |> Enum.sort()
+
+        assert linked == episodic_ids
+      end)
+    end
+
     test "creates tag nodes as concept indices linked to semantic nodes" do
       episode = build_closed_episode()
       stub_extraction_llm()

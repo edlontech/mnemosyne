@@ -536,10 +536,13 @@ defmodule Mnemosyne.MemoryStore do
     backend = state.backend
     config = state.config
     repo_id = state.repo_id
+    llm = state.llm
+    embedding = state.embedding
 
     task =
       Task.Supervisor.async_nolink(state.task_supervisor, fn ->
-        consolidation_opts = Keyword.merge(opts, backend: backend, config: config)
+        consolidation_opts =
+          Keyword.merge(opts, backend: backend, config: config, llm: llm, embedding: embedding)
 
         Telemetry.span([:consolidator, :consolidate], %{repo_id: repo_id}, fn ->
           run_maintenance(&SemanticConsolidator.consolidate/1, consolidation_opts)
@@ -676,7 +679,12 @@ defmodule Mnemosyne.MemoryStore do
       state.notifier,
       state.repo_id,
       {:consolidation_completed,
-       %{checked: result.checked, deleted: result.deleted, deleted_ids: result.deleted_ids}, %{}}
+       %{
+         checked: result.checked,
+         deleted: result.deleted,
+         merged: result.merged,
+         deleted_ids: result.deleted_ids
+       }, %{}}
     )
   end
 

@@ -4,6 +4,7 @@ defmodule Mnemosyne.Integration.LifecycleTest do
 
   @moduletag :tmp_dir
 
+  alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
   alias Mnemosyne.Pipeline.RecallResult
 
@@ -89,7 +90,9 @@ defmodule Mnemosyne.Integration.LifecycleTest do
 
     Enum.each(semantic_nodes, fn sem ->
       provenance =
-        MapSet.intersection(sem.links, episodic_ids)
+        sem
+        |> NodeProtocol.links(:provenance)
+        |> MapSet.intersection(episodic_ids)
 
       assert MapSet.size(provenance) > 0,
              "semantic node #{sem.id} should have provenance links to episodic nodes"
@@ -97,7 +100,9 @@ defmodule Mnemosyne.Integration.LifecycleTest do
 
     Enum.each(procedural_nodes, fn proc ->
       provenance =
-        MapSet.intersection(proc.links, episodic_ids)
+        proc
+        |> NodeProtocol.links(:provenance)
+        |> MapSet.intersection(episodic_ids)
 
       assert MapSet.size(provenance) > 0,
              "procedural node #{proc.id} should have provenance links to episodic nodes"

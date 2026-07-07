@@ -1,15 +1,22 @@
 defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
   use ExUnit.Case, async: true
+  use Mimic
 
   alias Mnemosyne.Config
+  alias Mnemosyne.Embedding
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Node.Episodic
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Tag
   alias Mnemosyne.GraphBackends.InMemory
+  alias Mnemosyne.LLM
+  alias Mnemosyne.MockEmbedding
+  alias Mnemosyne.MockLLM
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.SemanticConsolidator
+
+  setup :set_mimic_from_context
 
   @config %Config{
     llm: %{model: "test:model", opts: %{}},
@@ -23,6 +30,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
     }
   }
 
+  @default_opts [llm: MockLLM, embedding: MockEmbedding, config: @config]
+
   defp build_backend(changeset, metadata \\ %{}) do
     {:ok, bs} = InMemory.init([])
     {:ok, bs} = InMemory.apply_changeset(changeset, bs)
@@ -33,6 +42,25 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
         else: {:ok, bs}
 
     bs
+  end
+
+  defp consolidate_opts(bs, extra \\ []) do
+    @default_opts ++ [backend: {InMemory, bs}] ++ extra
+  end
+
+  defp stub_merge_llm(merged_statement \\ "Merged statement") do
+    stub(MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+      {:ok,
+       %LLM.Response{
+         content: %{merged_statement: merged_statement, relationship: "SAME_TOPIC_MERGE_WELL"},
+         model: "test",
+         usage: %{}
+       }}
+    end)
+
+    stub(MockEmbedding, :embed, fn _text, _opts ->
+      {:ok, %Embedding.Response{vectors: [[0.9, 0.1, 0.0]], model: "test", usage: %{}}}
+    end)
   end
 
   defp similar_embedding, do: [1.0, 0.0, 0.0]
@@ -49,63 +77,141 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
     )
   end
 
+  defp two_similar_nodes_changeset do
+    sem_a = %Semantic{
+      id: "sem_a",
+      proposition: "Elixir is functional",
+      confidence: 1.0,
+      embedding: similar_embedding()
+    }
+
+    sem_b = %Semantic{
+      id: "sem_b",
+      proposition: "Elixir is a functional language",
+      confidence: 1.0,
+      embedding: similar_embedding_2()
+    }
+
+    tag = %Tag{id: "tag_1", label: "elixir", embedding: [0.5, 0.5, 0.0]}
+
+    Changeset.new()
+    |> Changeset.add_node(sem_a)
+    |> Changeset.add_node(sem_b)
+    |> Changeset.add_node(tag)
+    |> Changeset.add_link("sem_a", "tag_1", :membership)
+    |> Changeset.add_link("sem_b", "tag_1", :membership)
+  end
+
   describe "consolidate/1 with no semantic nodes" do
     test "returns zero deleted and checked" do
       bs = build_backend(Changeset.new())
 
-      assert {:ok, %{deleted: 0, checked: 0}, {InMemory, _bs}} =
-               SemanticConsolidator.consolidate(
-                 backend: {InMemory, bs},
-                 config: @config
-               )
+      assert {:ok, %{deleted: 0, checked: 0, merged: 0}, {InMemory, _bs}} =
+               SemanticConsolidator.consolidate(consolidate_opts(bs))
     end
   end
 
-  describe "consolidate/1 with two similar nodes" do
-    test "deletes the lower-scored node" do
-      sem_a = %Semantic{
-        id: "sem_a",
-        proposition: "Elixir is functional",
-        confidence: 1.0,
-        embedding: similar_embedding()
-      }
-
-      sem_b = %Semantic{
-        id: "sem_b",
-        proposition: "Elixir is a functional language",
-        confidence: 1.0,
-        embedding: similar_embedding_2()
-      }
-
-      tag = %Tag{id: "tag_1", label: "elixir", embedding: [0.5, 0.5, 0.0]}
-
-      cs =
-        Changeset.new()
-        |> Changeset.add_node(sem_a)
-        |> Changeset.add_node(sem_b)
-        |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_a", "tag_1", :membership)
-        |> Changeset.add_link("sem_b", "tag_1", :membership)
+  describe "consolidate/1 with two similar nodes sharing a tag" do
+    test "merges into the higher-scored node with the LLM statement" do
+      stub_merge_llm("Elixir is a functional language running on the BEAM")
 
       high_score_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
       low_score_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
 
-      bs = build_backend(cs, %{"sem_a" => high_score_meta, "sem_b" => low_score_meta})
+      bs =
+        build_backend(two_similar_nodes_changeset(), %{
+          "sem_a" => high_score_meta,
+          "sem_b" => low_score_meta
+        })
 
-      assert {:ok, %{deleted: 1, checked: 2}, {InMemory, final_bs}} =
-               SemanticConsolidator.consolidate(
-                 backend: {InMemory, bs},
-                 config: @config
-               )
+      assert {:ok, %{deleted: 1, checked: 2, merged: 1}, {InMemory, final_bs}} =
+               SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, deleted_node, _} = InMemory.get_node("sem_b", final_bs)
       assert is_nil(deleted_node)
 
-      {:ok, surviving_node, _} = InMemory.get_node("sem_a", final_bs)
-      assert surviving_node.id == "sem_a"
+      {:ok, survivor, _} = InMemory.get_node("sem_a", final_bs)
+      assert survivor.proposition == "Elixir is a functional language running on the BEAM"
+      assert survivor.embedding == [0.9, 0.1, 0.0]
 
       {:ok, meta, _} = InMemory.get_metadata(["sem_b"], final_bs)
       assert meta == %{}
+    end
+
+    test "presents earlier and later propositions to the LLM by creation time" do
+      earlier_meta = base_metadata(created_at: ~U[2024-01-01 00:00:00Z], access_count: 1)
+      later_meta = base_metadata(created_at: ~U[2025-01-01 00:00:00Z], access_count: 10)
+
+      expect(MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        [_, %{content: user_msg}] = messages
+        assert user_msg =~ "Information 1 (Earlier Information): Elixir is functional"
+        assert user_msg =~ "Information 2 (Later Information): Elixir is a functional language"
+
+        {:ok,
+         %LLM.Response{
+           content: %{merged_statement: "merged", relationship: "UPDATE_SAME_FACT"},
+           model: "test",
+           usage: %{}
+         }}
+      end)
+
+      stub(MockEmbedding, :embed, fn _text, _opts ->
+        {:ok, %Embedding.Response{vectors: [[0.9, 0.1, 0.0]], model: "test", usage: %{}}}
+      end)
+
+      bs =
+        build_backend(two_similar_nodes_changeset(), %{
+          "sem_a" => earlier_meta,
+          "sem_b" => later_meta
+        })
+
+      assert {:ok, %{merged: 1}, {InMemory, _final_bs}} =
+               SemanticConsolidator.consolidate(consolidate_opts(bs))
+    end
+
+    test "keeps both nodes when the LLM flags a weak relation" do
+      stub(MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{merged_statement: "stitched", relationship: "WEAK_RELATED_STITCH_RISK"},
+           model: "test",
+           usage: %{}
+         }}
+      end)
+
+      bs =
+        build_backend(two_similar_nodes_changeset(), %{
+          "sem_a" => base_metadata(),
+          "sem_b" => base_metadata()
+        })
+
+      assert {:ok, %{deleted: 0, checked: 2, merged: 0}, {InMemory, final_bs}} =
+               SemanticConsolidator.consolidate(consolidate_opts(bs))
+
+      {:ok, node_a, _} = InMemory.get_node("sem_a", final_bs)
+      {:ok, node_b, _} = InMemory.get_node("sem_b", final_bs)
+      assert node_a.proposition == "Elixir is functional"
+      assert node_b.proposition == "Elixir is a functional language"
+    end
+
+    test "keeps both nodes when the LLM call fails" do
+      stub(MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:error, %Mnemosyne.Errors.Framework.AdapterError{adapter: MockLLM}}
+      end)
+
+      bs =
+        build_backend(two_similar_nodes_changeset(), %{
+          "sem_a" => base_metadata(),
+          "sem_b" => base_metadata()
+        })
+
+      assert {:ok, %{deleted: 0, merged: 0}, {InMemory, final_bs}} =
+               SemanticConsolidator.consolidate(consolidate_opts(bs))
+
+      {:ok, node_a, _} = InMemory.get_node("sem_a", final_bs)
+      {:ok, node_b, _} = InMemory.get_node("sem_b", final_bs)
+      assert node_a != nil
+      assert node_b != nil
     end
   end
 
@@ -141,11 +247,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
           "sem_b" => base_metadata()
         })
 
-      assert {:ok, %{deleted: 0, checked: 2}, {InMemory, final_bs}} =
-               SemanticConsolidator.consolidate(
-                 backend: {InMemory, bs},
-                 config: @config
-               )
+      assert {:ok, %{deleted: 0, checked: 2, merged: 0}, {InMemory, final_bs}} =
+               SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, node_a, _} = InMemory.get_node("sem_a", final_bs)
       {:ok, node_b, _} = InMemory.get_node("sem_b", final_bs)
@@ -154,8 +257,52 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
     end
   end
 
-  describe "consolidate/1 transitive dedup safety" do
-    test "does not delete a node twice when A~B and B~C" do
+  describe "consolidate/1 tag-projection candidate discovery" do
+    test "does not merge similar nodes that share no tag" do
+      sem_a = %Semantic{
+        id: "sem_a",
+        proposition: "Elixir is functional",
+        confidence: 1.0,
+        embedding: similar_embedding()
+      }
+
+      sem_b = %Semantic{
+        id: "sem_b",
+        proposition: "Elixir is a functional language",
+        confidence: 1.0,
+        embedding: similar_embedding_2()
+      }
+
+      tag_a = %Tag{id: "tag_a", label: "elixir", embedding: [0.5, 0.5, 0.0]}
+      tag_b = %Tag{id: "tag_b", label: "functional", embedding: [0.3, 0.7, 0.0]}
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(sem_a)
+        |> Changeset.add_node(sem_b)
+        |> Changeset.add_node(tag_a)
+        |> Changeset.add_node(tag_b)
+        |> Changeset.add_link("sem_a", "tag_a", :membership)
+        |> Changeset.add_link("sem_b", "tag_b", :membership)
+
+      bs =
+        build_backend(cs, %{
+          "sem_a" => base_metadata(),
+          "sem_b" => base_metadata()
+        })
+
+      assert {:ok, %{deleted: 0, merged: 0}, {InMemory, final_bs}} =
+               SemanticConsolidator.consolidate(consolidate_opts(bs))
+
+      {:ok, node_a, _} = InMemory.get_node("sem_a", final_bs)
+      {:ok, node_b, _} = InMemory.get_node("sem_b", final_bs)
+      assert node_a != nil
+      assert node_b != nil
+    end
+
+    test "pairs each node with at most one neighbor per pass" do
+      stub_merge_llm()
+
       emb_base = [1.0, 0.0, 0.0]
       emb_close_1 = [0.99, 0.1, 0.0]
       emb_close_2 = [0.98, 0.15, 0.0]
@@ -199,55 +346,31 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
           "sem_c" => low_meta
         })
 
-      assert {:ok, %{deleted: deleted, checked: 3}, {InMemory, final_bs}} =
-               SemanticConsolidator.consolidate(
-                 backend: {InMemory, bs},
-                 config: @config
-               )
-
-      assert deleted >= 1
+      assert {:ok, %{deleted: 1, checked: 3, merged: 1}, {InMemory, final_bs}} =
+               SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, node_a, _} = InMemory.get_node("sem_a", final_bs)
-      assert node_a.id == "sem_a"
+      {:ok, node_c, _} = InMemory.get_node("sem_c", final_bs)
+      assert node_a != nil
+      assert node_c != nil
     end
   end
 
   describe "consolidate/1 metadata cleanup" do
-    test "deletes metadata for condemned nodes" do
-      sem_a = %Semantic{
-        id: "sem_a",
-        proposition: "Elixir is functional",
-        confidence: 1.0,
-        embedding: similar_embedding()
-      }
-
-      sem_b = %Semantic{
-        id: "sem_b",
-        proposition: "Elixir is a functional language",
-        confidence: 1.0,
-        embedding: similar_embedding_2()
-      }
-
-      tag = %Tag{id: "tag_1", label: "elixir", embedding: [0.5, 0.5, 0.0]}
-
-      cs =
-        Changeset.new()
-        |> Changeset.add_node(sem_a)
-        |> Changeset.add_node(sem_b)
-        |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_a", "tag_1", :membership)
-        |> Changeset.add_link("sem_b", "tag_1", :membership)
+    test "deletes metadata for merged-away nodes" do
+      stub_merge_llm()
 
       high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
       low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
 
-      bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
+      bs =
+        build_backend(two_similar_nodes_changeset(), %{
+          "sem_a" => high_meta,
+          "sem_b" => low_meta
+        })
 
       {:ok, _result, {InMemory, final_bs}} =
-        SemanticConsolidator.consolidate(
-          backend: {InMemory, bs},
-          config: @config
-        )
+        SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, surviving_meta, _} = InMemory.get_metadata(["sem_a"], final_bs)
       {:ok, deleted_meta, _} = InMemory.get_metadata(["sem_b"], final_bs)
@@ -258,38 +381,16 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
   end
 
   describe "consolidate/1 with nil metadata" do
-    test "node with nil metadata scores 0.0 and gets deleted" do
-      sem_a = %Semantic{
-        id: "sem_a",
-        proposition: "Elixir is functional",
-        confidence: 1.0,
-        embedding: similar_embedding()
-      }
+    test "node with nil metadata scores 0.0 and merges into the other" do
+      stub_merge_llm()
 
-      sem_b = %Semantic{
-        id: "sem_b",
-        proposition: "Elixir is a functional language",
-        confidence: 1.0,
-        embedding: similar_embedding_2()
-      }
+      bs =
+        build_backend(two_similar_nodes_changeset(), %{
+          "sem_a" => base_metadata(access_count: 5)
+        })
 
-      tag = %Tag{id: "tag_1", label: "elixir", embedding: [0.5, 0.5, 0.0]}
-
-      cs =
-        Changeset.new()
-        |> Changeset.add_node(sem_a)
-        |> Changeset.add_node(sem_b)
-        |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_a", "tag_1", :membership)
-        |> Changeset.add_link("sem_b", "tag_1", :membership)
-
-      bs = build_backend(cs, %{"sem_a" => base_metadata(access_count: 5)})
-
-      assert {:ok, %{deleted: 1, checked: 2}, {InMemory, final_bs}} =
-               SemanticConsolidator.consolidate(
-                 backend: {InMemory, bs},
-                 config: @config
-               )
+      assert {:ok, %{deleted: 1, checked: 2, merged: 1}, {InMemory, final_bs}} =
+               SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, surviving, _} = InMemory.get_node("sem_a", final_bs)
       {:ok, deleted, _} = InMemory.get_node("sem_b", final_bs)
@@ -300,6 +401,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
 
   describe "consolidate/1 link transfer" do
     test "winner inherits loser's tag memberships" do
+      stub_merge_llm()
+
       sem_a = %Semantic{
         id: "sem_a",
         proposition: "Elixir is functional",
@@ -333,10 +436,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
       bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
 
       {:ok, _result, {InMemory, final_bs}} =
-        SemanticConsolidator.consolidate(
-          backend: {InMemory, bs},
-          config: @config
-        )
+        SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, survivor, _} = InMemory.get_node("sem_a", final_bs)
       membership_links = NodeProtocol.links(survivor, :membership)
@@ -351,6 +451,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
     end
 
     test "winner inherits loser's provenance links" do
+      stub_merge_llm()
+
       sem_a = %Semantic{
         id: "sem_a",
         proposition: "Elixir is functional",
@@ -405,10 +507,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
       bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
 
       {:ok, _result, {InMemory, final_bs}} =
-        SemanticConsolidator.consolidate(
-          backend: {InMemory, bs},
-          config: @config
-        )
+        SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, survivor, _} = InMemory.get_node("sem_a", final_bs)
       provenance_links = NodeProtocol.links(survivor, :provenance)
@@ -423,6 +522,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
     end
 
     test "winner inherits loser's sibling links" do
+      stub_merge_llm()
+
       sem_a = %Semantic{
         id: "sem_a",
         proposition: "Elixir is functional",
@@ -468,10 +569,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
         })
 
       {:ok, _result, {InMemory, final_bs}} =
-        SemanticConsolidator.consolidate(
-          backend: {InMemory, bs},
-          config: @config
-        )
+        SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, survivor, _} = InMemory.get_node("sem_a", final_bs)
       sibling_links = NodeProtocol.links(survivor, :sibling)
@@ -487,40 +585,19 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
 
   describe "consolidate/1 metadata merging" do
     test "winner metadata accumulates loser's counts and rewards" do
-      sem_a = %Semantic{
-        id: "sem_a",
-        proposition: "Elixir is functional",
-        confidence: 1.0,
-        embedding: similar_embedding()
-      }
-
-      sem_b = %Semantic{
-        id: "sem_b",
-        proposition: "Elixir is a functional language",
-        confidence: 1.0,
-        embedding: similar_embedding_2()
-      }
-
-      tag = %Tag{id: "tag_1", label: "elixir", embedding: [0.5, 0.5, 0.0]}
-
-      cs =
-        Changeset.new()
-        |> Changeset.add_node(sem_a)
-        |> Changeset.add_node(sem_b)
-        |> Changeset.add_node(tag)
-        |> Changeset.add_link("sem_a", "tag_1", :membership)
-        |> Changeset.add_link("sem_b", "tag_1", :membership)
+      stub_merge_llm()
 
       winner_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
       loser_meta = base_metadata(access_count: 3, cumulative_reward: 1.5, reward_count: 1)
 
-      bs = build_backend(cs, %{"sem_a" => winner_meta, "sem_b" => loser_meta})
+      bs =
+        build_backend(two_similar_nodes_changeset(), %{
+          "sem_a" => winner_meta,
+          "sem_b" => loser_meta
+        })
 
       {:ok, _result, {InMemory, final_bs}} =
-        SemanticConsolidator.consolidate(
-          backend: {InMemory, bs},
-          config: @config
-        )
+        SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, meta, _} = InMemory.get_metadata(["sem_a"], final_bs)
       merged = Map.fetch!(meta, "sem_a")
@@ -532,7 +609,9 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
   end
 
   describe "consolidate/1 orphan cleanup" do
-    test "removes tags with no remaining children" do
+    test "keeps tags whose links were transferred to the winner" do
+      stub_merge_llm()
+
       sem_a = %Semantic{
         id: "sem_a",
         proposition: "Elixir is functional",
@@ -566,49 +645,23 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
       bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
 
       {:ok, result, {InMemory, final_bs}} =
-        SemanticConsolidator.consolidate(
-          backend: {InMemory, bs},
-          config: @config
-        )
+        SemanticConsolidator.consolidate(consolidate_opts(bs))
 
-      # tag_only_b's link was transferred to sem_a, so it should survive
       {:ok, tag_b, _} = InMemory.get_node("tag_only_b", final_bs)
       assert tag_b.id == "tag_only_b"
 
-      # Both tags should still exist since winner inherited the links
       {:ok, tag_s, _} = InMemory.get_node("tag_shared", final_bs)
       assert tag_s.id == "tag_shared"
 
-      # Only sem_b was deleted (not tags, since links were transferred)
       assert result.deleted == 1
     end
 
     test "removes truly orphaned tags" do
-      sem_a = %Semantic{
-        id: "sem_a",
-        proposition: "Elixir is functional",
-        confidence: 1.0,
-        embedding: similar_embedding()
-      }
+      stub_merge_llm()
 
-      sem_b = %Semantic{
-        id: "sem_b",
-        proposition: "Elixir is a functional language",
-        confidence: 1.0,
-        embedding: similar_embedding_2()
-      }
-
-      tag = %Tag{id: "tag_1", label: "elixir", embedding: [0.5, 0.5, 0.0]}
       orphan_tag = %Tag{id: "tag_orphan", label: "orphan", embedding: [0.1, 0.1, 0.1]}
 
-      cs =
-        Changeset.new()
-        |> Changeset.add_node(sem_a)
-        |> Changeset.add_node(sem_b)
-        |> Changeset.add_node(tag)
-        |> Changeset.add_node(orphan_tag)
-        |> Changeset.add_link("sem_a", "tag_1", :membership)
-        |> Changeset.add_link("sem_b", "tag_1", :membership)
+      cs = Changeset.add_node(two_similar_nodes_changeset(), orphan_tag)
 
       high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
       low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
@@ -616,15 +669,11 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
       bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
 
       {:ok, result, {InMemory, final_bs}} =
-        SemanticConsolidator.consolidate(
-          backend: {InMemory, bs},
-          config: @config
-        )
+        SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, orphan, _} = InMemory.get_node("tag_orphan", final_bs)
       assert is_nil(orphan)
 
-      # sem_b + tag_orphan
       assert result.deleted == 2
       assert "tag_orphan" in result.deleted_ids
     end
@@ -632,9 +681,8 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
 
   describe "consolidate/1 cross-loser link remapping" do
     test "sibling link between two losers is remapped to their winners" do
-      # sem_b ~ sem_a (winner: sem_a), sem_d ~ sem_c (winner: sem_c)
-      # sem_b has sibling link to sem_d
-      # After merge: sem_a should have sibling link to sem_c
+      stub_merge_llm()
+
       sem_a = %Semantic{
         id: "sem_a",
         proposition: "Elixir is functional",
@@ -692,10 +740,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
         })
 
       {:ok, _result, {InMemory, final_bs}} =
-        SemanticConsolidator.consolidate(
-          backend: {InMemory, bs},
-          config: @config
-        )
+        SemanticConsolidator.consolidate(consolidate_opts(bs))
 
       {:ok, node_a, _} = InMemory.get_node("sem_a", final_bs)
       {:ok, node_c, _} = InMemory.get_node("sem_c", final_bs)
@@ -708,128 +753,6 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidatorTest do
 
       assert MapSet.member?(a_siblings, "sem_c")
       assert MapSet.member?(c_siblings, "sem_a")
-    end
-  end
-
-  describe "consolidate/1 pairwise discovery" do
-    test "finds duplicates even without shared tags" do
-      sem_a = %Semantic{
-        id: "sem_a",
-        proposition: "Elixir is functional",
-        confidence: 1.0,
-        embedding: similar_embedding()
-      }
-
-      sem_b = %Semantic{
-        id: "sem_b",
-        proposition: "Elixir is a functional language",
-        confidence: 1.0,
-        embedding: similar_embedding_2()
-      }
-
-      tag_a = %Tag{id: "tag_a", label: "elixir", embedding: [0.5, 0.5, 0.0]}
-      tag_b = %Tag{id: "tag_b", label: "functional", embedding: [0.3, 0.7, 0.0]}
-
-      cs =
-        Changeset.new()
-        |> Changeset.add_node(sem_a)
-        |> Changeset.add_node(sem_b)
-        |> Changeset.add_node(tag_a)
-        |> Changeset.add_node(tag_b)
-        |> Changeset.add_link("sem_a", "tag_a", :membership)
-        |> Changeset.add_link("sem_b", "tag_b", :membership)
-
-      high_meta = base_metadata(access_count: 10, cumulative_reward: 5.0, reward_count: 2)
-      low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
-
-      bs = build_backend(cs, %{"sem_a" => high_meta, "sem_b" => low_meta})
-
-      assert {:ok, %{deleted: deleted}, {InMemory, final_bs}} =
-               SemanticConsolidator.consolidate(
-                 backend: {InMemory, bs},
-                 config: @config
-               )
-
-      assert deleted >= 1
-
-      {:ok, survivor, _} = InMemory.get_node("sem_a", final_bs)
-      assert survivor.id == "sem_a"
-
-      {:ok, deleted_node, _} = InMemory.get_node("sem_b", final_bs)
-      assert is_nil(deleted_node)
-    end
-  end
-
-  describe "consolidate/1 when a node is both winner and loser in different pairs" do
-    test "tag links are preserved when node loses to higher-scored and wins against lower-scored" do
-      # Order in embeddable list matters: A appears before B, B before C.
-      # A (score 5) compared against B (score 10): B wins, A condemned.
-      # Inner loop continues for A: A compared against C (score 1): A "wins", C condemned.
-      # Tag is linked only to C. The tag's connection must end up on the true surviving node (B),
-      # not on A (which is being deleted).
-      sem_a = %Semantic{
-        id: "sem_a",
-        proposition: "Elixir is functional",
-        confidence: 1.0,
-        embedding: [1.0, 0.0, 0.0]
-      }
-
-      sem_b = %Semantic{
-        id: "sem_b",
-        proposition: "Elixir is a functional language",
-        confidence: 1.0,
-        embedding: [0.99, 0.1, 0.0]
-      }
-
-      sem_c = %Semantic{
-        id: "sem_c",
-        proposition: "Elixir is functional programming",
-        confidence: 1.0,
-        embedding: [0.98, 0.15, 0.0]
-      }
-
-      tag_only_c = %Tag{id: "tag_only_c", label: "c_tag", embedding: [0.2, 0.8, 0.0]}
-
-      cs =
-        Changeset.new()
-        |> Changeset.add_node(sem_a)
-        |> Changeset.add_node(sem_b)
-        |> Changeset.add_node(sem_c)
-        |> Changeset.add_node(tag_only_c)
-        |> Changeset.add_link("sem_c", "tag_only_c", :membership)
-
-      mid_meta = base_metadata(access_count: 5, cumulative_reward: 2.0, reward_count: 1)
-      high_meta = base_metadata(access_count: 20, cumulative_reward: 10.0, reward_count: 4)
-      low_meta = base_metadata(access_count: 1, cumulative_reward: 0.1, reward_count: 1)
-
-      bs =
-        build_backend(cs, %{
-          "sem_a" => mid_meta,
-          "sem_b" => high_meta,
-          "sem_c" => low_meta
-        })
-
-      {:ok, _result, {InMemory, final_bs}} =
-        SemanticConsolidator.consolidate(
-          backend: {InMemory, bs},
-          config: @config
-        )
-
-      {:ok, survivor_b, _} = InMemory.get_node("sem_b", final_bs)
-      assert survivor_b != nil, "highest-scored node must survive"
-
-      {:ok, tag, _} = InMemory.get_node("tag_only_c", final_bs)
-
-      assert tag != nil,
-             "tag linked to a condemned loser must be preserved, attached to the surviving winner"
-
-      tag_links = NodeProtocol.links(tag, :membership)
-
-      assert MapSet.member?(tag_links, "sem_b"),
-             "tag must be linked to the true surviving winner (sem_b)"
-
-      b_links = NodeProtocol.links(survivor_b, :membership)
-      assert MapSet.member?(b_links, "tag_only_c")
     end
   end
 end

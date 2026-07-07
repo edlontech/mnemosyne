@@ -1,47 +1,66 @@
 defmodule Mnemosyne.Pipeline.SemanticConsolidator do
   @moduledoc """
-  Discovers near-duplicate semantic nodes via embedding similarity
-  and merges the lower-scored one into the higher-scored survivor.
+  Discovers near-duplicate semantic nodes through the tag-induced
+  projection (nodes sharing at least one tag) and merges them via an
+  LLM that synthesizes a combined statement.
 
-  Transfers all graph connections (tag memberships, sibling links,
-  provenance links) from the loser to the winner and merges metadata.
+  For each semantic node, the most similar tag-neighbor above the
+  threshold is considered for merging. The LLM classifies the pair:
+  same-fact updates and well-merging topics are merged into the
+  higher-scored survivor, whose proposition is replaced by the merged
+  statement and re-embedded, while the other node's links and metadata
+  transfer to the survivor before it is deleted. Weakly related pairs
+  are kept separate to avoid stitching unrelated facts together.
   Cleans up orphaned tags after consolidation.
   """
 
+  require Logger
+
+  alias Mnemosyne.Config
+  alias Mnemosyne.Embedding
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Node.Helpers, as: NodeHelpers
   alias Mnemosyne.Graph.Similarity
+  alias Mnemosyne.LLM
   alias Mnemosyne.NodeMetadata
+  alias Mnemosyne.Pipeline.Prompts.MergeSemantic
 
-  @default_threshold 0.85
+  @default_threshold 0.7
 
   @doc """
-  Finds near-duplicate semantic nodes and merges them.
+  Finds near-duplicate semantic nodes via their shared tags and merges them.
 
-  Performs pairwise embedding comparison across all semantic nodes,
-  transfers the loser's links and metadata to the winner, then
-  deletes losers and any orphaned tags.
+  For each semantic node, candidates are the semantic nodes attached to at
+  least one of its tags. The most similar candidate above the threshold is
+  submitted to the LLM, which either synthesizes a merged statement (the
+  pair is consolidated into the higher-scored node) or rejects the merge
+  (both nodes are kept).
 
   ## Options
 
     * `:backend` - `{module, state}` tuple (required)
     * `:config` - `%Mnemosyne.Config{}` (required)
-    * `:threshold` - cosine similarity above which nodes are duplicates (default `#{@default_threshold}`)
+    * `:llm` - LLM adapter module (required)
+    * `:embedding` - embedding adapter module (required)
+    * `:threshold` - cosine similarity above which a pair is submitted for merging (default `#{@default_threshold}`)
 
-  Returns `{:ok, %{deleted: n, checked: n, deleted_ids: [id]}, {backend_mod, new_state}}`.
+  Returns `{:ok, %{deleted: n, checked: n, merged: n, deleted_ids: [id]}, {backend_mod, new_state}}`.
   """
   @spec consolidate(keyword()) ::
           {:ok,
            %{
              deleted: non_neg_integer(),
              checked: non_neg_integer(),
+             merged: non_neg_integer(),
              deleted_ids: [String.t()]
            }, {module(), term()}}
           | {:error, term()}
   def consolidate(opts) do
     {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
     config = Keyword.fetch!(opts, :config)
+    llm = Keyword.fetch!(opts, :llm)
+    embedding = Keyword.fetch!(opts, :embedding)
     threshold = Keyword.get(opts, :threshold, @default_threshold)
 
     with {:ok, sem_nodes, bs} <- backend_mod.get_nodes_by_type([:semantic], backend_state),
@@ -49,14 +68,13 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
          {:ok, all_meta, bs} <- backend_mod.get_metadata(sem_ids, bs) do
       params = semantic_params(config)
 
-      merge_pairs = find_merge_pairs(sem_nodes, all_meta, params, threshold)
-      loser_ids = Enum.map(merge_pairs, &elem(&1, 1))
-      merge_map = Map.new(merge_pairs, fn {winner, loser} -> {loser, winner} end)
+      candidate_pairs = find_candidate_pairs(sem_nodes, threshold)
 
-      {transfer_cs, merged_meta} = build_merge_ops(merge_pairs, merge_map, sem_nodes, all_meta)
+      {merge_cs, meta_updates, loser_ids, merged_count} =
+        decide_merges(candidate_pairs, sem_nodes, all_meta, params, llm, embedding, config)
 
-      with {:ok, bs} <- apply_if_nonempty(transfer_cs, backend_mod, bs),
-           {:ok, bs} <- update_if_nonempty(merged_meta, backend_mod, bs),
+      with {:ok, bs} <- apply_if_nonempty(merge_cs, backend_mod, bs),
+           {:ok, bs} <- update_if_nonempty(meta_updates, backend_mod, bs),
            {:ok, bs} <- backend_mod.delete_nodes(loser_ids, bs),
            {:ok, bs} <- backend_mod.delete_metadata(loser_ids, bs),
            {:ok, orphan_ids, bs} <- find_orphaned_tags(backend_mod, bs),
@@ -64,8 +82,12 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
         all_deleted = loser_ids ++ orphan_ids
 
         {:ok,
-         %{deleted: length(all_deleted), checked: length(sem_nodes), deleted_ids: all_deleted},
-         {backend_mod, bs}}
+         %{
+           deleted: length(all_deleted),
+           checked: length(sem_nodes),
+           merged: merged_count,
+           deleted_ids: all_deleted
+         }, {backend_mod, bs}}
       end
     end
   end
@@ -75,52 +97,132 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
       %{lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
   end
 
-  defp find_merge_pairs(sem_nodes, all_meta, params, threshold) do
+  # Tag-induced projection: for each semantic node, the merge candidates
+  # are the semantic nodes attached to at least one of its tags. The most
+  # similar candidate above the threshold forms a pair (top-1 per node).
+  defp find_candidate_pairs(sem_nodes, threshold) do
     embeddable = Enum.filter(sem_nodes, &(NodeProtocol.embedding(&1) != nil))
+    nodes_by_id = Map.new(embeddable, &{NodeProtocol.id(&1), &1})
 
-    {pairs, _condemned} =
-      embeddable
-      |> Enum.with_index()
-      |> Enum.reduce({[], MapSet.new()}, fn {node_a, idx_a}, acc ->
-        scan_candidates(node_a, idx_a, embeddable, all_meta, params, threshold, acc)
+    tag_to_sems =
+      Enum.reduce(embeddable, %{}, fn node, acc ->
+        id = NodeProtocol.id(node)
+
+        node
+        |> NodeProtocol.links(:membership)
+        |> Enum.reduce(acc, fn tag_id, inner ->
+          Map.update(inner, tag_id, [id], &[id | &1])
+        end)
       end)
 
-    pairs
+    {pairs, _paired} =
+      Enum.reduce(embeddable, {[], MapSet.new()}, fn node, acc ->
+        pair_node(node, nodes_by_id, tag_to_sems, threshold, acc)
+      end)
+
+    Enum.reverse(pairs)
   end
 
-  defp scan_candidates(node_a, idx_a, embeddable, all_meta, params, threshold, {pairs, condemned}) do
-    id_a = NodeProtocol.id(node_a)
+  defp pair_node(node, nodes_by_id, tag_to_sems, threshold, {pairs, paired}) do
+    id = NodeProtocol.id(node)
 
-    if MapSet.member?(condemned, id_a) do
-      {pairs, condemned}
+    with false <- MapSet.member?(paired, id),
+         other_id when is_binary(other_id) <-
+           best_tag_neighbor(node, nodes_by_id, tag_to_sems, paired, threshold) do
+      {[{id, other_id} | pairs], paired |> MapSet.put(id) |> MapSet.put(other_id)}
     else
-      embeddable
-      |> Enum.drop(idx_a + 1)
-      |> Enum.reduce({pairs, condemned}, fn node_b, acc ->
-        compare_pair(node_a, node_b, all_meta, params, threshold, acc)
-      end)
+      _ -> {pairs, paired}
     end
   end
 
-  defp compare_pair(node_a, node_b, all_meta, params, threshold, {pairs, condemned} = acc) do
-    id_a = NodeProtocol.id(node_a)
-    id_b = NodeProtocol.id(node_b)
+  defp best_tag_neighbor(node, nodes_by_id, tag_to_sems, paired, threshold) do
+    id = NodeProtocol.id(node)
+    embedding = NodeProtocol.embedding(node)
 
-    if MapSet.member?(condemned, id_a) or MapSet.member?(condemned, id_b) do
-      acc
+    node
+    |> NodeProtocol.links(:membership)
+    |> Enum.flat_map(&Map.get(tag_to_sems, &1, []))
+    |> Enum.uniq()
+    |> Enum.reject(&(&1 == id or MapSet.member?(paired, &1)))
+    |> Enum.map(fn neighbor_id ->
+      neighbor = Map.fetch!(nodes_by_id, neighbor_id)
+      {neighbor_id, Similarity.cosine_similarity(embedding, NodeProtocol.embedding(neighbor))}
+    end)
+    |> Enum.filter(fn {_id, sim} -> is_float(sim) and sim > threshold end)
+    |> Enum.max_by(&elem(&1, 1), fn -> nil end)
+    |> case do
+      nil -> nil
+      {neighbor_id, _sim} -> neighbor_id
+    end
+  end
+
+  defp decide_merges(candidate_pairs, sem_nodes, all_meta, params, llm, embedding, config) do
+    nodes_by_id = Map.new(sem_nodes, &{NodeProtocol.id(&1), &1})
+
+    {merges, merge_map} =
+      Enum.reduce(candidate_pairs, {[], %{}}, fn {id_a, id_b}, {merges, merge_map} ->
+        node_a = Map.fetch!(nodes_by_id, id_a)
+        node_b = Map.fetch!(nodes_by_id, id_b)
+
+        case llm_merge_decision(node_a, node_b, all_meta, llm, embedding, config) do
+          {:merge, statement, statement_embedding} ->
+            {winner_id, loser_id} = pick_winner_loser(id_a, id_b, all_meta, params)
+            winner = Map.fetch!(nodes_by_id, winner_id)
+            survivor = %{winner | proposition: statement, embedding: statement_embedding}
+
+            {[{survivor, winner_id, loser_id} | merges], Map.put(merge_map, loser_id, winner_id)}
+
+          :keep_both ->
+            {merges, merge_map}
+        end
+      end)
+
+    build_merge_ops(Enum.reverse(merges), merge_map, nodes_by_id, all_meta)
+  end
+
+  defp llm_merge_decision(node_a, node_b, all_meta, llm, embedding, config) do
+    {earlier, later} = order_by_creation(node_a, node_b, all_meta)
+
+    messages =
+      MergeSemantic.build_messages(%{
+        earlier: earlier.proposition,
+        later: later.proposition,
+        overlay: Config.resolve_overlay(config, :merge_semantic)
+      })
+
+    llm_opts = Config.llm_opts(config, :merge_semantic, [])
+
+    with {:ok, %LLM.Response{content: content}} <-
+           llm.chat_structured(messages, MergeSemantic.schema(), llm_opts),
+         {:ok, {:merge, statement}} <- MergeSemantic.parse_response(content),
+         {:ok, %Embedding.Response{vectors: [vector | _]}} <-
+           embedding.embed(statement, Config.embedding_opts(config)) do
+      {:merge, statement, vector}
     else
-      similarity =
-        Similarity.cosine_similarity(
-          NodeProtocol.embedding(node_a),
-          NodeProtocol.embedding(node_b)
-        )
+      {:ok, :keep_both} ->
+        :keep_both
 
-      if similarity > threshold do
-        {winner_id, loser_id} = pick_winner_loser(id_a, id_b, all_meta, params)
-        {[{winner_id, loser_id} | pairs], MapSet.put(condemned, loser_id)}
-      else
-        acc
-      end
+      error ->
+        Logger.warning("semantic merge failed, keeping both nodes: #{inspect(error)}")
+        :keep_both
+    end
+  end
+
+  defp order_by_creation(node_a, node_b, all_meta) do
+    created_a = creation_time(node_a, all_meta)
+    created_b = creation_time(node_b, all_meta)
+
+    if DateTime.compare(created_a, created_b) == :gt do
+      {node_b, node_a}
+    else
+      {node_a, node_b}
+    end
+  end
+
+  defp creation_time(node, all_meta) do
+    case Map.get(all_meta, NodeProtocol.id(node)) do
+      %NodeMetadata{created_at: %DateTime{} = dt} -> dt
+      _ -> DateTime.utc_now()
     end
   end
 
@@ -130,24 +232,27 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     if score_a >= score_b, do: {id_a, id_b}, else: {id_b, id_a}
   end
 
-  defp build_merge_ops([], _merge_map, _sem_nodes, _all_meta), do: {Changeset.new(), %{}}
+  defp build_merge_ops(merges, merge_map, nodes_by_id, all_meta) do
+    {cs, meta_updates} =
+      Enum.reduce(merges, {Changeset.new(), %{}}, fn {survivor, winner_id, loser_id},
+                                                     {cs, meta_updates} ->
+        loser = Map.fetch!(nodes_by_id, loser_id)
 
-  defp build_merge_ops(merge_pairs, merge_map, sem_nodes, all_meta) do
-    nodes_by_id = Map.new(sem_nodes, &{NodeProtocol.id(&1), &1})
+        cs =
+          cs
+          |> Changeset.add_node(survivor)
+          |> transfer_links(winner_id, loser, merge_map)
 
-    Enum.reduce(merge_pairs, {Changeset.new(), %{}}, fn {winner_id, loser_id},
-                                                        {cs, meta_updates} ->
-      loser = Map.get(nodes_by_id, loser_id)
-      cs = transfer_links(cs, winner_id, loser, merge_map)
+        winner_meta =
+          Map.get(meta_updates, winner_id) || Map.get(all_meta, winner_id, NodeMetadata.new())
 
-      winner_meta =
-        Map.get(meta_updates, winner_id) || Map.get(all_meta, winner_id, NodeMetadata.new())
+        merged = merge_metadata(winner_meta, Map.get(all_meta, loser_id))
 
-      loser_meta = Map.get(all_meta, loser_id)
-      merged = merge_metadata(winner_meta, loser_meta)
+        {cs, Map.put(meta_updates, winner_id, merged)}
+      end)
 
-      {cs, Map.put(meta_updates, winner_id, merged)}
-    end)
+    loser_ids = Enum.map(merges, fn {_survivor, _winner_id, loser_id} -> loser_id end)
+    {cs, meta_updates, loser_ids, length(merges)}
   end
 
   defp transfer_links(cs, winner_id, loser, merge_map) do
@@ -200,7 +305,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     end
   end
 
-  defp apply_if_nonempty(%Changeset{links: []}, _mod, bs), do: {:ok, bs}
+  defp apply_if_nonempty(%Changeset{additions: [], links: []}, _mod, bs), do: {:ok, bs}
   defp apply_if_nonempty(cs, mod, bs), do: mod.apply_changeset(cs, bs)
 
   defp update_if_nonempty(meta, _mod, bs) when map_size(meta) == 0, do: {:ok, bs}

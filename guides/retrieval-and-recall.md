@@ -14,8 +14,10 @@ The query is classified into one of four retrieval modes using an LLM call:
 |------|-------------|-------------------|
 | `:semantic` | Factual queries ("What is X?") | `semantic` |
 | `:procedural` | How-to queries ("How do I X?") | `procedural` |
-| `:episodic` | Experience queries ("What happened when?") | `episodic`, `subgoal` |
+| `:episodic` | Experience queries ("What happened when?") | `semantic` (mapped to provenance-linked `episodic`) |
 | `:mixed` | Queries spanning multiple types | `episodic`, `semantic`, `procedural`, `subgoal` |
+
+Episodic queries retrieve over the semantic graph and map the results back to the episodic nodes they were extracted from -- an episode's score aggregates the scores of all retrieved facts that trace back to it. When the graph has no semantic layer (or no provenance links), episodic retrieval falls back to direct embedding search over episodic and subgoal nodes.
 
 ### 2. Tag Generation
 
@@ -35,9 +37,11 @@ score = relevance * recency_factor * frequency_factor * reward_factor
 
 Candidates below the per-type threshold are filtered out, and only the top-k per type survive.
 
-### 4. Multi-Hop Traversal
+### 4. Controlled Multi-Hop Traversal
 
-After the initial candidates are found, the pipeline expands through routing nodes (Tags for semantic mode, Intents for procedural mode) to discover related knowledge:
+After the initial candidates are found, an LLM controller assesses each hop: if the accumulated candidates already contain enough evidence to answer the query, retrieval stops early. Otherwise the controller selects up to two focus candidates -- typically ones naming a bridge entity that must be resolved next -- whose content is concatenated with the query to form the next-hop query embedding.
+
+Each continued hop then expands through routing nodes (Tags for semantic mode, Intents for procedural mode) to discover related knowledge:
 
 ```
 Candidate semantic node
@@ -46,7 +50,9 @@ Candidate semantic node
       --> score and merge with initial candidates
 ```
 
-This runs for up to `max_hops` iterations (default: 2), each time expanding the candidate set through routing nodes and re-ranking.
+On top of the routing expansion, retrieval tags are regenerated per hop conditioned on the query and what has been retrieved so far, up to `config.refinement_budget` LLM calls per recall (default: 2, capped at `max_hops`). The regenerated tag embeddings inject fresh candidates outside the local neighborhood.
+
+This runs for up to `max_hops` iterations (default: 2), each time re-ranking the merged candidate set. The controller degrades gracefully: on any LLM failure it simply continues the hop without focus candidates.
 
 For episodic mode, an additional provenance expansion step follows Source nodes back to their originating episodes, applying a decay factor (0.5) to the parent's score.
 

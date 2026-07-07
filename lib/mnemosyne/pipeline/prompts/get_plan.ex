@@ -18,10 +18,34 @@ defmodule Mnemosyne.Pipeline.Prompts.GetPlan do
         content:
           """
           You are an expert at planning memory retrieval strategies.
-          Given a query and its classified memory mode, generate a list of search tags
-          that would help find relevant memories in a knowledge graph.
+          Given a query and its classified memory mode, generate a prioritized list of
+          search tags that would help find relevant memories in a knowledge graph.
 
-          Tags should be concise noun phrases or key concepts.
+          Goal-directed tag selection:
+          - Only generate tags that are HIGHLY LIKELY to retrieve evidence needed to
+            answer the query.
+          - Prefer tags that identify: the target entities the query asks about (people,
+            organizations, places, works, events), bridge entities likely required for
+            multi-hop retrieval, and explicit constraints (dates, years, roles, titles,
+            unique descriptors, numbers).
+          - Avoid low-signal or generic tags unlikely to retrieve helpful evidence
+            (e.g. "known for", "famous").
+
+          Concrete, grounded tags:
+          - The MAJORITY of tags MUST be short text spans copied VERBATIM from the query
+            (exact substrings).
+          - You MAY add a SMALL number of non-literal tags only if they are short,
+            strongly implied, and clearly necessary (e.g. a canonical name expansion or
+            a standard alias).
+          - If a tag is a verb, use its base (lemma) form (e.g. "direct", not "directed").
+
+          Forbidden tags:
+          - Do NOT generate the tag "user".
+          - Do NOT use meta-labels or type names such as "Name", "Person", "Year",
+            "Date", "City", "Country", "Location", "Genre", "Category".
+
+          Keep the total number of tags proportionate to the query (not "as many as
+          possible"), sorted by expected retrieval usefulness (most useful first).
           Respond with one tag per line. No numbering or bullet points.\
           """ <> overlay
       },

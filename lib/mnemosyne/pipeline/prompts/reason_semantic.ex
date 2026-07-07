@@ -53,6 +53,8 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonSemantic do
       %{
         role: :user,
         content: """
+        Current Date: #{Calendar.strftime(DateTime.utc_now(), "%Y-%m-%d")}
+
         Query: #{query}
 
         Known Facts:

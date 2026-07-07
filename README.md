@@ -59,15 +59,16 @@ Nodes are linked bidirectionally and indexed by type, tag, and subgoal for effic
 
 When the agent needs memory, the retrieval pipeline:
 
-1. Computes an embedding for the query
+1. Computes an embedding for the query and a set of retrieval tags
 2. Scores candidate nodes using a **value function** that combines cosine relevance with node metadata (recency, access frequency, reward quality) via a multiplicative formula
-3. Returns the highest-scoring knowledge, ranked by decision relevance
+3. Expands the candidate set through multi-hop traversal over routing nodes (Tags/Intents), with an LLM controller that stops early when the evidence is sufficient and focuses the next hop on the most promising candidates
+4. Returns the highest-scoring knowledge, ranked by decision relevance
 
 ### 4. Maintenance -- Graph Hygiene
 
 Two standalone operations keep the graph clean over time:
 
-- **Semantic consolidation** -- discovers near-duplicate semantic nodes that share tag-neighbors, compares their embeddings, and deletes the lower-scored duplicate when similarity exceeds a threshold
+- **Semantic consolidation** -- discovers near-duplicate semantic nodes that share tag-neighbors, compares their embeddings, and merges pairs above the similarity threshold through an LLM-synthesized statement (weakly related pairs are kept separate)
 - **Node decay** -- scores all nodes on recency, access frequency, and reward quality (without a query), pruning those below a threshold and cleaning up orphaned Tags/Intents
 
 Both are triggered explicitly via `Mnemosyne.consolidate_semantics/2` and `Mnemosyne.decay_nodes/2`.

@@ -27,6 +27,7 @@ defmodule Mnemosyne.Notifier do
              %{
                checked: non_neg_integer(),
                deleted: non_neg_integer(),
+               merged: non_neg_integer(),
                deleted_ids: [String.t()]
              }, metadata()}
           | {:validation_completed,

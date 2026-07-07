@@ -259,6 +259,28 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
       assert {:error, %PromptError{reason: :no_facts_extracted}} =
                GetSemantic.parse_response(%{})
     end
+
+    test "parse_response keeps valid source steps and dedupes them" do
+      response = %{
+        facts: [
+          %{proposition: "Fact", concepts: ["c"], source_steps: [1, 2, 2, 1]}
+        ]
+      }
+
+      assert {:ok, [%{source_steps: [1, 2]}]} = GetSemantic.parse_response(response)
+    end
+
+    test "parse_response drops invalid source steps and defaults to empty" do
+      response = %{
+        facts: [
+          %{proposition: "Fact a", concepts: ["c"], source_steps: [0, -1, "x", 3]},
+          %{proposition: "Fact b", concepts: ["c"]}
+        ]
+      }
+
+      assert {:ok, [%{source_steps: [3]}, %{source_steps: []}]} =
+               GetSemantic.parse_response(response)
+    end
   end
 
   describe "GetProcedural" do

@@ -4,6 +4,10 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
   from a trajectory segment, along with associated concept terms
   that serve as semantic routing indices.
 
+  Each fact carries the step numbers it derives from so that
+  provenance and sibling links can be created at the episodic-unit
+  level rather than the whole trajectory.
+
   Returns structured output via `chat_structured/3` using a Zoi schema.
   """
 
@@ -22,7 +26,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
               %{
                 proposition: Zoi.string(),
                 concepts: Zoi.list(Zoi.string()),
-                confidence: Zoi.float()
+                confidence: Zoi.float(),
+                source_steps: Zoi.list(Zoi.integer())
               },
               coerce: true
             )
@@ -52,22 +57,45 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
           Given a trajectory segment, extract propositional knowledge — facts the agent
           learned from this experience.
 
-          Quality constraints:
-          - Coreference resolution: replace all pronouns with their explicit referents.
-            Each proposition must be self-contained and interpretable without context.
-          - Deduplication: if multiple steps yield the same fact, emit it once.
-            Prefer the most specific formulation.
-          - Atomicity: each proposition must express exactly one fact. No compound statements.
+          Statement rules:
+          - Resolve vague references: if the subject of a statement is a pronoun or a
+            vague description (e.g. "the file", "the service", "it", "they"), rewrite it
+            so the subject is a fully specified, concrete name taken from the trajectory.
+            You are NOT allowed to keep vague subjects in the final statement.
+          - A statement does NOT have to be a single short sentence. It MAY be a compact
+            multi-sentence block that groups tightly related information, but it must
+            contain AT MOST 4 sentences total.
+          - Avoid redundancy: MERGE similar or overlapping facts into single,
+            comprehensive statements. Do NOT create multiple statements that repeat the
+            same core information with minor variations.
+          - Extract up to 10 facts, prioritizing QUALITY over quantity. If there are
+            fewer than 10 truly distinct facts, output fewer. Each fact must provide
+            unique information not covered by other facts.
 
-          For each fact, identify:
-          - "concepts": key terms (entities, topics) the fact relates to, used as semantic indices
+          Concept rules:
+          - For each fact, generate a list of concept terms used as semantic indices.
+          - The MAJORITY of concepts SHOULD be SHORT TEXT SPANS copied VERBATIM from the
+            statement (exact substrings): entity names, years, numbers, roles, object
+            types, descriptive words.
+          - When the original subject was vague, you MUST include at least one concept
+            naming the underlying entity explicitly.
+          - If a concept is a verb, use its base (lemma) form (e.g. "deploy", not
+            "deployed" or "deploying").
+          - NO schema or type labels: you are FORBIDDEN from using meta-labels such as
+            "Name", "Person", "Year", "Date", "Location", "Category". Concepts are
+            content-bearing phrases, not type names.
+
+          For each fact, also identify:
           - "confidence": your confidence in this proposition from 0.0 to 1.0
             (0.0 = uncertain/inferred, 1.0 = directly stated and unambiguous)
+          - "source_steps": the step numbers (as shown in the trajectory) the fact was
+            derived from
 
           Return your response as a JSON object with a "facts" array. Each fact has:
           - "proposition": a self-contained factual statement
           - "concepts": array of concept terms
-          - "confidence": float between 0.0 and 1.0\
+          - "confidence": float between 0.0 and 1.0
+          - "source_steps": array of step numbers (integers)\
           """ <> overlay
       },
       %{
@@ -91,7 +119,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
        %{
          proposition: fact[:proposition],
          concepts: fact[:concepts] || [],
-         confidence: parse_confidence(fact[:confidence])
+         confidence: parse_confidence(fact[:confidence]),
+         source_steps: parse_source_steps(fact[:source_steps])
        }
      end)}
   end
@@ -103,4 +132,10 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
   defp parse_confidence(val) when is_float(val) and val >= 0.0 and val <= 1.0, do: val
   defp parse_confidence(val) when is_number(val), do: max(0.0, min(1.0, val / 1))
   defp parse_confidence(_), do: 1.0
+
+  defp parse_source_steps(steps) when is_list(steps) do
+    steps |> Enum.filter(&(is_integer(&1) and &1 >= 1)) |> Enum.uniq()
+  end
+
+  defp parse_source_steps(_), do: []
 end

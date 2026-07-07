@@ -4,24 +4,26 @@ As the knowledge graph grows, it accumulates near-duplicate nodes and stale know
 
 ## Semantic Consolidation
 
-Discovers near-duplicate semantic nodes and deletes the lower-scored one.
+Discovers near-duplicate semantic nodes through their shared tags and merges them via an LLM-synthesized statement.
 
 ```elixir
-{:ok, %{deleted: 3, checked: 42}} = Mnemosyne.consolidate_semantics("my-repo")
+{:ok, %{deleted: 3, checked: 42, merged: 3}} = Mnemosyne.consolidate_semantics("my-repo")
 ```
 
 ### How It Works
 
 1. Loads all semantic nodes from the graph
 2. For each node, walks its Tag links to find tag-neighbor semantic nodes (nodes sharing a Tag)
-3. Compares embeddings between tag-neighbors via cosine similarity
-4. When similarity exceeds the threshold (default: 0.85), the node with the lower decay score is deleted
+3. Compares embeddings between tag-neighbors via cosine similarity and picks the single most similar neighbor above the threshold (default: 0.7)
+4. Asks the LLM to classify the pair and synthesize a merged statement:
+   - **Same fact updated** or **same topic that merges well**: the pair is merged. The higher decay-scored node survives, its proposition is replaced by the merged statement (and re-embedded), and the other node's links and metadata transfer to it before deletion.
+   - **Weakly related** (merging would stitch unrelated facts): both nodes are kept.
 
-The decay score uses the same formula as node decay (recency * frequency * reward), without a relevance component. This ensures the more useful node survives.
+The decay score uses the same formula as node decay (recency * frequency * reward), without a relevance component. This ensures the more useful node's identity survives.
 
 ### When to Run
 
-Run consolidation after large batches of knowledge extraction, when multiple sessions may have produced overlapping facts. It's a pure embedding comparison with no LLM calls, so it's relatively cheap.
+Run consolidation after large batches of knowledge extraction, when multiple sessions may have produced overlapping facts. Candidate discovery is embedding-based, but each candidate pair costs one LLM call for the merge decision, plus one embedding call per accepted merge.
 
 ```elixir
 # After committing several sessions
@@ -30,10 +32,10 @@ Mnemosyne.consolidate_semantics("my-repo")
 
 ### Tuning the Threshold
 
-The default threshold of 0.85 is conservative -- only very similar nodes get merged. Lower it to be more aggressive:
+The threshold controls which pairs are submitted to the LLM. The default of 0.7 relies on the LLM to reject weakly related pairs; raise it to reduce LLM calls:
 
 ```elixir
-Mnemosyne.consolidate_semantics("my-repo", threshold: 0.75)
+Mnemosyne.consolidate_semantics("my-repo", threshold: 0.85)
 ```
 
 ## Node Decay
