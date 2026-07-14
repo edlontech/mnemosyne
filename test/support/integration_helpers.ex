@@ -52,6 +52,7 @@ defmodule Mnemosyne.IntegrationCase do
   defp default_backend do
     case :os.type() do
       {:unix, :darwin} ->
+        {:ok, _apps} = Application.ensure_all_started(:emlx)
         Nx.global_default_backend({EMLX.Backend, device: :gpu})
 
       _ ->
