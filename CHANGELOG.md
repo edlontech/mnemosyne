@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.6...mnemosyne-v0.2.0) (2026-07-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* Improved consolidation, hop-control and refinement
+
+### Features
+
+* Improved consolidation, hop-control and refinement ([de620d6](https://github.com/edlontech/mnemosyne/commit/de620d63afc557f47f117e7dd32f1aefe5bfba21))
+
+
+### Bug Fixes
+
+* Updated to Elixir 1.20 and fixed warnings ([aa8f095](https://github.com/edlontech/mnemosyne/commit/aa8f095321a7dba24eb670b21619601a16def728))
+
 ## [0.1.6](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.5...mnemosyne-v0.1.6) (2026-05-08)
 
 
