@@ -610,7 +610,7 @@ defmodule Mnemosyne.MemoryStoreTest do
       expect(InMemory, :commit_ingestion, fn record, changeset, backend_state ->
         prior_record = %{record | receipt: original_receipt}
 
-        {:ok, ^original_receipt, raced_state} =
+        {:ok, :inserted, ^original_receipt, raced_state} =
           Mimic.call_original(InMemory, :commit_ingestion, [
             prior_record,
             authoritative,

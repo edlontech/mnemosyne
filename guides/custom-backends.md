@@ -4,7 +4,7 @@ The `GraphBackend` behaviour abstracts graph persistence and querying behind a u
 
 ## The GraphBackend Behaviour
 
-Your backend module must implement 10 callbacks:
+Your backend module must implement every callback in the behaviour:
 
 ```elixir
 defmodule MyApp.PostgresBackend do
@@ -58,6 +58,22 @@ def apply_changeset(changeset, state) do
   {:ok, state}
 end
 ```
+
+### Ingestion Commits
+
+```elixir
+@callback get_ingestion(String.t(), state()) ::
+  {:ok, ingestion_record() | nil, state()} | {:error, error()}
+
+@callback commit_ingestion(ingestion_record(), Changeset.t(), state()) ::
+  {:ok, :inserted | :existing, Mnemosyne.IngestionReceipt.t(), state()}
+  | {:error, error()}
+```
+
+`commit_ingestion/3` is the authoritative compare-and-set boundary for a source ID.
+It must atomically persist graph changes, metadata, and a new ingestion record, returning
+`:inserted`. For an equal existing record, it must discard the supplied changeset and return
+its original receipt with `:existing`; a different record returns a source-conflict error.
 
 ### Candidate Search
 

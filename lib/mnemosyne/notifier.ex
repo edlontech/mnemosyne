@@ -2,20 +2,24 @@ defmodule Mnemosyne.Notifier do
   @moduledoc """
   Behaviour for pluggable event notification.
 
-  Implementations receive real-time events about graph changes,
+  Implementations receive real-time events about graph changes, trajectory ingestion,
   session transitions, and maintenance operations.
   """
 
   require Logger
 
   @type metadata :: %{
+          optional(:repo_id) => String.t() | nil,
+          optional(:source_id) => String.t() | nil,
           optional(:session_id) => String.t() | nil,
           optional(:trace) => struct() | nil,
           optional(:node_ids) => [String.t()]
         }
 
   @type event ::
-          {:changeset_applied, Mnemosyne.Graph.Changeset.t(), metadata()}
+          {:trajectory_ingested, Mnemosyne.IngestionReceipt.t(), metadata()}
+          | {:trajectory_ingestion_failed, source_id :: String.t(), reason :: term(), metadata()}
+          | {:changeset_applied, Mnemosyne.Graph.Changeset.t(), metadata()}
           | {:nodes_deleted, [String.t()], metadata()}
           | {:decay_completed,
              %{

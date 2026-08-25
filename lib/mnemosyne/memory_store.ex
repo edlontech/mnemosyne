@@ -266,7 +266,9 @@ defmodule Mnemosyne.MemoryStore do
         {:noreply, put_in(state.pending_ingestions[source_id], pending)}
 
       %{digest: _other_digest} ->
-        {:reply, source_conflict(source_id), state}
+        error = source_conflict(source_id)
+        notify_ingestion_failure(source_id, error, state)
+        {:reply, error, state}
 
       nil ->
         admit_ingestion(trajectory, digest, opts, from, state)
@@ -438,9 +440,12 @@ defmodule Mnemosyne.MemoryStore do
         {:noreply, start_ingestion(trajectory, digest, opts, from, state)}
 
       {:ok, _record, _backend_state} ->
-        {:reply, source_conflict(trajectory.source_id), state}
+        error = source_conflict(trajectory.source_id)
+        notify_ingestion_failure(trajectory.source_id, error, state)
+        {:reply, error, state}
 
       {:error, _reason} = error ->
+        notify_ingestion_failure(trajectory.source_id, error, state)
         {:reply, error, state}
     end
   end
@@ -483,18 +488,39 @@ defmodule Mnemosyne.MemoryStore do
   defp handle_ingestion_complete(ref, {:error, _reason} = error, state) do
     Process.demonitor(ref, [:flush])
     source_id = Map.fetch!(state.ingestion_tasks, ref)
+    notify_ingestion_failure(source_id, error, state)
     {:noreply, complete_ingestion(state, source_id, error)}
   end
 
   defp handle_ingestion_crash(ref, reason, state) do
     source_id = Map.fetch!(state.ingestion_tasks, ref)
     error = {:error, PipelineError.exception(reason: {:task_crashed, reason})}
+    notify_ingestion_failure(source_id, error, state)
     {:noreply, complete_ingestion(state, source_id, error)}
   end
 
   defp source_conflict(source_id) do
     {:error, IngestionError.exception(source_id: source_id, reason: :source_conflict)}
   end
+
+  defp notify_ingestion_success(receipt, state) do
+    Notifier.safe_notify(
+      state.notifier,
+      state.repo_id,
+      {:trajectory_ingested, receipt,
+       Map.put(ingestion_metadata(state, receipt.source_id), :node_ids, receipt.node_ids)}
+    )
+  end
+
+  defp notify_ingestion_failure(source_id, {:error, reason}, state) do
+    Notifier.safe_notify(
+      state.notifier,
+      state.repo_id,
+      {:trajectory_ingestion_failed, source_id, reason, ingestion_metadata(state, source_id)}
+    )
+  end
+
+  defp ingestion_metadata(state, source_id), do: %{repo_id: state.repo_id, source_id: source_id}
 
   # -- Private: Write Lane --
 
@@ -600,7 +626,6 @@ defmodule Mnemosyne.MemoryStore do
 
       {{:error, reason} = error, {:commit_ingestion, source_id}} ->
         Logger.error("Write task failed (commit_ingestion): #{inspect(reason)}")
-        notify_write_failure(:commit_ingestion, reason, state)
         {:noreply, fail_ingestion_and_dispatch(source_id, error, state)}
 
       {{:error, reason} = error, {op_type, from}} ->
@@ -627,18 +652,17 @@ defmodule Mnemosyne.MemoryStore do
     }
 
     case backend_mod.commit_ingestion(record, merged_cs, backend_state) do
-      {:ok, authoritative_receipt, final_bs} ->
-        new_state =
-          state
-          |> Map.put(:backend, {backend_mod, final_bs})
-          |> complete_ingestion(source_id, {:ok, authoritative_receipt})
-          |> dispatch_write()
+      {:ok, :inserted, authoritative_receipt, final_bs} ->
+        new_state = Map.put(state, :backend, {backend_mod, final_bs})
+        notify_ingestion_success(authoritative_receipt, new_state)
+        {:noreply, complete_committed_ingestion(source_id, authoritative_receipt, new_state)}
 
-        {:noreply, new_state}
+      {:ok, :existing, authoritative_receipt, final_bs} ->
+        new_state = Map.put(state, :backend, {backend_mod, final_bs})
+        {:noreply, complete_committed_ingestion(source_id, authoritative_receipt, new_state)}
 
       {:error, reason} = error ->
         Logger.error("Backend commit_ingestion failed: #{inspect(reason)}")
-        notify_write_failure(:commit_ingestion, reason, state)
         {:noreply, fail_ingestion_and_dispatch(source_id, error, state)}
     end
   end
@@ -695,13 +719,6 @@ defmodule Mnemosyne.MemoryStore do
     case operation do
       {:commit_ingestion, source_id} ->
         Logger.error("Write task crashed (commit_ingestion): #{inspect(reason)}")
-
-        Notifier.safe_notify(
-          state.notifier,
-          state.repo_id,
-          {:write_crashed, :commit_ingestion, reason, %{}}
-        )
-
         error = {:error, PipelineError.exception(reason: {:task_crashed, reason})}
         {:noreply, fail_ingestion_and_dispatch(source_id, error, state)}
 
@@ -725,7 +742,15 @@ defmodule Mnemosyne.MemoryStore do
     end
   end
 
+  defp complete_committed_ingestion(source_id, receipt, state) do
+    state
+    |> complete_ingestion(source_id, {:ok, receipt})
+    |> dispatch_write()
+  end
+
   defp fail_ingestion_and_dispatch(source_id, error, state) do
+    notify_ingestion_failure(source_id, error, state)
+
     state
     |> complete_ingestion(source_id, error)
     |> Map.put(:write_active, nil)

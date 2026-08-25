@@ -84,7 +84,7 @@ defmodule Mnemosyne.Pipeline.DecayTest do
       }
 
       {:ok, backend} = InMemory.init([])
-      {:ok, ^receipt, backend} = InMemory.commit_ingestion(record, changeset, backend)
+      {:ok, :inserted, ^receipt, backend} = InMemory.commit_ingestion(record, changeset, backend)
 
       assert {:ok, %{deleted: 1, checked: 1}, {InMemory, final_backend}} =
                Decay.decay(backend: {InMemory, backend}, config: @config)

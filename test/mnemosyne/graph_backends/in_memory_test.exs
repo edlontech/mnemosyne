@@ -93,7 +93,9 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
         |> Changeset.add_node(semantic_node("s1", @test_vector))
         |> Changeset.put_metadata("s1", metadata)
 
-      assert {:ok, ^receipt, state} = InMemory.commit_ingestion(record, changeset, state)
+      assert {:ok, :inserted, ^receipt, state} =
+               InMemory.commit_ingestion(record, changeset, state)
+
       assert {:ok, %Semantic{id: "s1"}, ^state} = InMemory.get_node("s1", state)
       assert {:ok, %{"s1" => ^metadata}, ^state} = InMemory.get_metadata(["s1"], state)
       assert {:ok, ^record, ^state} = InMemory.get_ingestion("source-1", state)
@@ -103,7 +105,9 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
       {:ok, state} = InMemory.init([])
       record = ingestion_record()
       first_changeset = Changeset.add_node(Changeset.new(), semantic_node("s1", @test_vector))
-      {:ok, original_receipt, state} = InMemory.commit_ingestion(record, first_changeset, state)
+
+      {:ok, :inserted, original_receipt, state} =
+        InMemory.commit_ingestion(record, first_changeset, state)
 
       retry_record =
         ingestion_record(
@@ -116,7 +120,7 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
         |> Changeset.add_node(semantic_node("s2", @alt_vector))
         |> Changeset.put_metadata("s2", NodeMetadata.new())
 
-      assert {:ok, ^original_receipt, ^state} =
+      assert {:ok, :existing, ^original_receipt, ^state} =
                InMemory.commit_ingestion(retry_record, retry_changeset, state)
 
       assert {:ok, nil, ^state} = InMemory.get_node("s2", state)
@@ -126,7 +130,9 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
     test "a different digest returns a source conflict without mutation" do
       {:ok, state} = InMemory.init([])
       record = ingestion_record()
-      {:ok, _receipt, state} = InMemory.commit_ingestion(record, Changeset.new(), state)
+
+      {:ok, :inserted, _receipt, state} =
+        InMemory.commit_ingestion(record, Changeset.new(), state)
 
       conflicting_record = ingestion_record(payload_digest: <<9, 9, 9>>)
 
@@ -143,7 +149,9 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
     test "a different fingerprint version returns a source conflict without mutation" do
       {:ok, state} = InMemory.init([])
       record = ingestion_record()
-      {:ok, _receipt, state} = InMemory.commit_ingestion(record, Changeset.new(), state)
+
+      {:ok, :inserted, _receipt, state} =
+        InMemory.commit_ingestion(record, Changeset.new(), state)
 
       conflicting_record = ingestion_record(fingerprint_version: 2)
 
@@ -158,7 +166,7 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
       record = ingestion_record()
       changeset = Changeset.add_node(Changeset.new(), semantic_node("s1", @test_vector))
 
-      {:ok, _receipt, state} = InMemory.commit_ingestion(record, changeset, state)
+      {:ok, :inserted, _receipt, state} = InMemory.commit_ingestion(record, changeset, state)
       {:ok, state} = InMemory.delete_nodes(["s1"], state)
 
       assert {:ok, nil, ^state} = InMemory.get_node("s1", state)

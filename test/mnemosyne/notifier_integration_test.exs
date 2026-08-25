@@ -187,6 +187,501 @@ defmodule Mnemosyne.NotifierIntegrationTest do
   end
 end
 
+defmodule Mnemosyne.NotifierIngestionIntegrationTest do
+  use ExUnit.Case, async: false
+
+  import Mimic
+
+  alias Mnemosyne.Config
+  alias Mnemosyne.Errors.Framework.PipelineError
+  alias Mnemosyne.Errors.Framework.StorageError
+  alias Mnemosyne.Errors.Invalid.IngestionError
+  alias Mnemosyne.Graph.Changeset
+  alias Mnemosyne.Graph.Node.Semantic
+  alias Mnemosyne.Graph.Node.Tag
+  alias Mnemosyne.GraphBackends.InMemory
+  alias Mnemosyne.GraphBackends.Persistence.DETS
+  alias Mnemosyne.MemoryStore
+  alias Mnemosyne.Pipeline.Ingestion
+  alias Mnemosyne.TestNotifier
+  alias Mnemosyne.Trajectory
+
+  @moduletag :tmp_dir
+
+  setup :set_mimic_global
+
+  setup do
+    TestNotifier.setup()
+    :ok
+  end
+
+  defmodule RaisingNotifier do
+    @behaviour Mnemosyne.Notifier
+
+    @impl true
+    def notify(_repo_id, _event), do: raise("boom")
+  end
+
+  defmodule BlockingNotifier do
+    @behaviour Mnemosyne.Notifier
+
+    @impl true
+    def notify(_repo_id, {:trajectory_ingested, _receipt, _metadata} = event) do
+      {test_pid, ref} = :persistent_term.get({__MODULE__, :test})
+      send(test_pid, {:notifier_entered, event, self()})
+
+      receive do
+        {:release_notifier, ^ref} -> :ok
+      end
+    end
+
+    @impl true
+    def notify(_repo_id, _event), do: :ok
+  end
+
+  defp build_config do
+    {:ok, config} =
+      Zoi.parse(Config.t(), %{
+        llm: %{model: "test-model", opts: %{}},
+        embedding: %{model: "test-embed", opts: %{}}
+      })
+
+    config
+  end
+
+  defp start_store(tmp_dir, opts) do
+    name = :"notifier_ingestion_#{System.unique_integer([:positive])}"
+    task_sup = :"notifier_ingestion_task_#{System.unique_integer([:positive])}"
+
+    dets_path =
+      Path.join(tmp_dir, "notifier_ingestion_#{System.unique_integer([:positive])}.dets")
+
+    start_supervised!({Task.Supervisor, name: task_sup})
+
+    start_supervised!(
+      {MemoryStore,
+       Keyword.merge(
+         [
+           name: name,
+           backend: {InMemory, persistence: {DETS, path: dets_path}},
+           config: build_config(),
+           llm: Mnemosyne.MockLLM,
+           embedding: Mnemosyne.MockEmbedding,
+           task_supervisor: task_sup,
+           notifier: TestNotifier
+         ],
+         opts
+       )},
+      id: name
+    )
+  end
+
+  defp trajectory(overrides \\ []) do
+    struct!(
+      Trajectory,
+      Keyword.merge(
+        [
+          source_id: "source-1",
+          goal: "Diagnose timeouts",
+          steps: [%{observation: "Timeout", action: "Inspect logs"}],
+          metadata: %{}
+        ],
+        overrides
+      )
+    )
+  end
+
+  defp changeset(id),
+    do: Changeset.add_node(Changeset.new(), %Semantic{id: id, proposition: id, confidence: 0.9})
+
+  defp start_ingest(store, input), do: Task.async(fn -> MemoryStore.ingest(store, input) end)
+
+  defp enqueue_ingest(store, input) do
+    {:ok, digest} = Ingestion.prepare(input)
+    tag = make_ref()
+    send(store, {:"$gen_call", {self(), tag}, {:ingest, input, digest, []}})
+    MemoryStore.get_graph(store)
+    tag
+  end
+
+  defp ingestion_events(repo_id), do: TestNotifier.events(repo_id)
+
+  defp ingestion_metadata(repo_id, source_id), do: %{repo_id: repo_id, source_id: source_id}
+
+  test "commits before notifying and blocks all coalesced replies until notification completes",
+       %{
+         tmp_dir: tmp_dir
+       } do
+    test_pid = self()
+    repo_id = "ingestion-notifier-repo"
+    input = trajectory()
+    ref = make_ref()
+    :persistent_term.put({BlockingNotifier, :test}, {self(), ref})
+    on_exit(fn -> :persistent_term.erase({BlockingNotifier, :test}) end)
+
+    stub(Ingestion, :run, fn _input, _opts ->
+      send(test_pid, {:extraction_started, self()})
+
+      receive do
+        {:finish_extraction, result} -> result
+      end
+    end)
+
+    expect(InMemory, :commit_ingestion, fn record, final_changeset, backend_state ->
+      result =
+        Mimic.call_original(InMemory, :commit_ingestion, [record, final_changeset, backend_state])
+
+      send(test_pid, :backend_committed)
+      result
+    end)
+
+    store = start_store(tmp_dir, repo_id: repo_id, notifier: BlockingNotifier)
+    first = start_ingest(store, input)
+    assert_receive {:extraction_started, worker}
+    second_tag = enqueue_ingest(store, input)
+
+    send(worker, {:finish_extraction, {:ok, changeset("committed")}})
+
+    assert_receive :backend_committed
+    assert_receive {:notifier_entered, {:trajectory_ingested, receipt, metadata}, notifier_pid}
+    assert metadata == %{repo_id: repo_id, source_id: "source-1", node_ids: ["committed"]}
+    assert Task.yield(first, 0) == nil
+    refute_receive {^second_tag, _}, 0
+
+    send(notifier_pid, {:release_notifier, ref})
+
+    assert {:ok, ^receipt} = Task.await(first)
+    assert_receive {^second_tag, {:ok, ^receipt}}
+  end
+
+  test "coalesces success and suppresses persisted equal retry notifications", %{tmp_dir: tmp_dir} do
+    test_pid = self()
+    repo_id = "coalesced-notifier-repo"
+    input = trajectory()
+
+    stub(Ingestion, :run, fn _input, _opts ->
+      send(test_pid, {:extraction_started, self()})
+
+      receive do
+        {:finish_extraction, result} -> result
+      end
+    end)
+
+    store = start_store(tmp_dir, repo_id: repo_id)
+    first = start_ingest(store, input)
+    assert_receive {:extraction_started, worker}
+    second_tag = enqueue_ingest(store, input)
+
+    send(worker, {:finish_extraction, {:ok, changeset("coalesced")}})
+
+    assert {:ok, receipt} = Task.await(first)
+    assert_receive {^second_tag, {:ok, ^receipt}}
+
+    assert [
+             {:trajectory_ingested, ^receipt,
+              %{repo_id: ^repo_id, source_id: "source-1", node_ids: ["coalesced"]}}
+           ] = ingestion_events(repo_id)
+
+    assert {:ok, ^receipt} = MemoryStore.ingest(store, input)
+
+    assert [
+             {:trajectory_ingested, ^receipt,
+              %{repo_id: ^repo_id, source_id: "source-1", node_ids: ["coalesced"]}}
+           ] = ingestion_events(repo_id)
+  end
+
+  test "notifies a pending source conflict without turning it into a success", %{tmp_dir: tmp_dir} do
+    test_pid = self()
+    repo_id = "conflict-notifier-repo"
+    input = trajectory()
+
+    stub(Ingestion, :run, fn _input, _opts ->
+      send(test_pid, {:extraction_started, self()})
+
+      receive do
+        {:finish_extraction, result} -> result
+      end
+    end)
+
+    store = start_store(tmp_dir, repo_id: repo_id)
+    first = start_ingest(store, input)
+    assert_receive {:extraction_started, worker}
+
+    assert {:error, %IngestionError{} = error} =
+             MemoryStore.ingest(store, trajectory(goal: "Different goal"))
+
+    assert [
+             {:trajectory_ingestion_failed, "source-1", ^error, metadata}
+           ] = ingestion_events(repo_id)
+
+    assert metadata == ingestion_metadata(repo_id, "source-1")
+
+    send(worker, {:finish_extraction, {:ok, changeset("winner")}})
+    assert {:ok, _receipt} = Task.await(first)
+
+    TestNotifier.setup()
+
+    assert {:error, %IngestionError{} = persisted_error} =
+             MemoryStore.ingest(store, trajectory(goal: "Different again"))
+
+    assert [
+             {:trajectory_ingestion_failed, "source-1", ^persisted_error, persisted_metadata}
+           ] = ingestion_events(repo_id)
+
+    assert persisted_metadata == ingestion_metadata(repo_id, "source-1")
+  end
+
+  test "notifies extraction and task failures with their original errors", %{tmp_dir: tmp_dir} do
+    repo_id = "extraction-notifier-repo"
+    extraction_error = PipelineError.exception(reason: :extraction_failed)
+
+    stub(Ingestion, :run, fn
+      %Trajectory{source_id: "extraction"}, _opts -> {:error, extraction_error}
+      %Trajectory{source_id: "crash"}, _opts -> raise "boom"
+    end)
+
+    store = start_store(tmp_dir, repo_id: repo_id)
+
+    assert {:error, ^extraction_error} =
+             MemoryStore.ingest(store, trajectory(source_id: "extraction"))
+
+    assert {:error, %PipelineError{reason: {:task_crashed, {%RuntimeError{message: "boom"}, _}}}} =
+             MemoryStore.ingest(store, trajectory(source_id: "crash"))
+
+    events = ingestion_events(repo_id)
+    assert length(events) == 2
+
+    assert Enum.any?(events, fn
+             {:trajectory_ingestion_failed, "extraction", ^extraction_error, extraction_metadata} ->
+               extraction_metadata == ingestion_metadata(repo_id, "extraction")
+
+             _ ->
+               false
+           end)
+
+    assert Enum.any?(events, fn
+             {:trajectory_ingestion_failed, "crash",
+              %PipelineError{reason: {:task_crashed, {%RuntimeError{message: "boom"}, _}}},
+              crash_metadata} ->
+               crash_metadata == ingestion_metadata(repo_id, "crash")
+
+             _ ->
+               false
+           end)
+  end
+
+  test "notifies backend read, merge, and commit failures with the returned error", %{
+    tmp_dir: tmp_dir
+  } do
+    repo_id = "storage-notifier-repo"
+    read_error = StorageError.exception(operation: :get_ingestion, reason: :unavailable)
+    merge_error = StorageError.exception(operation: :get_nodes_by_type, reason: :unavailable)
+    commit_error = StorageError.exception(operation: :commit_ingestion, reason: :disk_full)
+
+    stub(Ingestion, :run, fn
+      %Trajectory{source_id: "merge"}, _opts ->
+        {:ok,
+         Changeset.new()
+         |> Changeset.add_node(%Semantic{id: "merge", proposition: "merge", confidence: 0.9})
+         |> Changeset.add_node(%Tag{id: "merge-tag", label: "merge"})}
+
+      input, _opts ->
+        {:ok, changeset(input.source_id)}
+    end)
+
+    stub(InMemory, :get_ingestion, fn
+      "read", _backend_state ->
+        {:error, read_error}
+
+      source_id, backend_state ->
+        Mimic.call_original(InMemory, :get_ingestion, [source_id, backend_state])
+    end)
+
+    stub(InMemory, :get_nodes_by_type, fn
+      [:tag], _backend_state ->
+        {:error, merge_error}
+
+      types, backend_state ->
+        Mimic.call_original(InMemory, :get_nodes_by_type, [types, backend_state])
+    end)
+
+    stub(InMemory, :commit_ingestion, fn record, final_changeset, backend_state ->
+      if record.source_id == "commit" do
+        {:error, commit_error}
+      else
+        Mimic.call_original(InMemory, :commit_ingestion, [record, final_changeset, backend_state])
+      end
+    end)
+
+    store = start_store(tmp_dir, repo_id: repo_id)
+
+    assert {:error, ^read_error} = MemoryStore.ingest(store, trajectory(source_id: "read"))
+    assert {:error, ^merge_error} = MemoryStore.ingest(store, trajectory(source_id: "merge"))
+    assert {:error, ^commit_error} = MemoryStore.ingest(store, trajectory(source_id: "commit"))
+
+    events = ingestion_events(repo_id)
+    assert length(events) == 3
+
+    for {source_id, error} <- [
+          {"read", read_error},
+          {"merge", merge_error},
+          {"commit", commit_error}
+        ] do
+      assert Enum.any?(events, fn
+               {:trajectory_ingestion_failed, ^source_id, ^error, metadata} ->
+                 metadata == ingestion_metadata(repo_id, source_id)
+
+               _ ->
+                 false
+             end)
+    end
+  end
+
+  test "suppresses an outcome for a late equal compare-and-set receipt", %{tmp_dir: tmp_dir} do
+    repo_id = "late-equal-notifier-repo"
+    input = trajectory(source_id: "late-equal")
+    calls = :counters.new(1, [:atomics])
+
+    stub(Ingestion, :run, fn _input, _opts -> {:ok, changeset("late-equal-node")} end)
+
+    stub(InMemory, :get_ingestion, fn source_id, backend_state ->
+      :counters.add(calls, 1, 1)
+
+      if :counters.get(calls, 1) == 2 do
+        {:ok, nil, backend_state}
+      else
+        Mimic.call_original(InMemory, :get_ingestion, [source_id, backend_state])
+      end
+    end)
+
+    store = start_store(tmp_dir, repo_id: repo_id)
+    assert {:ok, receipt} = MemoryStore.ingest(store, input)
+
+    assert [
+             {:trajectory_ingested, ^receipt,
+              %{repo_id: ^repo_id, source_id: "late-equal", node_ids: ["late-equal-node"]}}
+           ] = ingestion_events(repo_id)
+
+    assert {:ok, ^receipt} = MemoryStore.ingest(store, input)
+
+    assert [
+             {:trajectory_ingested, ^receipt,
+              %{repo_id: ^repo_id, source_id: "late-equal", node_ids: ["late-equal-node"]}}
+           ] = ingestion_events(repo_id)
+  end
+
+  test "notifies a source conflict returned by the backend compare-and-set", %{tmp_dir: tmp_dir} do
+    repo_id = "cas-conflict-notifier-repo"
+    calls = :counters.new(1, [:atomics])
+
+    stub(Ingestion, :run, fn input, _opts -> {:ok, changeset("#{input.source_id}-node")} end)
+
+    stub(InMemory, :get_ingestion, fn source_id, backend_state ->
+      :counters.add(calls, 1, 1)
+
+      if :counters.get(calls, 1) == 2 do
+        {:ok, nil, backend_state}
+      else
+        Mimic.call_original(InMemory, :get_ingestion, [source_id, backend_state])
+      end
+    end)
+
+    store = start_store(tmp_dir, repo_id: repo_id)
+    input = trajectory(source_id: "cas-conflict")
+    assert {:ok, _receipt} = MemoryStore.ingest(store, input)
+    TestNotifier.setup()
+
+    assert {:error, %IngestionError{} = error} =
+             MemoryStore.ingest(
+               store,
+               trajectory(source_id: "cas-conflict", goal: "Different goal")
+             )
+
+    assert [
+             {:trajectory_ingestion_failed, "cas-conflict", ^error,
+              %{repo_id: ^repo_id, source_id: "cas-conflict"}}
+           ] = ingestion_events(repo_id)
+  end
+
+  test "notifies a write-time merge task crash without a generic write event", %{tmp_dir: tmp_dir} do
+    repo_id = "merge-crash-notifier-repo"
+
+    changeset =
+      Changeset.new()
+      |> Changeset.add_node(%Semantic{
+        id: "merge-crash",
+        proposition: "merge crash",
+        confidence: 0.9
+      })
+      |> Changeset.add_node(%Tag{id: "merge-crash-tag", label: "merge crash"})
+
+    stub(Ingestion, :run, fn _input, _opts -> {:ok, changeset} end)
+
+    stub(InMemory, :get_nodes_by_type, fn
+      [:tag], _backend_state ->
+        raise "merge boom"
+
+      types, backend_state ->
+        Mimic.call_original(InMemory, :get_nodes_by_type, [types, backend_state])
+    end)
+
+    store = start_store(tmp_dir, repo_id: repo_id)
+
+    assert {:error,
+            %PipelineError{reason: {:task_crashed, {%RuntimeError{message: "merge boom"}, _}}}} =
+             MemoryStore.ingest(store, trajectory(source_id: "merge-crash"))
+
+    assert [
+             {:trajectory_ingestion_failed, "merge-crash",
+              %PipelineError{reason: {:task_crashed, {%RuntimeError{message: "merge boom"}, _}}},
+              %{repo_id: ^repo_id, source_id: "merge-crash"}}
+           ] = ingestion_events(repo_id)
+  end
+
+  test "does not notify invalid input rejected before admission", %{tmp_dir: tmp_dir} do
+    repo_id = "invalid-notifier-repo"
+    store = start_store(tmp_dir, repo_id: repo_id)
+
+    assert {:error, %IngestionError{reason: :invalid_goal}} =
+             MemoryStore.ingest(store, trajectory(goal: " "))
+
+    assert ingestion_events(repo_id) == []
+  end
+
+  test "isolates notifier failures from persistence, retries, and failure cleanup", %{
+    tmp_dir: tmp_dir
+  } do
+    retries = :counters.new(1, [:atomics])
+
+    stub(Ingestion, :run, fn
+      %Trajectory{source_id: "failed"}, _opts ->
+        :counters.add(retries, 1, 1)
+
+        if :counters.get(retries, 1) == 1 do
+          {:error, :extraction_failed}
+        else
+          {:ok, changeset("recovered")}
+        end
+
+      _input, _opts ->
+        {:ok, changeset("isolated")}
+    end)
+
+    store = start_store(tmp_dir, repo_id: "raising-notifier-repo", notifier: RaisingNotifier)
+    input = trajectory()
+
+    assert {:ok, receipt} = MemoryStore.ingest(store, input)
+    assert %{nodes: %{"isolated" => %Semantic{}}} = MemoryStore.get_graph(store)
+    assert {:ok, ^receipt} = MemoryStore.ingest(store, input)
+
+    assert {:error, :extraction_failed} =
+             MemoryStore.ingest(store, trajectory(source_id: "failed"))
+
+    assert {:ok, %{node_ids: ["recovered"]}} =
+             MemoryStore.ingest(store, trajectory(source_id: "failed"))
+  end
+end
+
 defmodule Mnemosyne.NotifierSessionIntegrationTest do
   use ExUnit.Case, async: false
   use AssertEventually, timeout: 500, interval: 10

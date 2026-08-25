@@ -261,7 +261,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
 
       {:ok, state} = InMemory.init(persistence: persistence)
       changeset = Changeset.add_node(Changeset.new(), semantic_node("s1"))
-      {:ok, receipt, state} = InMemory.commit_ingestion(record, changeset, state)
+      {:ok, :inserted, receipt, state} = InMemory.commit_ingestion(record, changeset, state)
 
       assert receipt == record.receipt
       assert :ok = :dets.close(state.persistence |> elem(1) |> Map.fetch!(:ref))
@@ -299,7 +299,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
         |> Changeset.add_node(semantic_node("s1"))
         |> Changeset.put_metadata("s1", original_metadata)
 
-      {:ok, _receipt, state} =
+      {:ok, :inserted, _receipt, state} =
         InMemory.commit_ingestion(original_record, original_changeset, state)
 
       original_graph = state.graph

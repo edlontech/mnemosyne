@@ -68,7 +68,7 @@ defmodule Mnemosyne.GraphBackends.InMemory do
 
         case maybe_persist_ingestion(record, changeset, state.persistence) do
           :ok ->
-            {:ok, record.receipt, updated_state}
+            {:ok, :inserted, record.receipt, updated_state}
 
           {:error, reason} ->
             {:error, StorageError.exception(operation: :commit_ingestion, reason: reason)}
@@ -76,7 +76,7 @@ defmodule Mnemosyne.GraphBackends.InMemory do
 
       %{fingerprint_version: version, payload_digest: digest, receipt: receipt}
       when version == record.fingerprint_version and digest == record.payload_digest ->
-        {:ok, receipt, state}
+        {:ok, :existing, receipt, state}
 
       _different ->
         {:error, IngestionError.exception(source_id: record.source_id, reason: :source_conflict)}
