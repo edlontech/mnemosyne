@@ -1,121 +1,82 @@
 # Multi-Repository Isolation
 
-Mnemosyne supports multiple isolated knowledge graphs under a single supervision tree. This guide covers when and how to use multiple repositories.
+Mnemosyne supports multiple isolated knowledge graphs under one supervision tree. Each repository has its own `MemoryStore` process and `GraphBackend` state.
 
 ## When to Use Multiple Repos
 
-Each repository gets its own MemoryStore process and GraphBackend instance. Knowledge in one repo is completely invisible to another. Use separate repos when:
-
-- **Different projects or domains** should not cross-pollinate knowledge
-- **Per-user isolation** in multi-tenant applications
-- **Separate contexts** within the same agent (e.g., work knowledge vs. personal knowledge)
-- **Testing** alongside production graphs
-
-## Opening and Closing Repos
+Use separate repos for project, tenant, user, environment, or domain boundaries that must not share knowledge.
 
 ```elixir
-# Open repos with different backends
-{:ok, _} = Mnemosyne.open_repo("project-alpha",
-  backend: {Mnemosyne.GraphBackends.InMemory,
-    persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: "priv/memory/alpha.dets"}})
+{:ok, _} =
+  Mnemosyne.open_repo("project-alpha",
+    backend:
+      {Mnemosyne.GraphBackends.InMemory,
+       persistence:
+         {Mnemosyne.GraphBackends.Persistence.DETS,
+          path: "priv/memory/alpha.dets"}}
+  )
 
-{:ok, _} = Mnemosyne.open_repo("project-beta",
-  backend: {Mnemosyne.GraphBackends.InMemory, []})
-
-# List open repos
-["project-alpha", "project-beta"] = Mnemosyne.list_repos()
-
-# Close when done
-:ok = Mnemosyne.close_repo("project-alpha")
+{:ok, _} =
+  Mnemosyne.open_repo("project-beta",
+    backend: {Mnemosyne.GraphBackends.InMemory, []}
+  )
 ```
 
-Opening a repo that's already open returns an error:
+`Mnemosyne.list_repos/1` lists open IDs, and `Mnemosyne.close_repo/2` closes one repository. Opening an existing ID returns `RepoError` with `:already_open`; using a missing ID returns `NotFoundError` for `:repo`.
+
+## Repo-Scoped Source IDs
+
+A trajectory's `source_id` is stable within its target repo, not globally unique. These two complete trajectories have independent identity records:
 
 ```elixir
-{:error, %Mnemosyne.Errors.Framework.RepoError{reason: :already_open}} =
-  Mnemosyne.open_repo("project-alpha", backend: {Mnemosyne.GraphBackends.InMemory, []})
+trajectory = %Mnemosyne.Trajectory{
+  source_id: "task-42",
+  goal: "Explore caching",
+  steps: [
+    %{observation: "A cache miss occurred", action: "Inspected the key namespace"}
+  ],
+  metadata: %{workflow: "diagnosis"}
+}
+
+{:ok, alpha_receipt} = Mnemosyne.ingest("project-alpha", trajectory)
+{:ok, beta_receipt} = Mnemosyne.ingest("project-beta", trajectory)
 ```
 
-## Per-Repo Configuration
+Within either repo, an equal retry returns that repo's exact original receipt and a different payload for `"task-42"` conflicts. Source records and graph content never cross repo boundaries.
 
-Shared configuration (LLM model, embedding model) is set once at supervisor startup. Each repo inherits these defaults but can override them:
-
-```elixir
-# Shared defaults from supervisor
-{Mnemosyne.Supervisor,
-  config: %Mnemosyne.Config{
-    llm: %{model: "gpt-4o-mini", opts: %{}},
-    embedding: %{model: "text-embedding-3-small", opts: %{}}
-  },
-  llm: Mnemosyne.Adapters.SycophantLLM,
-  embedding: Mnemosyne.Adapters.SycophantEmbedding}
-
-# This repo uses a different LLM adapter
-Mnemosyne.open_repo("special-project",
-  backend: {Mnemosyne.GraphBackends.InMemory, []},
-  llm: MyApp.ClaudeLLMAdapter)
-```
-
-Backend configuration is always per-repo since each repo needs its own storage.
-
-## Sessions and Repos
-
-Sessions are bound to a specific repo via the `:repo` option:
+All other operations also take a repo ID first:
 
 ```elixir
-{:ok, session_id} = Mnemosyne.start_session("Explore caching", repo: "project-alpha")
-```
-
-All session operations (append, close, commit) route to the bound repo's MemoryStore. You cannot move a session between repos.
-
-## All Operations Are Repo-Scoped
-
-Every operation takes a `repo_id` as its first argument:
-
-```elixir
-# Recall
 {:ok, memories} = Mnemosyne.recall("project-alpha", "How does caching work?")
-
-# Graph inspection
 graph = Mnemosyne.get_graph("project-alpha")
-
-# Direct mutations
-:ok = Mnemosyne.apply_changeset("project-alpha", changeset)
 :ok = Mnemosyne.delete_nodes("project-alpha", ["node-1"])
-
-# Maintenance
-{:ok, _} = Mnemosyne.consolidate_semantics("project-alpha")
-{:ok, _} = Mnemosyne.decay_nodes("project-alpha")
+:ok = Mnemosyne.decay_nodes("project-alpha")
 ```
 
-Operating on a closed or nonexistent repo returns a `NotFoundError`:
+Deleting or decaying nodes in a repo leaves its ingestion records intact.
 
-```elixir
-{:error, %Mnemosyne.Errors.Framework.NotFoundError{resource: :repo}} =
-  Mnemosyne.recall("nonexistent", "query")
-```
+## Configuration Boundaries
+
+Supervisor configuration supplies shared defaults. A repo can override config and adapters when opened. A complete ingestion can replace its config and adapters and pass pipeline-wide `llm_opts`; ordinary trajectory embeddings use config options, while per-call `embedding_opts` currently applies only to write-time intent merging. These execution choices do not affect payload identity. Recall uses the repository config and adapters.
+
+Backend configuration is always per repo because each repo owns separate backend state.
 
 ## Supervision Architecture
 
-Under the hood, each repo is a child of the `RepoSupervisor` (a `DynamicSupervisor`):
-
-```
+```text
 Mnemosyne.Supervisor (rest_for_one)
-  |-- SessionRegistry
   |-- RepoRegistry
   |-- TaskSupervisor
   |-- RepoSupervisor (DynamicSupervisor)
-  |     |-- MemoryStore "project-alpha"
-  |     |-- MemoryStore "project-beta"
-  |-- SessionSupervisor (DynamicSupervisor)
-        |-- Session "session_abc123"
+        |-- MemoryStore "project-alpha"
+        |-- MemoryStore "project-beta"
 ```
 
-The `rest_for_one` strategy means if the RepoSupervisor crashes, all sessions restart too. Each MemoryStore is registered in the RepoRegistry by its string ID.
+Ingestion, recall, write, and maintenance tasks use the shared `TaskSupervisor`; each repo's `MemoryStore` owns admission and backend state.
 
 ## Multiple Supervisor Instances
 
-You can run multiple independent Mnemosyne instances by passing a custom `:name`:
+Run independent Mnemosyne instances with custom names:
 
 ```elixir
 {Mnemosyne.Supervisor,
@@ -131,16 +92,16 @@ You can run multiple independent Mnemosyne instances by passing a custom `:name`
   embedding: personal_embedding}
 ```
 
-Then pass `:supervisor` in all operations:
+Pass the matching supervisor to every operation:
 
 ```elixir
 Mnemosyne.open_repo("repo", backend: backend, supervisor: MyApp.WorkMemory)
-Mnemosyne.start_session("goal", repo: "repo", supervisor: MyApp.WorkMemory)
+Mnemosyne.ingest("repo", trajectory, supervisor: MyApp.WorkMemory)
 Mnemosyne.recall("repo", "query", supervisor: MyApp.WorkMemory)
 ```
 
 ## Next Steps
 
-- [Getting Started](getting-started.md) - basic setup with a single repo
-- [Sessions and Episodes](sessions-and-episodes.md) - session lifecycle within a repo
-- [Custom Backends](custom-backends.md) - each repo can use a different backend
+- [Getting Started](getting-started.md)
+- [Trajectory Ingestion](trajectory-ingestion.md)
+- [Custom Backends](custom-backends.md)

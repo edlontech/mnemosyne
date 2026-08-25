@@ -1,189 +1,173 @@
 # Custom Adapters
 
-Mnemosyne uses pluggable adapters for LLM and embedding calls. This guide covers writing your own adapters and configuring per-step model overrides.
+Mnemosyne uses pluggable LLM and embedding adapters during blocking ingestion, recall, and maintenance operations.
 
-## The LLM Behaviour
+## LLM Behaviour
 
-Implement `Mnemosyne.LLM` with two callbacks:
+Implement `Mnemosyne.LLM`:
 
 ```elixir
 defmodule MyApp.LLMAdapter do
   @behaviour Mnemosyne.LLM
 
+  alias Mnemosyne.Errors.Framework.AdapterError
   alias Mnemosyne.LLM.Response
 
   @impl true
   def chat(messages, opts) do
-    {model, rest} = Keyword.pop!(opts, :model)
+    {model, provider_opts} = Keyword.pop!(opts, :model)
 
-    # messages is a list of %{role: :system | :user | :assistant, content: String.t()}
-    # Call your LLM provider here
+    case call_provider(model, messages, provider_opts) do
+      {:ok, text, usage} ->
+        {:ok, %Response{content: text, model: model, usage: usage}}
 
-    {:ok, %Response{
-      content: response_text,
-      model: model,
-      usage: %{input_tokens: input, output_tokens: output}
-    }}
+      {:error, reason} ->
+        {:error, AdapterError.exception(adapter: __MODULE__, operation: :chat, reason: reason)}
+    end
   end
 
   @impl true
   def chat_structured(messages, schema, opts) do
-    {model, rest} = Keyword.pop!(opts, :model)
+    {model, provider_opts} = Keyword.pop!(opts, :model)
 
-    # schema is a Zoi schema for structured output
-    # Return parsed data in the content field
+    case call_structured_provider(model, messages, schema, provider_opts) do
+      {:ok, parsed, usage} ->
+        {:ok, %Response{content: parsed, model: model, usage: usage}}
 
-    {:ok, %Response{
-      content: parsed_map,
-      model: model,
-      usage: %{}
-    }}
+      {:error, reason} ->
+        {:error,
+         AdapterError.exception(
+           adapter: __MODULE__,
+           operation: :chat_structured,
+           reason: reason
+         )}
+    end
   end
 end
 ```
 
-### chat/2
+`chat/2` returns string content. Mnemosyne uses it for state and reward inference and initial recall mode/tag planning. `chat_structured/3` receives a Zoi schema and returns parsed content; it is used for subgoal, semantic, procedural, and return extraction, multi-hop control and refinement, typed reasoning, intent merging, and semantic consolidation.
 
-Takes a list of messages and keyword options. The `:model` key is always present. Returns `{:ok, %LLM.Response{}}` with string content, or `{:error, %AdapterError{}}`.
+## Embedding Behaviour
 
-Used by: mode classification, tag generation, subgoal inference, state summarization, reward estimation.
-
-### chat_structured/3
-
-Like `chat/2` but takes an additional Zoi schema and returns parsed structured data in the `content` field instead of raw text.
-
-Used by: semantic extraction (returns `%{facts: [%{proposition, concepts}]}`), procedural extraction (returns `%{instructions: [%{intent, condition, instruction, expected_outcome}]}`).
-
-## The Embedding Behaviour
-
-Implement `Mnemosyne.Embedding` with two callbacks:
+Implement `Mnemosyne.Embedding`:
 
 ```elixir
 defmodule MyApp.EmbeddingAdapter do
   @behaviour Mnemosyne.Embedding
 
   alias Mnemosyne.Embedding.Response
+  alias Mnemosyne.Errors.Framework.AdapterError
 
   @impl true
   def embed(text, opts) do
-    {model, _rest} = Keyword.pop!(opts, :model)
+    {model, provider_opts} = Keyword.pop!(opts, :model)
 
-    # Generate a single embedding vector
-    vector = generate_embedding(model, text)
+    case generate_embedding(model, text, provider_opts) do
+      {:ok, vector} ->
+        {:ok, %Response{vectors: [vector], model: model, usage: %{}}}
 
-    {:ok, %Response{
-      vectors: [vector],
-      model: model,
-      usage: %{input_tokens: token_count}
-    }}
+      {:error, reason} ->
+        {:error, AdapterError.exception(adapter: __MODULE__, operation: :embed, reason: reason)}
+    end
   end
 
   @impl true
   def embed_batch(texts, opts) do
-    {model, _rest} = Keyword.pop!(opts, :model)
+    {model, provider_opts} = Keyword.pop!(opts, :model)
 
-    # Generate embeddings for all texts
-    vectors = Enum.map(texts, &generate_embedding(model, &1))
+    case generate_embeddings(model, texts, provider_opts) do
+      {:ok, vectors} ->
+        {:ok, %Response{vectors: vectors, model: model, usage: %{}}}
 
-    {:ok, %Response{
-      vectors: vectors,
-      model: model,
-      usage: %{}
-    }}
+      {:error, reason} ->
+        {:error,
+         AdapterError.exception(adapter: __MODULE__, operation: :embed_batch, reason: reason)}
+    end
   end
 end
 ```
 
-### embed/2
+`embed_batch/2` must preserve input order. Use one compatible embedding model across a repository; mixing vector spaces invalidates cosine comparisons.
 
-Embeds a single text. Returns `%Response{vectors: [vector]}` where `vector` is a list of floats.
+## Registration and Overrides
 
-### embed_batch/2
-
-Embeds multiple texts. Returns `%Response{vectors: [vector1, vector2, ...]}` in the same order as input.
-
-**Consistency requirement**: The same embedding model must be used across the entire knowledge graph. Mixing embedding models breaks cosine similarity comparisons.
-
-## Built-in Adapters
-
-### SycophantLLM / SycophantEmbedding
-
-Wrap [Sycophant](https://github.com/edlontech/sycophant) for LLM and embedding calls. These are compiled conditionally -- they only exist when Sycophant is available as a dependency.
+Configure shared defaults on the supervisor and optional repo defaults when opening a repo:
 
 ```elixir
-llm: Mnemosyne.Adapters.SycophantLLM,
-embedding: Mnemosyne.Adapters.SycophantEmbedding
-```
-
-### BumblebeeEmbedding
-
-Runs embeddings locally using [Bumblebee](https://github.com/elixir-nx/bumblebee) models. No external API calls needed.
-
-```elixir
-embedding: Mnemosyne.Adapters.BumblebeeEmbedding
-```
-
-## Registration
-
-Adapters are passed when starting the supervisor (shared defaults) or when opening a repo (per-repo override):
-
-```elixir
-# Shared defaults at supervisor level
 {Mnemosyne.Supervisor,
   config: config,
   llm: MyApp.LLMAdapter,
   embedding: MyApp.EmbeddingAdapter}
 
-# Per-repo override
 Mnemosyne.open_repo("special-repo",
   backend: {Mnemosyne.GraphBackends.InMemory, []},
-  llm: MyApp.SpecialLLMAdapter)
+  llm: MyApp.SpecialLLMAdapter,
+  embedding: MyApp.SpecialEmbeddingAdapter
+)
 ```
 
-Per-session overrides are also supported:
+Override execution for one complete ingestion by passing the trajectory to `ingest/3`:
 
 ```elixir
-Mnemosyne.start_session("goal", repo: "my-repo", llm: MyApp.FastLLMAdapter)
+trajectory = %Mnemosyne.Trajectory{
+  source_id: "task-42",
+  goal: "Investigate cache invalidation",
+  steps: [
+    %{observation: "A stale entry was returned", action: "Traced invalidation events"}
+  ],
+  metadata: %{component: "cache"}
+}
+
+Mnemosyne.ingest("special-repo", trajectory,
+  config: config,
+  llm: MyApp.FastLLMAdapter,
+  embedding: MyApp.EmbeddingAdapter,
+  llm_opts: [temperature: 0.0]
+)
 ```
+
+The replacement config controls ordinary trajectory embedding calls, while `llm_opts` is merged into ingestion LLM calls where used. Per-ingestion `embedding_opts` currently reaches only write-time intent merging. These execution choices do not enter payload identity. Equal pending submissions coalesce under the first admitted call's choices, and equal persisted retries return the original receipt without invoking adapters again. Per-ingestion config replacement does not affect recall; recall uses the repository config and adapters.
 
 ## Per-Step Model Overrides
 
-You can use different models for different pipeline steps without writing separate adapters. Configure overrides in `Mnemosyne.Config`:
+Use `Mnemosyne.Config.overrides` to select models or provider options by pipeline step:
 
 ```elixir
 config = %Mnemosyne.Config{
   llm: %{model: "gpt-4o", opts: %{temperature: 0.7}},
   embedding: %{model: "text-embedding-3-small", opts: %{}},
   overrides: %{
-    structuring: %{model: "gpt-4o-mini"},
-    get_mode: %{model: "gpt-4o-mini", opts: %{temperature: 0.0}},
-    get_plan: %{model: "gpt-4o-mini"},
-    retrieval: %{opts: %{temperature: 0.0}}
+    get_semantic: %{model: "gpt-4o-mini"},
+    get_plan: %{model: "gpt-4o-mini", opts: %{temperature: 0.0}},
+    reason_semantic: %{opts: %{temperature: 0.0}}
   }
 }
 ```
 
-When a pipeline step has an override:
-- The override's `:model` replaces the base model (if present)
-- The override's `:opts` are merged on top of the base opts
+An override model replaces the base model; override options merge over base options. Live override keys are:
 
-This lets you use a cheap, fast model for simple classification steps and a powerful model for knowledge extraction.
+| Stage | Keys | Callback |
+|-------|------|----------|
+| Episode | `get_state`, `get_subgoal`, `get_reward` | `chat` for state/reward; `chat_structured` for subgoal |
+| Structuring | `get_state`, `get_semantic`, `get_procedural`, `get_return` | `chat` for state; otherwise `chat_structured` |
+| Retrieval | `get_mode`, `get_plan` | `chat` |
+| Hop control | `multi_hop_control`, `get_refined_query` | `chat_structured` |
+| Reasoning | `reason_episodic`, `reason_semantic`, `reason_procedural` | `chat_structured` |
+| Intent merger | `merge_intent` | `chat_structured` |
+| Semantic consolidation | `merge_semantic` | `chat_structured` |
 
 ## Error Handling
 
-Adapters should return `{:error, %Mnemosyne.Errors.Framework.AdapterError{}}` on failure. The pipeline propagates these errors through the session state machine, moving the session to `:failed` where it can be retried.
+Return `{:error, %Mnemosyne.Errors.Framework.AdapterError{}}` for expected provider failures rather than raising or pattern-matching on `{:ok, value}`. Wrap the provider reason as shown above, preserving it in `AdapterError.reason`. A failed ingestion returns the structured error to every coalesced caller; the caller still owns the complete trajectory and decides whether to retry it. No ingestion receipt is returned before backend commit.
 
-```elixir
-def chat(messages, opts) do
-  case make_api_call(messages, opts) do
-    {:ok, response} -> {:ok, to_response(response)}
-    {:error, reason} -> {:error, AdapterError.exception(reason: reason)}
-  end
-end
-```
+## Built-in Adapters
+
+- `Mnemosyne.Adapters.SycophantLLM` and `Mnemosyne.Adapters.SycophantEmbedding` wrap the optional Sycophant dependency.
+- `Mnemosyne.Adapters.BumblebeeEmbedding` runs local Bumblebee embedding models.
 
 ## Next Steps
 
-- [Getting Started](getting-started.md) - setting up adapters in the supervisor
-- [Sessions and Episodes](sessions-and-episodes.md) - how adapters are used during extraction
-- [Retrieval and Recall](retrieval-and-recall.md) - how adapters are used during recall
+- [Getting Started](getting-started.md)
+- [Trajectory Ingestion](trajectory-ingestion.md)
+- [Retrieval and Recall](retrieval-and-recall.md)

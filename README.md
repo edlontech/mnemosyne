@@ -2,11 +2,11 @@
 
 An Elixir implementation of task-agnostic agentic memory for LLM agents, based on the [PlugMem](https://arxiv.org/abs/2603.03296) architecture.
 
-Mnemosyne structures raw agent interactions into a knowledge-centric memory graph, transforming verbose episodic traces into compact, reusable knowledge that any LLM agent can query at decision time.
+Mnemosyne turns completed agent trajectories into episodic, semantic, and procedural knowledge in a queryable graph. Applications own in-progress work; Mnemosyne accepts complete histories through one blocking ingestion operation.
 
 ## Installation
 
-Add `mnemosyne` to your list of dependencies in `mix.exs`:
+Add `mnemosyne` to your dependencies:
 
 ```elixir
 def deps do
@@ -16,154 +16,11 @@ def deps do
 end
 ```
 
-## Memory Layers
+## Quick Start
 
-- **Episodic memory** -- detailed records of experience (observation-action pairs)
-- **Semantic memory** -- propositional knowledge ("knowing that"), factual statements distilled from episodes
-- **Procedural memory** -- prescriptive knowledge ("knowing how"), goal-directed action strategies
-
-## How It Works
-
-Mnemosyne models memory as a three-stage pipeline:
-
-### 1. Structuring -- Episodes to Knowledge
-
-The agent interacts with the world through **sessions**. Each session collects observation-action pairs into **episodes**, and uses LLM inference to annotate each step with subgoals, rewards, and state summaries.
-
-When an episode closes, the **structuring pipeline** extracts knowledge in parallel:
-
-- **Semantic extraction** -- distills factual propositions with confidence scores
-- **Procedural extraction** -- abstracts reusable instructions with conditions and expected outcomes
-- **Return computation** -- evaluates trajectory quality via cumulative reward signals
-- **Sibling linking** -- creates pairwise links between semantic nodes from the same trajectory, preserving co-occurrence structure
-
-Trajectory boundaries are detected automatically using embedding similarity (cosine threshold), splitting episodes into coherent subsequences that share a common intent.
-
-### 2. The Knowledge Graph
-
-All extracted knowledge lives in a graph managed by a pluggable **GraphBackend**, with seven node types:
-
-| Node Type | Purpose |
-|-----------|---------|
-| **Episodic** | Raw observation-action-reward tuples from interactions |
-| **Semantic** | Factual propositions with confidence scores |
-| **Procedural** | Instructions with conditions and expected outcomes |
-| **Subgoal** | Decomposed objectives linking related knowledge |
-| **Source** | Provenance links back to original episode steps |
-| **Intent** | Goal abstractions linking related procedural nodes |
-| **Tag** | Concept indices linking related semantic nodes |
-
-Nodes are linked bidirectionally and indexed by type, tag, and subgoal for efficient traversal. Mutations are batched through **changesets** that are applied atomically.
-
-### 3. Retrieval -- Knowledge at Decision Time
-
-When the agent needs memory, the retrieval pipeline:
-
-1. Computes an embedding for the query and a set of retrieval tags
-2. Scores candidate nodes using a **value function** that combines cosine relevance with node metadata (recency, access frequency, reward quality) via a multiplicative formula
-3. Expands the candidate set through multi-hop traversal over routing nodes (Tags/Intents), with an LLM controller that stops early when the evidence is sufficient and focuses the next hop on the most promising candidates
-4. Returns the highest-scoring knowledge, ranked by decision relevance
-
-### 4. Maintenance -- Graph Hygiene
-
-Two standalone operations keep the graph clean over time:
-
-- **Semantic consolidation** -- discovers near-duplicate semantic nodes that share tag-neighbors, compares their embeddings, and merges pairs above the similarity threshold through an LLM-synthesized statement (weakly related pairs are kept separate)
-- **Node decay** -- scores all nodes on recency, access frequency, and reward quality (without a query), pruning those below a threshold and cleaning up orphaned Tags/Intents
-
-Both are triggered explicitly via `Mnemosyne.consolidate_semantics/2` and `Mnemosyne.decay_nodes/2`.
-
-### 5. Notifier -- Real-Time Events
-
-The `Mnemosyne.Notifier` behaviour receives events whenever the graph changes -- changeset applications, node deletions, decay/consolidation results, recall queries, and session state transitions. Plug in a `Phoenix.PubSub` adapter to build live graph visualizations without any Phoenix dependency in Mnemosyne itself.
-
-Four query functions (`get_node`, `get_nodes_by_type`, `get_metadata`, `get_linked_nodes`) complement the event stream, letting consumers fetch current node state on demand.
-
-See the [Notifier guide](guides/notifier.md) for implementation details and a LiveView example.
-
-## Architecture
-
-```mermaid
-graph TD
-    Agent[Your Agent] -->|open_repo / start_session / recall| API[Mnemosyne API]
-
-    API --> RepoSup[RepoSupervisor\nDynamicSupervisor]
-    RepoSup --> Store1[MemoryStore\nProject A]
-    RepoSup --> Store2[MemoryStore\nProject B]
-
-    API --> Session[Session\nGenStateMachine]
-
-    Store1 --> Backend1[GraphBackend]
-    Store2 --> Backend2[GraphBackend]
-
-    API --> Retrieval[Retrieval\nPipeline]
-    Retrieval --> VF[Value Function\nrelevance * recency * frequency * reward]
-    Retrieval -->|find_candidates\nget_linked_nodes| Backend1
-
-    Session --> Episode[Episode Pipeline]
-    Episode --> Structuring
-
-    subgraph Structuring [Parallel Extraction]
-        Semantic[Semantic\nExtraction]
-        Procedural[Procedural\nExtraction]
-        Returns[Return\nComputation]
-    end
-
-    Structuring -->|Changeset| Backend1
-    VF --> Backend1
-```
-
-### Multi-Repository Isolation
-
-Mnemosyne supports multiple isolated graph repositories under a single supervision tree. Each repository has its own MemoryStore process and GraphBackend instance, identified by an opaque string ID. Shared configuration (LLM, embedding adapters) is set once at supervisor startup; per-repo backend config is provided when opening a repo.
-
-The **Session** is a `GenStateMachine` that manages the episode lifecycle:
-
-```mermaid
-stateDiagram-v2
-    [*] --> idle
-    idle --> collecting : start_episode
-    collecting --> extracting : close
-    extracting --> ready : extraction success
-    extracting --> failed : extraction error
-    ready --> idle : commit
-    failed --> extracting : commit (retry)
-    failed --> idle : discard
-    ready --> idle : discard
-```
-
-## Usage
+Start Mnemosyne with LLM and embedding adapters:
 
 ```elixir
-# Open an isolated graph repository for a project
-{:ok, _pid} = Mnemosyne.open_repo("my-project",
-  backend: {Mnemosyne.GraphBackends.InMemory,
-    persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: "my-project.dets"}})
-
-# Start a session with a goal, tied to a repo
-{:ok, session} = Mnemosyne.start_session("Help user plan a trip", repo: "my-project")
-
-# Collect observations and actions during interaction
-:ok = Mnemosyne.append(session, "User says they want to visit Tokyo", "Asking about dates")
-:ok = Mnemosyne.append(session, "User says next March for 2 weeks", "Suggesting itinerary")
-
-# Close the episode and commit knowledge to the graph
-:ok = Mnemosyne.close_and_commit(session)
-
-# Later, recall relevant knowledge for a new decision
-{:ok, memories} = Mnemosyne.recall("my-project", "What are the user's travel preferences?")
-
-# List all open repos, close when done
-["my-project"] = Mnemosyne.list_repos()
-:ok = Mnemosyne.close_repo("my-project")
-```
-
-## Configuration
-
-Mnemosyne uses pluggable adapters for LLM, embedding, and graph storage backends. Shared config is provided when starting the supervisor; backend config is per-repo.
-
-```elixir
-# Add Mnemosyne to your supervision tree
 children = [
   {Mnemosyne.Supervisor,
     config: %Mnemosyne.Config{
@@ -175,31 +32,125 @@ children = [
 ]
 ```
 
-### Graph Backends
-
-The `GraphBackend` behaviour abstracts both persistence and querying behind a single interface. The built-in `InMemory` backend stores nodes in an Erlang map with optional DETS persistence:
+Open an isolated graph repository:
 
 ```elixir
-# In-memory only (no persistence, useful for tests)
-backend: {Mnemosyne.GraphBackends.InMemory, []}
-
-# With DETS persistence
-backend: {Mnemosyne.GraphBackends.InMemory,
-  persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: "memory.dets"}}
+{:ok, _pid} =
+  Mnemosyne.open_repo("my-project",
+    backend:
+      {Mnemosyne.GraphBackends.InMemory,
+       persistence:
+         {Mnemosyne.GraphBackends.Persistence.DETS,
+          path: "priv/memory/my-project.dets"}}
+  )
 ```
 
-Custom backends can push queries to external databases (e.g. Postgres with pgvector) by implementing the `Mnemosyne.GraphBackend` behaviour
+Submit a caller-owned complete trajectory. Steps are processed in list order and `metadata` is part of the payload identity.
 
-### LLM and Embedding Adapters
+```elixir
+trajectory = %Mnemosyne.Trajectory{
+  source_id: "trip-planning-42",
+  goal: "Help the user plan a trip",
+  steps: [
+    %{
+      observation: "The user wants to visit Tokyo",
+      action: "Asked about travel dates"
+    },
+    %{
+      observation: "The user plans to travel next March for two weeks",
+      action: "Suggested a two-week itinerary"
+    }
+  ],
+  metadata: %{agent: "planner", schema: 1}
+}
 
-The built-in adapters wrap [Sycophant](https://github.com/edlontech/sycophant) for LLM calls and support [Bumblebee](https://github.com/elixir-nx/bumblebee) for local embeddings.
+{:ok, %Mnemosyne.IngestionReceipt{} = receipt} =
+  Mnemosyne.ingest("my-project", trajectory)
+```
 
-Per-pipeline-step model overrides are supported via `config.overrides[step_atom]`, so you can use a cheaper model for subgoal inference and a stronger one for knowledge extraction.
+`ingest/3` returns only after storage succeeds and the receipt's nodes are query-visible. A retry with the same repo, `source_id`, and payload returns the exact original receipt, including `node_ids` and `stored_at`. Reusing that source ID for a different goal, ordered steps, metadata, or fingerprint version returns a source-conflict error.
 
-## Status
+Recall stored knowledge later:
 
-Mnemosyne is under active development. The structuring and session management layers are functional. Retrieval and reasoning modules are partially implemented.
+```elixir
+{:ok, memories} =
+  Mnemosyne.recall("my-project", "What are the user's travel preferences?")
+```
+
+For an active task, pass caller-owned context explicitly. Context affects the query but is not stored; `source_id` is optional correlation metadata.
+
+```elixir
+{:ok, memories} =
+  Mnemosyne.recall("my-project", "What should I ask next?",
+    source_id: "trip-planning-43",
+    context: %{
+      goal: "Plan the user's next trip",
+      recent_steps: [
+        %{
+          observation: "The user is considering Kyoto",
+          action: "Compared seasonal weather"
+        }
+      ]
+    }
+  )
+```
+
+## Memory Model
+
+- **Episodic memory** records observation-action-reward experience.
+- **Semantic memory** stores factual propositions distilled from experience.
+- **Procedural memory** stores reusable instructions with conditions and outcomes.
+- **Tags** and **Intents** route retrieval through related knowledge.
+- **Source** nodes preserve provenance to the caller's stable source ID.
+
+During ingestion, Mnemosyne creates an internal episode, annotates each ordered step, detects coherent extraction boundaries, and produces one graph changeset. The repository's `MemoryStore` serializes the final write while extraction for different source IDs can run concurrently.
+
+## Ingestion Guarantees
+
+Source IDs are stable and repo-scoped: the same string can identify independent payloads in different repositories. Equal concurrent calls for a pending source coalesce into one extraction and receive the same receipt. The first admitted call supplies the execution configuration for that shared work.
+
+Per-call `config`, `llm`, `embedding`, and `llm_opts` change ingestion execution only. The config supplies options for ordinary trajectory embedding calls; `embedding_opts` currently applies only to write-time intent merging. None of these options enter payload identity or rebuild an already stored source. Applications own unfinished steps, recovery after an error, and concurrency policy before submitting complete trajectories.
+
+## Architecture
+
+```mermaid
+graph TD
+    Agent[Your Agent] -->|open_repo / ingest / recall| API[Mnemosyne API]
+    API --> RepoSup[RepoSupervisor\nDynamicSupervisor]
+    RepoSup --> Store1[MemoryStore\nProject A]
+    RepoSup --> Store2[MemoryStore\nProject B]
+    Store2 --> Backend2[GraphBackend]
+    Store1 --> Ingestion[Ingestion Pipeline]
+    Ingestion --> Episode[Episode Pipeline]
+    Episode --> Structuring[Structuring Pipeline]
+    Structuring -->|Changeset| Store1
+    Store1 --> WriteLane[Write lane\nfinal merging + receipt + record + CAS]
+    WriteLane --> Backend1[GraphBackend]
+    Store1 --> Retrieval[Retrieval + Reasoning]
+    Retrieval --> Backend1
+```
+
+Each repository has its own `MemoryStore` and backend. The built-in `InMemory` backend can persist to DETS; custom backends implement `Mnemosyne.GraphBackend`.
+
+## Maintenance and Events
+
+`Mnemosyne.consolidate_semantics/2` merges near-duplicate semantic knowledge, and `Mnemosyne.decay_nodes/2` removes low-utility graph nodes. Ingestion identity records remain after graph deletion or decay, so retrying a deleted source returns its original receipt rather than recreating memory.
+
+`Mnemosyne.Notifier` emits authoritative ingestion, recall, graph-write, and maintenance outcomes. Notifier failures are isolated from memory operations.
+
+## Guides
+
+- [Getting Started](guides/getting-started.md)
+- [Core Concepts](guides/core-concepts.md)
+- [Trajectory Ingestion](guides/trajectory-ingestion.md)
+- [Extraction Profiles](guides/extraction-profiles.md)
+- [Retrieval and Recall](guides/retrieval-and-recall.md)
+- [Custom Backends](guides/custom-backends.md)
+- [Custom Adapters](guides/custom-adapters.md)
+- [Multi-Repository Isolation](guides/multi-repo.md)
+- [Graph Maintenance](guides/graph-maintenance.md)
+- [Notifier](guides/notifier.md)
 
 ## Acknowledgments
 
-This project is an Elixir implementation inspired by [PlugMem: A Task-Agnostic Plugin Memory Module for LLM Agents](https://arxiv.org/abs/2603.03296) by Ke Yang et al.
+Inspired by [PlugMem: A Task-Agnostic Plugin Memory Module for LLM Agents](https://arxiv.org/abs/2603.03296) by Ke Yang et al.

@@ -1,6 +1,8 @@
 defmodule Mnemosyne.NotifierTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.Notifier
 
@@ -9,6 +11,20 @@ defmodule Mnemosyne.NotifierTest do
 
     @impl true
     def notify(_repo_id, _event), do: raise("boom")
+  end
+
+  defmodule ThrowingNotifier do
+    @behaviour Notifier
+
+    @impl true
+    def notify(_repo_id, _event), do: throw(:boom)
+  end
+
+  defmodule ExitingNotifier do
+    @behaviour Notifier
+
+    @impl true
+    def notify(_repo_id, _event), do: exit(:boom)
   end
 
   defmodule TrackingNotifier do
@@ -56,8 +72,34 @@ defmodule Mnemosyne.NotifierTest do
   end
 
   describe "safe_notify/3" do
-    test "returns :ok when notifier raises" do
-      assert :ok = Notifier.safe_notify(RaisingNotifier, "repo_1", {:nodes_deleted, ["x"], %{}})
+    test "logs and returns :ok when notifier raises" do
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   Notifier.safe_notify(RaisingNotifier, "repo_1", {:nodes_deleted, ["x"], %{}})
+        end)
+
+      assert log =~ "Notifier #{inspect(RaisingNotifier)} failed: boom"
+    end
+
+    test "logs and returns :ok when notifier throws" do
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   Notifier.safe_notify(ThrowingNotifier, "repo_1", {:nodes_deleted, ["x"], %{}})
+        end)
+
+      assert log =~ "Notifier #{inspect(ThrowingNotifier)} throw: :boom"
+    end
+
+    test "logs and returns :ok when notifier exits" do
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   Notifier.safe_notify(ExitingNotifier, "repo_1", {:nodes_deleted, ["x"], %{}})
+        end)
+
+      assert log =~ "Notifier #{inspect(ExitingNotifier)} exit: :boom"
     end
 
     test "calls notifier successfully when it does not raise" do

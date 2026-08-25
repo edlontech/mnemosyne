@@ -55,16 +55,21 @@ defmodule Mnemosyne.Notifier do
   @callback notify(repo_id :: String.t(), event()) :: :ok
 
   @doc """
-  Invokes `notifier.notify/2`, rescuing any exception and logging a warning.
+  Invokes `notifier.notify/2`, isolating and logging exceptions, throws, and exits.
 
   Always returns `:ok`.
   """
   @spec safe_notify(module(), String.t(), event()) :: :ok
   def safe_notify(notifier, repo_id, event) do
     notifier.notify(repo_id, event)
+    :ok
   rescue
-    e ->
-      Logger.warning("Notifier #{inspect(notifier)} failed: #{Exception.message(e)}")
+    error ->
+      Logger.warning("Notifier #{inspect(notifier)} failed: #{Exception.message(error)}")
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning("Notifier #{inspect(notifier)} #{kind}: #{inspect(reason)}")
       :ok
   end
 end

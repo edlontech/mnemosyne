@@ -1,116 +1,62 @@
 # Graph Maintenance
 
-As the knowledge graph grows, it accumulates near-duplicate nodes and stale knowledge. Mnemosyne provides two maintenance operations to keep the graph clean.
+Mnemosyne provides explicit operations for merging near-duplicate semantic knowledge and pruning low-utility graph nodes.
 
 ## Semantic Consolidation
 
-Discovers near-duplicate semantic nodes through their shared tags and merges them via an LLM-synthesized statement.
-
 ```elixir
-{:ok, %{deleted: 3, checked: 42, merged: 3}} = Mnemosyne.consolidate_semantics("my-repo")
+:ok = Mnemosyne.consolidate_semantics("my-repo")
 ```
 
-### How It Works
+Consolidation finds semantic nodes connected through shared Tags, compares embeddings, and asks the LLM whether the strongest candidate pair should merge. The higher decay-scored node survives; accepted merged content is re-embedded, links and metadata transfer, and the redundant node is deleted.
 
-1. Loads all semantic nodes from the graph
-2. For each node, walks its Tag links to find tag-neighbor semantic nodes (nodes sharing a Tag)
-3. Compares embeddings between tag-neighbors via cosine similarity and picks the single most similar neighbor above the threshold (default: 0.7)
-4. Asks the LLM to classify the pair and synthesize a merged statement:
-   - **Same fact updated** or **same topic that merges well**: the pair is merged. The higher decay-scored node survives, its proposition is replaced by the merged statement (and re-embedded), and the other node's links and metadata transfer to it before deletion.
-   - **Weakly related** (merging would stitch unrelated facts): both nodes are kept.
-
-The decay score uses the same formula as node decay (recency * frequency * reward), without a relevance component. This ensures the more useful node's identity survives.
-
-### When to Run
-
-Run consolidation after large batches of knowledge extraction, when multiple sessions may have produced overlapping facts. Candidate discovery is embedding-based, but each candidate pair costs one LLM call for the merge decision, plus one embedding call per accepted merge.
+The default similarity threshold is `0.7`. Raise it to reduce LLM calls:
 
 ```elixir
-# After committing several sessions
-Mnemosyne.consolidate_semantics("my-repo")
+:ok = Mnemosyne.consolidate_semantics("my-repo", threshold: 0.85)
 ```
 
-### Tuning the Threshold
-
-The threshold controls which pairs are submitted to the LLM. The default of 0.7 relies on the LLM to reject weakly related pairs; raise it to reduce LLM calls:
-
-```elixir
-Mnemosyne.consolidate_semantics("my-repo", threshold: 0.85)
-```
+Run consolidation after large ingestion batches that may contain overlapping facts.
 
 ## Node Decay
 
-Prunes low-utility nodes from the graph based on recency, frequency, and reward signals.
-
 ```elixir
-{:ok, %{deleted: 5, checked: 38}} = Mnemosyne.decay_nodes("my-repo")
+:ok = Mnemosyne.decay_nodes("my-repo")
 ```
 
-### How It Works
+Decay scores the selected node types using recency, frequency, and reward without query relevance:
 
-1. Loads all nodes of the target types (default: `[:semantic, :procedural]`)
-2. Scores each node using the decay formula: `recency * frequency * reward`
-3. Deletes nodes scoring below the threshold (default: 0.1)
-4. Cleans up orphaned Tag and Intent nodes that lost all their children
+```
+score = recency_factor * frequency_factor * reward_factor
+```
 
-### Decay Scoring
-
-The decay score is the same multiplicative formula used during retrieval, but without a relevance component:
-
-- **Recency**: `exp(-lambda * hours_since_last_access)` -- how recently the node was used
-- **Frequency**: `max(base_floor, count / (count + k))` -- how often it's been accessed
-- **Reward**: `1 / (1 + exp(-beta * avg_reward))` -- quality signal from trajectory returns
-
-Nodes that are old, rarely accessed, and from low-reward trajectories score low and get pruned.
-
-### When to Run
-
-Run decay periodically to prevent unbounded graph growth. The right frequency depends on your use case:
-- **High-throughput agents**: run after every N sessions or on a timer
-- **Low-throughput agents**: run weekly or when graph size exceeds a threshold
-
-### Tuning Parameters
+Nodes below the threshold are deleted, then orphaned Tag and Intent routing nodes are cleaned up.
 
 ```elixir
 # More aggressive pruning
-Mnemosyne.decay_nodes("my-repo", threshold: 0.2)
+:ok = Mnemosyne.decay_nodes("my-repo", threshold: 0.2)
 
-# Only prune semantic nodes
-Mnemosyne.decay_nodes("my-repo", node_types: [:semantic])
+# Only semantic nodes
+:ok = Mnemosyne.decay_nodes("my-repo", node_types: [:semantic])
 ```
 
-The scoring parameters (lambda, k, base_floor, beta) come from the per-type value function config in `Mnemosyne.Config`.
+The scoring parameters (`lambda`, `k`, `base_floor`, and `beta`) come from each node type's value-function config.
 
-## Orphan Cleanup
+## Permanent Source Identity
 
-Both operations automatically clean up orphaned routing nodes (Tags and Intents) that have no remaining children after deletion. You don't need to handle this manually.
+Maintenance changes graph content only. Ingestion records are permanent control records outside the graph, so consolidation, decay, direct node deletion, and graph repair do not clear a source ID.
 
-## Combining Operations
+If maintenance removes nodes listed in an ingestion receipt, submitting the same repo-scoped source and payload again returns the exact original receipt. It does not recreate the removed memory. Reusing that source ID with a different payload still returns a source-conflict error.
 
-A typical maintenance routine:
+## Operational Ordering
 
-```elixir
-defmodule MyApp.MemoryMaintenance do
-  def run(repo_id) do
-    # First consolidate duplicates
-    {:ok, consolidation} = Mnemosyne.consolidate_semantics(repo_id)
+Each repository has one non-queued maintenance slot. If consolidation and decay are requested back to back, the second request is dropped while the first is active.
 
-    # Then prune low-value nodes
-    {:ok, decay} = Mnemosyne.decay_nodes(repo_id)
-
-    %{
-      consolidated: consolidation.deleted,
-      decayed: decay.deleted,
-      checked: consolidation.checked + decay.checked
-    }
-  end
-end
-```
-
-Run consolidation before decay -- consolidation may delete nodes that would otherwise survive decay individually but are redundant.
+When both are needed, run consolidation first and trigger decay only after receiving its `:consolidation_completed` notifier outcome. Otherwise, invoke decay manually later. Mnemosyne does not schedule maintenance operations.
 
 ## Next Steps
 
-- [Core Concepts](core-concepts.md) - understand node types and the graph structure
-- [Retrieval and Recall](retrieval-and-recall.md) - how value functions score nodes during recall
-- [Custom Backends](custom-backends.md) - backends may optimize these operations differently
+- [Core Concepts](core-concepts.md)
+- [Retrieval and Recall](retrieval-and-recall.md)
+- [Custom Backends](custom-backends.md)
+- [Notifier](notifier.md)

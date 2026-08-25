@@ -1,10 +1,8 @@
 # Getting Started
 
-This guide walks you through installing Mnemosyne, setting up the supervisor, and running your first memory session.
+This guide installs Mnemosyne, starts its supervisor, opens a repository, ingests a complete trajectory, and recalls memory.
 
 ## Installation
-
-Add `mnemosyne` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
@@ -14,16 +12,14 @@ def deps do
 end
 ```
 
-Then fetch and compile:
-
 ```bash
 mix deps.get
 mix compile
 ```
 
-## Setting Up the Supervisor
+## Start the Supervisor
 
-Mnemosyne runs under its own supervision tree. Add it to your application's supervisor in `lib/my_app/application.ex`:
+Add Mnemosyne to your application's supervision tree:
 
 ```elixir
 defmodule MyApp.Application do
@@ -45,89 +41,88 @@ defmodule MyApp.Application do
 end
 ```
 
-The supervisor requires three things:
+The supervisor requires a `Mnemosyne.Config`, an `Mnemosyne.LLM` implementation, and an `Mnemosyne.Embedding` implementation. The built-in Sycophant adapters can be used when that optional dependency is installed.
 
-- **config** - A `Mnemosyne.Config` struct with LLM and embedding model settings
-- **llm** - A module implementing the `Mnemosyne.LLM` behaviour
-- **embedding** - A module implementing the `Mnemosyne.Embedding` behaviour
+## Open a Repository
 
-If you're using [Sycophant](https://github.com/edlontech/sycophant), you can use the built-in adapters:
+All operations are scoped to an isolated repository:
 
 ```elixir
-{Mnemosyne.Supervisor,
-  config: %Mnemosyne.Config{
-    llm: %{model: "gpt-4o-mini", opts: %{}},
-    embedding: %{model: "text-embedding-3-small", opts: %{}}
-  },
-  llm: Mnemosyne.Adapters.SycophantLLM,
-  embedding: Mnemosyne.Adapters.SycophantEmbedding}
+{:ok, _pid} =
+  Mnemosyne.open_repo("my-project",
+    backend:
+      {Mnemosyne.GraphBackends.InMemory,
+       persistence:
+         {Mnemosyne.GraphBackends.Persistence.DETS,
+          path: "priv/memory/my-project.dets"}}
+  )
 ```
 
-## Opening a Repository
+Use `{Mnemosyne.GraphBackends.InMemory, []}` when persistence is not required.
 
-All graph operations are scoped to a **repository**. A repository is an isolated knowledge graph with its own storage backend.
+## Ingest a Complete Trajectory
+
+Your application owns the interaction while it is in progress. Once complete, submit the goal, ordered steps, stable source ID, and metadata together:
 
 ```elixir
-{:ok, _pid} = Mnemosyne.open_repo("my-project",
-  backend: {Mnemosyne.GraphBackends.InMemory, []})
+trajectory = %Mnemosyne.Trajectory{
+  source_id: "trip-planning-42",
+  goal: "Help the user plan a trip",
+  steps: [
+    %{
+      observation: "The user wants to visit Tokyo",
+      action: "Asked about travel dates"
+    },
+    %{
+      observation: "The user plans to travel next March for two weeks",
+      action: "Suggested an itinerary"
+    }
+  ],
+  metadata: %{channel: "assistant", schema: 1}
+}
+
+{:ok, receipt} = Mnemosyne.ingest("my-project", trajectory)
 ```
 
-For persistent storage across restarts, use the DETS persistence layer:
+The call returns only after the graph and durable source record are stored. An equal retry returns the exact original receipt. Reusing the source ID in this repo with a different goal, step order/content, metadata, or fingerprint version returns a source-conflict error.
+
+Equal pending calls coalesce, and the first admitted call owns their execution options. Your application remains responsible for unfinished state, retry policy, and deciding which complete histories may run concurrently.
+
+## Recall Memory
 
 ```elixir
-{:ok, _pid} = Mnemosyne.open_repo("my-project",
-  backend: {Mnemosyne.GraphBackends.InMemory,
-    persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: "priv/memory/my-project.dets"}})
+{:ok, memories} =
+  Mnemosyne.recall("my-project", "What are the user's travel preferences?")
 ```
 
-## Running a Session
-
-Sessions are the write interface. A session collects observation-action pairs, groups them into trajectories, and extracts knowledge using LLM calls.
+For an active task, provide transient context directly:
 
 ```elixir
-# Start a session tied to a repo
-{:ok, session_id} = Mnemosyne.start_session("Help user plan a trip", repo: "my-project")
-
-# Feed in observations and actions
-:ok = Mnemosyne.append(session_id, "User wants to visit Tokyo", "Asking about travel dates")
-:ok = Mnemosyne.append(session_id, "User says next March for 2 weeks", "Suggesting itinerary")
-
-# Close the episode and commit extracted knowledge
-:ok = Mnemosyne.close_and_commit(session_id)
+{:ok, memories} =
+  Mnemosyne.recall("my-project", "What should I do next?",
+    source_id: "trip-planning-43",
+    context: %{
+      goal: "Plan another trip",
+      recent_steps: [
+        %{observation: "The user mentioned Kyoto", action: "Compared destinations"}
+      ]
+    }
+  )
 ```
 
-`close_and_commit/1` is a convenience that closes the episode, waits for LLM extraction to finish, and commits the resulting knowledge graph changeset.
+Only the last three recent steps augment the query. Context is not stored, and `source_id` is optional correlation metadata.
 
-## Recalling Memories
-
-Once knowledge is committed, query it with `recall/3`:
+## Repository Lifecycle
 
 ```elixir
-{:ok, %{candidates: candidates}} = Mnemosyne.recall("my-project", "What are the user's travel preferences?")
-```
-
-The result contains candidates partitioned by node type (`:semantic`, `:procedural`, `:episodic`, etc.), each scored by relevance.
-
-If you have an active session, use `recall_in_context/4` to augment the query with the session's current state:
-
-```elixir
-{:ok, memories} = Mnemosyne.recall_in_context("my-project", session_id, "What did we discuss?")
-```
-
-## Cleaning Up
-
-```elixir
-# Close a repo when done
-:ok = Mnemosyne.close_repo("my-project")
-
-# List open repos
 Mnemosyne.list_repos()
+:ok = Mnemosyne.close_repo("my-project")
 ```
 
 ## Next Steps
 
-- [Core Concepts](core-concepts.md) - understand episodes, trajectories, and the three memory types
-- [Sessions and Episodes](sessions-and-episodes.md) - session lifecycle in detail
-- [Extraction Profiles](extraction-profiles.md) - domain-specific extraction tuning
-- [Retrieval and Recall](retrieval-and-recall.md) - how recall works and how to tune it
-- [Custom Adapters](custom-adapters.md) - writing your own LLM and embedding adapters
+- [Core Concepts](core-concepts.md)
+- [Trajectory Ingestion](trajectory-ingestion.md)
+- [Extraction Profiles](extraction-profiles.md)
+- [Retrieval and Recall](retrieval-and-recall.md)
+- [Custom Adapters](custom-adapters.md)

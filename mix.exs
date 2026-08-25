@@ -81,7 +81,7 @@ defmodule Mnemosyne.MixProject do
         {"README.md", title: "Overview"},
         {"guides/getting-started.md", title: "Getting Started"},
         {"guides/core-concepts.md", title: "Core Concepts"},
-        {"guides/sessions-and-episodes.md", title: "Sessions and Episodes"},
+        {"guides/trajectory-ingestion.md", title: "Trajectory Ingestion"},
         {"guides/extraction-profiles.md", title: "Extraction Profiles"},
         {"guides/retrieval-and-recall.md", title: "Retrieval and Recall"},
         {"guides/graph-maintenance.md", title: "Graph Maintenance"},
@@ -95,7 +95,7 @@ defmodule Mnemosyne.MixProject do
         Guides: [
           "guides/getting-started.md",
           "guides/core-concepts.md",
-          "guides/sessions-and-episodes.md",
+          "guides/trajectory-ingestion.md",
           "guides/extraction-profiles.md",
           "guides/retrieval-and-recall.md",
           "guides/graph-maintenance.md",
@@ -112,10 +112,9 @@ defmodule Mnemosyne.MixProject do
         "Public API": [
           Mnemosyne,
           Mnemosyne.Config,
-          Mnemosyne.ExtractionProfile
-        ],
-        Sessions: [
-          Mnemosyne.Session
+          Mnemosyne.ExtractionProfile,
+          Mnemosyne.Trajectory,
+          Mnemosyne.IngestionReceipt
         ],
         "Graph & Nodes": [
           Mnemosyne.Graph,
@@ -128,6 +127,7 @@ defmodule Mnemosyne.MixProject do
           ~r/Mnemosyne\.GraphBackends\./
         ],
         Pipeline: [
+          Mnemosyne.Pipeline.Ingestion,
           Mnemosyne.Pipeline.Episode,
           Mnemosyne.Pipeline.Structuring,
           Mnemosyne.Pipeline.Retrieval,

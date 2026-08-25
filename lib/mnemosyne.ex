@@ -184,8 +184,9 @@ defmodule Mnemosyne do
     * `:llm` - LLM adapter module overriding the repo default for this ingestion.
     * `:embedding` - Embedding adapter module overriding the repo default for this ingestion.
 
-  Other execution options, such as `:llm_opts` and `:embedding_opts`, are passed
-  to the ingestion pipeline.
+  `:llm_opts` is passed through ingestion LLM stages where used. Per-call
+  `:embedding_opts` currently applies only to write-time intent merging; ordinary
+  trajectory embedding calls use the selected config's embedding options.
   """
   @spec ingest(String.t(), Trajectory.t(), keyword()) ::
           {:ok, IngestionReceipt.t()} | {:error, Mnemosyne.Errors.error()}

@@ -199,9 +199,9 @@ defmodule Mnemosyne.Config do
 
   ## Override Resolution
 
-  When a pipeline step (e.g. `:structuring`, `:retrieval`) has an entry in
-  `:overrides`, the override's `:model` replaces the default and its `:opts`
-  are deep-merged with the base LLM opts. This lets you use a cheaper model
+  When a live pipeline step (for example, `:get_semantic` or `:reason_semantic`)
+  has an entry in `:overrides`, the override's `:model` replaces the default and
+  its `:opts` are merged with the base LLM opts. This lets you use a cheaper model
   for simple extraction steps while keeping a powerful model for reasoning.
 
   ## Examples
@@ -219,8 +219,8 @@ defmodule Mnemosyne.Config do
         llm: %{model: "gpt-4o", opts: %{temperature: 0.7}},
         embedding: %{model: "text-embedding-3-small", opts: %{}},
         overrides: %{
-          structuring: %{model: "gpt-4o-mini"},
-          retrieval: %{opts: %{temperature: 0.0}}
+          get_semantic: %{model: "gpt-4o-mini"},
+          reason_semantic: %{opts: %{temperature: 0.0}}
         }
       }
 
@@ -248,11 +248,11 @@ defmodule Mnemosyne.Config do
       iex> config = %Mnemosyne.Config{
       ...>   llm: %{model: "gpt-4o", opts: %{temperature: 0.7}},
       ...>   embedding: %{model: "e5-base-v2", opts: %{}},
-      ...>   overrides: %{structuring: %{model: "gpt-4o-mini"}}
+      ...>   overrides: %{get_semantic: %{model: "gpt-4o-mini"}}
       ...> }
-      iex> Mnemosyne.Config.resolve(config, :structuring)
+      iex> Mnemosyne.Config.resolve(config, :get_semantic)
       %{model: "gpt-4o-mini", opts: %{temperature: 0.7}}
-      iex> Mnemosyne.Config.resolve(config, :retrieval)
+      iex> Mnemosyne.Config.resolve(config, :get_mode)
       %{model: "gpt-4o", opts: %{temperature: 0.7}}
   """
   @spec resolve(t(), atom()) :: %{model: String.t(), opts: map()}

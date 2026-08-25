@@ -140,15 +140,27 @@ Procedural nodes have a high threshold (0.8) because vague procedural matches te
 
 These defaults can be overridden per node type via [extraction profiles](extraction-profiles.md), which merge domain-specific parameter tweaks on top of config-level settings.
 
-## Context-Aware Recall
+## Active-Task Context
 
-When recalling during an active session, use `recall_in_context/4`:
+The caller can augment `recall/3` with transient active-task state:
 
 ```elixir
-{:ok, memories} = Mnemosyne.recall_in_context("my-repo", session_id, "What patterns apply?")
+{:ok, memories} =
+  Mnemosyne.recall("my-repo", "What patterns apply?",
+    source_id: "task-42",
+    context: %{
+      goal: "Diagnose intermittent timeouts",
+      recent_steps: [
+        %{
+          observation: "The request timed out behind the proxy",
+          action: "Inspected forwarded headers"
+        }
+      ]
+    }
+  )
 ```
 
-This augments the query with the session's current goal and recent steps, producing more targeted results. If the session is not found, it falls back to a plain `recall/3`.
+The goal and at most the last three recent observation/action pairs augment the query in caller order. Context is used only by retrieval and reasoning: it is not persisted, does not create graph nodes, and does not reserve the source ID. `source_id` is optional correlation metadata for traces, notifier events, and telemetry; it does not change candidate scoring.
 
 ## Custom Value Functions
 

@@ -215,11 +215,11 @@ defmodule Mnemosyne.NotifierIngestionIntegrationTest do
     :ok
   end
 
-  defmodule RaisingNotifier do
+  defmodule ExitingNotifier do
     @behaviour Mnemosyne.Notifier
 
     @impl true
-    def notify(_repo_id, _event), do: raise("boom")
+    def notify(_repo_id, _event), do: exit(:notifier_unavailable)
   end
 
   defmodule BlockingNotifier do
@@ -648,7 +648,7 @@ defmodule Mnemosyne.NotifierIngestionIntegrationTest do
     assert ingestion_events(repo_id) == []
   end
 
-  test "isolates notifier failures from persistence, retries, and failure cleanup", %{
+  test "isolates notifier exits from persistence, retries, and failure cleanup", %{
     tmp_dir: tmp_dir
   } do
     retries = :counters.new(1, [:atomics])
@@ -667,7 +667,7 @@ defmodule Mnemosyne.NotifierIngestionIntegrationTest do
         {:ok, changeset("isolated")}
     end)
 
-    store = start_store(tmp_dir, repo_id: "raising-notifier-repo", notifier: RaisingNotifier)
+    store = start_store(tmp_dir, repo_id: "exiting-notifier-repo", notifier: ExitingNotifier)
     input = trajectory()
 
     assert {:ok, receipt} = MemoryStore.ingest(store, input)

@@ -1,186 +1,137 @@
 # Custom Backends
 
-The `GraphBackend` behaviour abstracts graph persistence and querying behind a unified interface. This guide walks through implementing a custom backend.
+`Mnemosyne.GraphBackend` is the repository's persistence and query boundary. A custom backend must preserve graph semantics and durable source-idempotency semantics.
 
-## The GraphBackend Behaviour
+## Behaviour Contract
 
-Your backend module must implement every callback in the behaviour:
+Backend state is initialized once and threaded through callbacks:
+
+```elixir
+@callback init(keyword()) ::
+  {:ok, state()} | {:error, Mnemosyne.Errors.error()}
+
+@callback apply_changeset(Mnemosyne.Graph.Changeset.t(), state()) ::
+  {:ok, state()} | {:error, Mnemosyne.Errors.error()}
+
+@callback delete_nodes([String.t()], state()) ::
+  {:ok, state()} | {:error, Mnemosyne.Errors.error()}
+```
+
+A changeset contains `additions`, typed `links` shaped as `{source_id, target_id, edge_type}`, and node `metadata`. Deletion removes the requested graph nodes and their dangling links, but must not remove ingestion records.
+
+The query callbacks are:
+
+```elixir
+@callback find_candidates(
+  [atom()],
+  [float()],
+  [[float()]],
+  %{module: module(), params: %{atom() => map()}},
+  keyword(),
+  state()
+) :: {:ok, [{struct(), float()}], state()} | {:error, Mnemosyne.Errors.error()}
+
+@callback get_node(String.t(), state()) ::
+  {:ok, struct() | nil, state()}
+
+@callback get_linked_nodes([String.t()], Mnemosyne.Graph.Edge.edge_type() | nil, state()) ::
+  {:ok, [struct()], state()}
+
+@callback get_nodes_by_type([atom()], state()) ::
+  {:ok, [struct()], state()} | {:error, Mnemosyne.Errors.error()}
+
+@callback get_metadata([String.t()], state()) ::
+  {:ok, %{String.t() => struct()}, state()}
+
+@callback update_metadata(%{String.t() => struct()}, state()) ::
+  {:ok, state()}
+
+@callback delete_metadata([String.t()], state()) ::
+  {:ok, state()}
+```
+
+`find_candidates/6` must derive relevance from the query embedding and tag embeddings, score with the configured value-function module and per-type parameters, then enforce each type's threshold and `top_k`. Read callbacks return state for interface uniformity, but callers may discard that returned state. Do not require read-side state mutation for correctness.
+
+## Durable Ingestion Records
+
+The record type is:
+
+```elixir
+@type ingestion_record :: %{
+        source_id: String.t(),
+        payload_digest: binary(),
+        fingerprint_version: pos_integer(),
+        receipt: Mnemosyne.IngestionReceipt.t()
+      }
+```
+
+Its callbacks and exact results are:
+
+```elixir
+@callback get_ingestion(String.t(), state()) ::
+  {:ok, Mnemosyne.GraphBackend.ingestion_record() | nil, state()}
+  | {:error, Mnemosyne.Errors.error()}
+
+@callback commit_ingestion(
+  Mnemosyne.GraphBackend.ingestion_record(),
+  Mnemosyne.Graph.Changeset.t(),
+  state()
+) ::
+  {:ok, :inserted | :existing, Mnemosyne.IngestionReceipt.t(), state()}
+  | {:error, Mnemosyne.Errors.error()}
+```
+
+`commit_ingestion/3` is the authoritative compare-and-set:
+
+- If the source ID is absent, atomically commit the changeset additions, typed links, node metadata, and ingestion record, then return `{:ok, :inserted, receipt, state}`.
+- If the stored `fingerprint_version` and `payload_digest` both match, discard the supplied changeset and return the exact stored receipt as `{:ok, :existing, receipt, state}`.
+- If either differs, change nothing and return `%Mnemosyne.Errors.Invalid.IngestionError{reason: :source_conflict}`.
+
+The returned receipt is authoritative. This final check must remain correct when multiple Mnemosyne processes reach a shared backend concurrently; an application-side lookup is not sufficient.
+
+Ingestion records are permanent control records outside graph nodes. `delete_nodes/2`, decay, consolidation, and graph repair must not remove them. Consequently, retrying a source after its graph nodes were deleted returns the original receipt and does not recreate those nodes.
+
+## Payload Fingerprint
+
+Current payload identity is SHA-256 over deterministic Erlang external term format for this exact tuple:
+
+```elixir
+{:mnemosyne_trajectory, 1, goal, ordered_step_tuples, metadata}
+```
+
+`ordered_step_tuples` contains `{observation, action}` in caller order. The source ID selects the repo-scoped record but is not inside the digest. Encoding uses `:erlang.term_to_binary/2` with `:deterministic` and fixed `minor_version: 2`; every record stores `fingerprint_version: 1`.
+
+This identity is deterministic for the supported Elixir terms in the intended OTP runtime, not a portable cross-language format. Erlang only gives bounded compatibility guarantees for deterministic encoding across OTP runtimes; a major runtime change can require deliberate fingerprint data handling. Never treat a different fingerprint version as equal.
+
+## Built-in DETS Limitation
+
+The built-in InMemory transition is atomic when persistence is disabled. Its DETS adapter has no transaction, rollback, or write-ahead log. For a new ingestion it writes, in order:
+
+1. graph node rows;
+2. link updates;
+3. node metadata rows;
+4. `{{:ingestion, source_id}, record}` last as the commit marker;
+5. `:dets.sync/1`.
+
+A failure before or during completion can leave partial graph, link, or metadata rows because DETS cannot roll them back. The operation must not return success unless the ingestion marker was written and synchronization succeeded. The marker-last order prevents a markerless partial write from being reported as a successful ingestion.
+
+Custom database backends should use their native transaction and uniqueness/compare-and-set facilities to make the graph mutation and ingestion record one logical commit.
+
+## Registration and Testing
 
 ```elixir
 defmodule MyApp.PostgresBackend do
   @behaviour Mnemosyne.GraphBackend
 
-  # ...
+  # Implement every callback above.
 end
+
+{:ok, _pid} =
+  Mnemosyne.open_repo("my-project",
+    backend: {MyApp.PostgresBackend, repo: MyApp.Repo}
+  )
 ```
 
-### Initialization
+At minimum, test absent, equal, and conflicting ingestion commits; simultaneous commits for one source; exact receipt persistence across restart; graph and metadata visibility before success; and ingestion-record survival after deletion and decay. Also cover candidate scoring, typed traversal, metadata operations, and dangling-link cleanup.
 
-```elixir
-@callback init(opts :: keyword()) :: {:ok, state()} | {:error, error()}
-```
-
-Called once when the repo is opened. Set up connections, load state, and return your backend state. This state is threaded through all subsequent calls.
-
-```elixir
-@impl true
-def init(opts) do
-  repo = Keyword.fetch!(opts, :repo)
-  table = Keyword.get(opts, :table, "mnemosyne_nodes")
-  {:ok, %{repo: repo, table: table}}
-end
-```
-
-### Mutations
-
-```elixir
-@callback apply_changeset(Changeset.t(), state()) :: {:ok, state()} | {:error, error()}
-@callback delete_nodes([String.t()], state()) :: {:ok, state()} | {:error, error()}
-```
-
-`apply_changeset/2` receives a `%Changeset{}` containing nodes and links to add. The changeset has:
-- `nodes` - a list of node structs implementing the `Node` protocol
-- `links` - a list of `{source_id, target_id}` tuples
-
-`delete_nodes/2` removes nodes by their IDs and any links referencing them.
-
-```elixir
-@impl true
-def apply_changeset(changeset, state) do
-  Enum.each(changeset.nodes, fn node ->
-    insert_node(state, node)
-  end)
-
-  Enum.each(changeset.links, fn {source_id, target_id} ->
-    insert_link(state, source_id, target_id)
-  end)
-
-  {:ok, state}
-end
-```
-
-### Ingestion Commits
-
-```elixir
-@callback get_ingestion(String.t(), state()) ::
-  {:ok, ingestion_record() | nil, state()} | {:error, error()}
-
-@callback commit_ingestion(ingestion_record(), Changeset.t(), state()) ::
-  {:ok, :inserted | :existing, Mnemosyne.IngestionReceipt.t(), state()}
-  | {:error, error()}
-```
-
-`commit_ingestion/3` is the authoritative compare-and-set boundary for a source ID.
-It must atomically persist graph changes, metadata, and a new ingestion record, returning
-`:inserted`. For an equal existing record, it must discard the supplied changeset and return
-its original receipt with `:existing`; a different record returns a source-conflict error.
-
-### Candidate Search
-
-```elixir
-@callback find_candidates(
-            node_types :: [atom()],
-            query_embedding :: [float()],
-            tag_embeddings :: [[float()]],
-            value_fn_config :: %{module: module(), params: %{atom() => map()}},
-            opts :: keyword(),
-            state()
-          ) :: {:ok, [scored_node()], state()} | {:error, error()}
-```
-
-This is the core retrieval callback. It must:
-1. Find nodes matching the given types
-2. Compute relevance using the query and tag embeddings
-3. Score candidates using the provided value function module and params
-4. Return `{node, score}` tuples, respecting per-type thresholds and top_k limits
-
-The `value_fn_config` map contains:
-- `:module` - the ValueFunction implementation to call
-- `:params` - per-node-type parameter maps (threshold, top_k, lambda, k, base_floor, beta)
-
-For a Postgres + pgvector backend, you'd push similarity search to the database:
-
-```elixir
-@impl true
-def find_candidates(node_types, query_vector, tag_vectors, vf_config, _opts, state) do
-  vf_module = Map.get(vf_config, :module, Mnemosyne.ValueFunction.Default)
-
-  candidates =
-    Enum.flat_map(node_types, fn type ->
-      params = get_in(vf_config, [:params, type]) || %{}
-      top_k = Map.get(params, :top_k, 20)
-      threshold = Map.get(params, :threshold, 0.0)
-
-      # Push vector search to Postgres
-      nodes = query_similar_nodes(state, type, query_vector, tag_vectors, top_k * 2)
-
-      # Score with value function
-      nodes
-      |> Enum.map(fn {node, relevance, metadata} ->
-        score = vf_module.score(relevance, node, metadata, params)
-        {node, score}
-      end)
-      |> Enum.filter(fn {_, score} -> score >= threshold end)
-      |> Enum.sort_by(&elem(&1, 1), :desc)
-      |> Enum.take(top_k)
-    end)
-
-  {:ok, candidates, state}
-end
-```
-
-### Node Retrieval
-
-```elixir
-@callback get_node(String.t(), state()) :: {:ok, struct() | nil, state()}
-@callback get_linked_nodes([String.t()], state()) :: {:ok, [struct()], state()}
-@callback get_nodes_by_type(node_types :: [atom()], state()) :: {:ok, [struct()], state()}
-```
-
-These support multi-hop traversal and maintenance operations. `get_linked_nodes/2` fetches nodes by a list of IDs (filtering out any that don't exist). `get_nodes_by_type/2` returns all nodes of the given types.
-
-### Metadata Operations
-
-```elixir
-@callback get_metadata([String.t()], state()) :: {:ok, %{String.t() => struct()}, state()}
-@callback update_metadata(%{String.t() => struct()}, state()) :: {:ok, state()}
-@callback delete_metadata([String.t()], state()) :: {:ok, state()}
-```
-
-Metadata (`NodeMetadata` structs) tracks per-node usage statistics separately from node content. The metadata map is keyed by node ID.
-
-## State Threading
-
-All callbacks receive and return the backend state. Read callbacks (`find_candidates`, `get_node`, `get_linked_nodes`, etc.) return state for interface uniformity, but callers may discard the returned state in read-only contexts. Don't rely on side effects in the returned state from read operations.
-
-## Registering Your Backend
-
-Pass your backend when opening a repo:
-
-```elixir
-{:ok, _pid} = Mnemosyne.open_repo("my-project",
-  backend: {MyApp.PostgresBackend, repo: MyApp.Repo, table: "knowledge_nodes"})
-```
-
-The second element of the tuple is passed as `opts` to `init/1`.
-
-## Testing
-
-Test your backend against the same operations the InMemory backend handles. The test suite in `test/mnemosyne/memory_store_test.exs` exercises the full backend interface through the MemoryStore.
-
-Key scenarios to cover:
-- Apply a changeset, then retrieve nodes by ID and type
-- Delete nodes and verify links are cleaned up
-- Find candidates with various embedding vectors
-- Metadata CRUD operations
-- Concurrent access patterns
-
-## Reference Implementation
-
-See `lib/mnemosyne/graph_backends/in_memory.ex` for the complete InMemory implementation. It wraps a `Graph` struct and uses `Similarity.cosine_similarity/2` for relevance scoring.
-
-## Next Steps
-
-- [Custom Adapters](custom-adapters.md) - writing LLM and embedding adapters
-- [Retrieval and Recall](retrieval-and-recall.md) - how the retrieval pipeline uses your backend
-- [Graph Maintenance](graph-maintenance.md) - maintenance operations that call your backend
+See `Mnemosyne.GraphBackends.InMemory` for the reference implementation.
