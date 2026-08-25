@@ -74,10 +74,12 @@ defmodule Mnemosyne do
   alias Mnemosyne.Errors.Framework.NotFoundError
   alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Errors.Framework.RepoError
+  alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.MemoryStore
   alias Mnemosyne.Pipeline.RecallResult
   alias Mnemosyne.Session
   alias Mnemosyne.Supervisor, as: MneSupervisor
+  alias Mnemosyne.Trajectory
 
   @default_sup Mnemosyne.Supervisor
 
@@ -441,6 +443,46 @@ defmodule Mnemosyne do
   end
 
   # -- Repo-scoped Operations --
+
+  @doc """
+  Stores a complete trajectory in a repository.
+
+  Returns only after the trajectory is committed and its graph nodes are visible.
+  Repeating the same payload with the same source ID returns the original receipt;
+  a different payload for that source ID returns an ingestion error.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+    * `:config` - A `Mnemosyne.Config` struct overriding the repo default for this ingestion.
+    * `:llm` - LLM adapter module overriding the repo default for this ingestion.
+    * `:embedding` - Embedding adapter module overriding the repo default for this ingestion.
+
+  Other execution options, such as `:llm_opts` and `:embedding_opts`, are passed
+  to the ingestion pipeline.
+  """
+  @spec ingest(String.t(), Trajectory.t(), keyword()) ::
+          {:ok, IngestionReceipt.t()} | {:error, Mnemosyne.Errors.error()}
+  def ingest(repo_id, %Trajectory{source_id: source_id} = trajectory, opts \\ []) do
+    metadata = %{repo_id: repo_id, source_id: source_id}
+    execution_opts = Keyword.delete(opts, :supervisor)
+
+    Mnemosyne.Telemetry.span([:ingestion, :ingest], metadata, fn ->
+      case lookup_repo(repo_id, opts) do
+        {:ok, pid} ->
+          result = MemoryStore.ingest(pid, trajectory, execution_opts)
+          {result, ingestion_measurements(result)}
+
+        {:error, _} = error ->
+          {error, %{}}
+      end
+    end)
+  end
+
+  defp ingestion_measurements({:ok, %IngestionReceipt{node_ids: node_ids}}),
+    do: %{node_count: length(node_ids)}
+
+  defp ingestion_measurements({:error, _}), do: %{}
 
   @doc """
   Retrieves relevant memories from the knowledge graph for the given query.

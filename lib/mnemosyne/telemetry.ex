@@ -23,6 +23,11 @@ defmodule Mnemosyne.Telemetry do
   - `[:mnemosyne, :retrieval, :hop_refinement, :start | :stop | :exception]`
   - `[:mnemosyne, :reasoning, :reason, :start | :stop | :exception]`
 
+  ### Ingestion
+  - `[:mnemosyne, :ingestion, :ingest, :start | :stop | :exception]`
+    - Metadata: `repo_id`, `source_id`
+    - Stop measurements: `node_count` on success
+
   ### Maintenance
   - `[:mnemosyne, :decay, :prune, :start | :stop | :exception]`
   - `[:mnemosyne, :consolidator, :consolidate, :start | :stop | :exception]`
@@ -67,6 +72,7 @@ defmodule Mnemosyne.Telemetry do
     @prefix ++ [:decay, :prune],
     @prefix ++ [:consolidator, :consolidate],
     @prefix ++ [:intent_merger, :merge],
+    @prefix ++ [:ingestion, :ingest],
     @prefix ++ [:session, :transition],
     @prefix ++ [:session, :op_enqueue],
     @prefix ++ [:session, :op_drain],

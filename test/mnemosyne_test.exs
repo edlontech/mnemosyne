@@ -7,15 +7,18 @@ defmodule MnemosyneTest do
   alias Mnemosyne.Embedding
   alias Mnemosyne.Errors.Framework.NotFoundError
   alias Mnemosyne.Errors.Framework.PipelineError
+  alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Procedural
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.GraphBackends.InMemory
   alias Mnemosyne.GraphBackends.Persistence.DETS
+  alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.LLM
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
   alias Mnemosyne.Pipeline.RecallResult
+  alias Mnemosyne.Trajectory
 
   @moduletag :tmp_dir
 
@@ -126,12 +129,16 @@ defmodule MnemosyneTest do
     config
   end
 
-  defp start_supervisor(_tmp_dir) do
-    opts = [
-      config: build_config(),
-      llm: Mnemosyne.MockLLM,
-      embedding: Mnemosyne.MockEmbedding
-    ]
+  defp start_supervisor(_tmp_dir, opts \\ []) do
+    opts =
+      Keyword.merge(
+        [
+          config: build_config(),
+          llm: Mnemosyne.MockLLM,
+          embedding: Mnemosyne.MockEmbedding
+        ],
+        opts
+      )
 
     start_supervised!({Mnemosyne.Supervisor, opts})
   end
@@ -141,8 +148,105 @@ defmodule MnemosyneTest do
     dets_path = Path.join(tmp_dir, "#{repo_id}.dets")
     persistence = {DETS, path: dets_path}
 
-    {:ok, _pid} = Mnemosyne.open_repo(repo_id, backend: {InMemory, persistence: persistence})
+    {:ok, _pid} =
+      Mnemosyne.open_repo(repo_id,
+        backend: {InMemory, persistence: persistence},
+        supervisor: Keyword.get(opts, :supervisor, Mnemosyne.Supervisor)
+      )
+
     repo_id
+  end
+
+  defp trajectory(overrides \\ []) do
+    struct!(
+      Trajectory,
+      Keyword.merge(
+        [
+          source_id: "source-#{System.unique_integer([:positive])}",
+          goal: "Diagnose timeouts",
+          steps: [%{observation: "Timeout", action: "Inspect logs"}],
+          metadata: %{}
+        ],
+        overrides
+      )
+    )
+  end
+
+  describe "ingest/3" do
+    test "stores a trajectory and exposes its graph nodes on return", %{tmp_dir: tmp_dir} do
+      stub_extraction_success()
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      assert {:ok, %IngestionReceipt{node_ids: node_ids}} = Mnemosyne.ingest(repo, trajectory())
+      assert node_ids != []
+
+      graph = Mnemosyne.get_graph(repo)
+      assert Enum.all?(node_ids, &Map.has_key?(graph.nodes, &1))
+    end
+
+    test "returns a repo not-found error", %{tmp_dir: tmp_dir} do
+      start_supervisor(tmp_dir)
+
+      assert {:error, %NotFoundError{resource: :repo, id: "missing-repo"}} =
+               Mnemosyne.ingest("missing-repo", trajectory())
+    end
+
+    test "uses its supervisor only for lookup and forwards execution overrides", %{
+      tmp_dir: tmp_dir
+    } do
+      test_pid = self()
+      supervisor = :"ingestion_supervisor_#{System.unique_integer([:positive])}"
+      override_config = %{build_config() | llm: %{model: "override", opts: %{}}}
+
+      changeset =
+        Changeset.add_node(
+          Changeset.new(),
+          %Semantic{id: "override", proposition: "Stored", confidence: 0.9}
+        )
+
+      stub(Mnemosyne.Pipeline.Ingestion, :run, fn _trajectory, opts ->
+        send(test_pid, {:ingestion_execution_opts, opts})
+        {:ok, changeset}
+      end)
+
+      start_supervisor(tmp_dir, name: supervisor)
+      repo = open_test_repo(tmp_dir, supervisor: supervisor)
+
+      assert {:ok, %IngestionReceipt{node_ids: ["override"]}} =
+               Mnemosyne.ingest(repo, trajectory(),
+                 supervisor: supervisor,
+                 config: override_config,
+                 llm: __MODULE__,
+                 embedding: __MODULE__,
+                 llm_opts: [temperature: 0.0],
+                 embedding_opts: [normalize: true]
+               )
+
+      assert_receive {:ingestion_execution_opts, opts}
+      assert opts[:config] == override_config
+      assert opts[:llm] == __MODULE__
+      assert opts[:embedding] == __MODULE__
+      assert opts[:llm_opts] == [temperature: 0.0]
+      assert opts[:embedding_opts] == [normalize: true]
+      assert opts[:repo_id] == repo
+      refute Keyword.has_key?(opts, :supervisor)
+    end
+
+    test "returns its persisted receipt for an equal retry and rejects conflicts", %{
+      tmp_dir: tmp_dir
+    } do
+      stub_extraction_success()
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+      input = trajectory(source_id: "idempotent-source")
+
+      assert {:ok, receipt} = Mnemosyne.ingest(repo, input)
+      assert {:ok, ^receipt} = Mnemosyne.ingest(repo, input, config: build_config())
+
+      assert {:error, %IngestionError{source_id: "idempotent-source", reason: :source_conflict}} =
+               Mnemosyne.ingest(repo, %{input | goal: "A different goal"})
+    end
   end
 
   describe "start_session/2" do
