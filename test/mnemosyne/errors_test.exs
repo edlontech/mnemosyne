@@ -3,6 +3,7 @@ defmodule Mnemosyne.ErrorsTest do
 
   alias Mnemosyne.Errors
   alias Mnemosyne.Errors.Framework.RepoError
+  alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Errors.Unknown.Unknown
 
   describe "Splode error creation" do
@@ -80,6 +81,26 @@ defmodule Mnemosyne.ErrorsTest do
       class = Errors.to_class(error)
 
       assert %{class: :framework} = class
+    end
+  end
+
+  describe "IngestionError" do
+    test "formats validation errors with the source ID" do
+      error = IngestionError.exception(source_id: "task-42", reason: :invalid_goal)
+
+      assert %IngestionError{} = error
+
+      assert Exception.message(error) ==
+               "ingestion error (source_id=\"task-42\"): goal must be a non-blank binary"
+    end
+
+    test "formats source conflicts and belongs to the invalid error class" do
+      error = IngestionError.exception(source_id: "task-42", reason: :source_conflict)
+
+      assert Exception.message(error) ==
+               "ingestion error (source_id=\"task-42\"): source ID conflicts with an existing ingestion"
+
+      assert %{class: :invalid} = Errors.to_class(error)
     end
   end
 

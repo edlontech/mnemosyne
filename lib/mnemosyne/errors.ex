@@ -16,6 +16,7 @@ defmodule Mnemosyne.Errors do
   @type error ::
           Mnemosyne.Errors.Invalid.ConfigError.t()
           | Mnemosyne.Errors.Invalid.EpisodeError.t()
+          | Mnemosyne.Errors.Invalid.IngestionError.t()
           | Mnemosyne.Errors.Invalid.PromptError.t()
           | Mnemosyne.Errors.Framework.SessionError.t()
           | Mnemosyne.Errors.Framework.PipelineError.t()
