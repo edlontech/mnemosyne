@@ -8,16 +8,19 @@ defmodule Mnemosyne.GraphBackends.InMemory do
 
   @behaviour Mnemosyne.GraphBackend
 
+  alias Mnemosyne.Errors.Framework.StorageError
+  alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Similarity
 
-  defstruct graph: Graph.new(), persistence: nil, metadata: %{}
+  defstruct graph: Graph.new(), persistence: nil, metadata: %{}, ingestions: %{}
 
   @type t :: %__MODULE__{
           graph: Graph.t(),
           persistence: {module(), term()} | nil,
-          metadata: %{String.t() => Mnemosyne.NodeMetadata.t()}
+          metadata: %{String.t() => Mnemosyne.NodeMetadata.t()},
+          ingestions: %{String.t() => Mnemosyne.GraphBackend.ingestion_record()}
         }
 
   @impl true
@@ -28,8 +31,14 @@ defmodule Mnemosyne.GraphBackends.InMemory do
 
       {mod, persistence_opts} ->
         with {:ok, ps} <- mod.init(persistence_opts),
-             {:ok, graph, metadata} <- mod.load(ps) do
-          {:ok, %__MODULE__{graph: graph, persistence: {mod, ps}, metadata: metadata}}
+             {:ok, graph, metadata, ingestions} <- mod.load(ps) do
+          {:ok,
+           %__MODULE__{
+             graph: graph,
+             persistence: {mod, ps},
+             metadata: metadata,
+             ingestions: ingestions
+           }}
         end
     end
   end
@@ -39,6 +48,39 @@ defmodule Mnemosyne.GraphBackends.InMemory do
     updated_graph = Graph.apply_changeset(state.graph, changeset)
     :ok = maybe_persist(changeset, state.persistence)
     {:ok, %{state | graph: updated_graph}}
+  end
+
+  @impl true
+  def get_ingestion(source_id, state) do
+    {:ok, Map.get(state.ingestions, source_id), state}
+  end
+
+  @impl true
+  def commit_ingestion(record, changeset, state) do
+    case Map.get(state.ingestions, record.source_id) do
+      nil ->
+        updated_state = %{
+          state
+          | graph: Graph.apply_changeset(state.graph, changeset),
+            metadata: Map.merge(state.metadata, changeset.metadata),
+            ingestions: Map.put(state.ingestions, record.source_id, record)
+        }
+
+        case maybe_persist_ingestion(record, changeset, state.persistence) do
+          :ok ->
+            {:ok, record.receipt, updated_state}
+
+          {:error, reason} ->
+            {:error, StorageError.exception(operation: :commit_ingestion, reason: reason)}
+        end
+
+      %{fingerprint_version: version, payload_digest: digest, receipt: receipt}
+      when version == record.fingerprint_version and digest == record.payload_digest ->
+        {:ok, receipt, state}
+
+      _different ->
+        {:error, IngestionError.exception(source_id: record.source_id, reason: :source_conflict)}
+    end
   end
 
   @impl true
@@ -148,4 +190,10 @@ defmodule Mnemosyne.GraphBackends.InMemory do
 
   defp maybe_delete_metadata(_ids, nil), do: :ok
   defp maybe_delete_metadata(ids, {mod, ps}), do: mod.delete_metadata(ids, ps)
+
+  defp maybe_persist_ingestion(_record, _changeset, nil), do: :ok
+
+  defp maybe_persist_ingestion(record, changeset, {mod, ps}) do
+    mod.commit_ingestion(record, changeset, ps)
+  end
 end

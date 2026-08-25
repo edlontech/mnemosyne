@@ -1,6 +1,7 @@
 defmodule Mnemosyne.GraphBackends.InMemoryTest do
   use ExUnit.Case, async: true
 
+  alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
   alias Mnemosyne.Graph.Node.Procedural
@@ -8,6 +9,8 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
   alias Mnemosyne.GraphBackends.InMemory
+  alias Mnemosyne.IngestionReceipt
+  alias Mnemosyne.NodeMetadata
 
   @test_vector List.duplicate(0.1, 128)
   @alt_vector List.duplicate(0.2, 128)
@@ -47,11 +50,119 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
     %Subgoal{id: id, description: desc, embedding: embedding}
   end
 
+  defp ingestion_record(opts \\ []) do
+    source_id = Keyword.get(opts, :source_id, "source-1")
+
+    receipt = %IngestionReceipt{
+      source_id: source_id,
+      node_ids: Keyword.get(opts, :node_ids, ["s1"]),
+      stored_at: Keyword.get(opts, :stored_at, ~U[2026-08-25 12:00:00Z])
+    }
+
+    %{
+      source_id: source_id,
+      payload_digest: Keyword.get(opts, :payload_digest, <<1, 2, 3>>),
+      fingerprint_version: Keyword.get(opts, :fingerprint_version, 1),
+      receipt: receipt
+    }
+  end
+
   describe "init/1" do
     test "returns empty graph state with no persistence" do
       assert {:ok, state} = InMemory.init([])
       assert %InMemory{persistence: nil} = state
       assert state.graph.nodes == %{}
+    end
+  end
+
+  describe "ingestion records" do
+    test "returns nil for a missing source" do
+      {:ok, state} = InMemory.init([])
+
+      assert {:ok, nil, ^state} = InMemory.get_ingestion("missing", state)
+    end
+
+    test "commits graph additions, metadata, and the record together" do
+      {:ok, state} = InMemory.init([])
+      record = ingestion_record()
+      receipt = record.receipt
+      metadata = NodeMetadata.new(created_at: ~U[2026-08-25 11:00:00Z])
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(semantic_node("s1", @test_vector))
+        |> Changeset.put_metadata("s1", metadata)
+
+      assert {:ok, ^receipt, state} = InMemory.commit_ingestion(record, changeset, state)
+      assert {:ok, %Semantic{id: "s1"}, ^state} = InMemory.get_node("s1", state)
+      assert {:ok, %{"s1" => ^metadata}, ^state} = InMemory.get_metadata(["s1"], state)
+      assert {:ok, ^record, ^state} = InMemory.get_ingestion("source-1", state)
+    end
+
+    test "an equal commit returns the original receipt without applying its changeset" do
+      {:ok, state} = InMemory.init([])
+      record = ingestion_record()
+      first_changeset = Changeset.add_node(Changeset.new(), semantic_node("s1", @test_vector))
+      {:ok, original_receipt, state} = InMemory.commit_ingestion(record, first_changeset, state)
+
+      retry_record =
+        ingestion_record(
+          node_ids: ["s2"],
+          stored_at: ~U[2026-08-25 13:00:00Z]
+        )
+
+      retry_changeset =
+        Changeset.new()
+        |> Changeset.add_node(semantic_node("s2", @alt_vector))
+        |> Changeset.put_metadata("s2", NodeMetadata.new())
+
+      assert {:ok, ^original_receipt, ^state} =
+               InMemory.commit_ingestion(retry_record, retry_changeset, state)
+
+      assert {:ok, nil, ^state} = InMemory.get_node("s2", state)
+      assert {:ok, %{}, ^state} = InMemory.get_metadata(["s2"], state)
+    end
+
+    test "a different digest returns a source conflict without mutation" do
+      {:ok, state} = InMemory.init([])
+      record = ingestion_record()
+      {:ok, _receipt, state} = InMemory.commit_ingestion(record, Changeset.new(), state)
+
+      conflicting_record = ingestion_record(payload_digest: <<9, 9, 9>>)
+
+      conflicting_changeset =
+        Changeset.add_node(Changeset.new(), semantic_node("s2", @alt_vector))
+
+      assert {:error, %IngestionError{source_id: "source-1", reason: :source_conflict}} =
+               InMemory.commit_ingestion(conflicting_record, conflicting_changeset, state)
+
+      assert {:ok, nil, ^state} = InMemory.get_node("s2", state)
+      assert {:ok, ^record, ^state} = InMemory.get_ingestion("source-1", state)
+    end
+
+    test "a different fingerprint version returns a source conflict without mutation" do
+      {:ok, state} = InMemory.init([])
+      record = ingestion_record()
+      {:ok, _receipt, state} = InMemory.commit_ingestion(record, Changeset.new(), state)
+
+      conflicting_record = ingestion_record(fingerprint_version: 2)
+
+      assert {:error, %IngestionError{source_id: "source-1", reason: :source_conflict}} =
+               InMemory.commit_ingestion(conflicting_record, Changeset.new(), state)
+
+      assert {:ok, ^record, ^state} = InMemory.get_ingestion("source-1", state)
+    end
+
+    test "direct node deletion leaves the ingestion record" do
+      {:ok, state} = InMemory.init([])
+      record = ingestion_record()
+      changeset = Changeset.add_node(Changeset.new(), semantic_node("s1", @test_vector))
+
+      {:ok, _receipt, state} = InMemory.commit_ingestion(record, changeset, state)
+      {:ok, state} = InMemory.delete_nodes(["s1"], state)
+
+      assert {:ok, nil, ^state} = InMemory.get_node("s1", state)
+      assert {:ok, ^record, ^state} = InMemory.get_ingestion("source-1", state)
     end
   end
 

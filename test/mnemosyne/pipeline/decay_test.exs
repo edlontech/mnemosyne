@@ -8,6 +8,7 @@ defmodule Mnemosyne.Pipeline.DecayTest do
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Tag
   alias Mnemosyne.GraphBackends.InMemory
+  alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Decay
 
@@ -48,6 +49,50 @@ defmodule Mnemosyne.Pipeline.DecayTest do
   end
 
   describe "decay/1 deletes old unused nodes" do
+    test "default decay leaves ingestion records after deleting their nodes" do
+      sem = %Semantic{
+        id: "ingested_old",
+        proposition: "stale ingested fact",
+        confidence: 1.0,
+        embedding: [1.0, 0.0, 0.0]
+      }
+
+      metadata =
+        NodeMetadata.new(
+          created_at: old_time(),
+          access_count: 0,
+          cumulative_reward: 0.0,
+          reward_count: 0
+        )
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(sem)
+        |> Changeset.put_metadata("ingested_old", metadata)
+
+      receipt = %IngestionReceipt{
+        source_id: "source-old",
+        node_ids: ["ingested_old"],
+        stored_at: ~U[2026-08-25 12:00:00Z]
+      }
+
+      record = %{
+        source_id: "source-old",
+        payload_digest: <<1, 2, 3>>,
+        fingerprint_version: 1,
+        receipt: receipt
+      }
+
+      {:ok, backend} = InMemory.init([])
+      {:ok, ^receipt, backend} = InMemory.commit_ingestion(record, changeset, backend)
+
+      assert {:ok, %{deleted: 1, checked: 1}, {InMemory, final_backend}} =
+               Decay.decay(backend: {InMemory, backend}, config: @config)
+
+      assert {:ok, nil, ^final_backend} = InMemory.get_node("ingested_old", final_backend)
+      assert {:ok, ^record, ^final_backend} = InMemory.get_ingestion("source-old", final_backend)
+    end
+
     test "semantic node with zero access and old timestamp gets deleted" do
       sem = %Semantic{
         id: "sem_old",

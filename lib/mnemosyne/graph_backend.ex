@@ -10,12 +10,15 @@ defmodule Mnemosyne.GraphBackend do
 
   - `init/1` - Initialize the backend with configuration options.
   - `apply_changeset/2` - Persist a batch of node additions and links.
+  - `get_ingestion/2` - Fetch a durable ingestion record by source ID.
+  - `commit_ingestion/3` - Compare-and-set graph changes and an ingestion record.
   - `delete_nodes/2` - Remove nodes by their IDs.
   - `find_candidates/6` - Query for nodes matching type/embedding/tag criteria.
   - `get_node/2` - Fetch a single node by ID.
   - `get_linked_nodes/3` - Fetch linked nodes, optionally filtered by edge type.
 
-  Read callbacks (`find_candidates`, `get_node`, `get_linked_nodes`) return state
+  Read callbacks (`find_candidates`, `get_node`, `get_linked_nodes`, `get_ingestion`)
+  return state
   for interface uniformity but must not rely on state mutation — callers may
   discard the returned state in read-only contexts.
   """
@@ -25,12 +28,25 @@ defmodule Mnemosyne.GraphBackend do
 
   @type state :: term()
   @type scored_node :: {struct(), float()}
+  @type ingestion_record :: %{
+          source_id: String.t(),
+          payload_digest: binary(),
+          fingerprint_version: pos_integer(),
+          receipt: Mnemosyne.IngestionReceipt.t()
+        }
 
   @callback init(opts :: keyword()) ::
               {:ok, state()} | {:error, Mnemosyne.Errors.error()}
 
   @callback apply_changeset(Changeset.t(), state()) ::
               {:ok, state()} | {:error, Mnemosyne.Errors.error()}
+
+  @callback get_ingestion(String.t(), state()) ::
+              {:ok, ingestion_record() | nil, state()} | {:error, Mnemosyne.Errors.error()}
+
+  @callback commit_ingestion(ingestion_record(), Changeset.t(), state()) ::
+              {:ok, Mnemosyne.IngestionReceipt.t(), state()}
+              | {:error, Mnemosyne.Errors.error()}
 
   @callback delete_nodes([String.t()], state()) ::
               {:ok, state()} | {:error, Mnemosyne.Errors.error()}

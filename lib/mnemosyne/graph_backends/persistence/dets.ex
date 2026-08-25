@@ -3,7 +3,8 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
   DETS-backed persistence for the InMemory graph backend.
 
   Stores nodes as `{node_id, node_struct}` records. Secondary indexes
-  are rebuilt on load via `Graph.put_node/2`.
+  are rebuilt on load via `Graph.put_node/2`. Ingestion records are kept
+  separately as `{{:ingestion, source_id}, record}` rows.
   """
 
   alias Mnemosyne.Graph
@@ -23,24 +24,31 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
   end
 
   @doc """
-  Reads all records from DETS and rebuilds a `Graph` struct plus metadata map.
+  Reads all records from DETS and rebuilds a graph, metadata map, and ingestion map.
 
   Node records are stored as `{id, node}` tuples, metadata records as
-  `{{:meta, id}, metadata}` tuples. Both are separated during the fold.
+  `{{:meta, id}, metadata}` tuples, and ingestion records as
+  `{{:ingestion, source_id}, record}` tuples.
   """
-  @spec load(map()) :: {:ok, Graph.t(), map()} | {:error, term()}
+  @spec load(map()) :: {:ok, Graph.t(), map(), map()} | {:error, term()}
   def load(%{ref: ref}) do
-    {graph, metadata} =
+    {graph, metadata, ingestions} =
       :dets.foldl(
         fn
-          {{:meta, id}, meta}, {g, m} -> {g, Map.put(m, id, meta)}
-          {_id, node}, {g, m} -> {Graph.put_node(g, node), m}
+          {{:meta, id}, meta}, {g, m, i} ->
+            {g, Map.put(m, id, meta), i}
+
+          {{:ingestion, source_id}, record}, {g, m, i} ->
+            {g, m, Map.put(i, source_id, record)}
+
+          {_id, node}, {g, m, i} ->
+            {Graph.put_node(g, node), m, i}
         end,
-        {Graph.new(), %{}},
+        {Graph.new(), %{}, %{}},
         ref
       )
 
-    {:ok, graph, metadata}
+    {:ok, graph, metadata, ingestions}
   rescue
     e -> {:error, e}
   end
@@ -52,6 +60,31 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
          :ok <- persist_links(changeset.links, ref) do
       :dets.sync(ref)
     end
+  end
+
+  @doc """
+  Persists a new ingestion with its graph and metadata changes.
+
+  The ingestion row is written last as the commit marker and the table is then
+  synchronized. DETS has no transactions, so a write failure before the marker
+  may leave partial graph or metadata rows for a later load.
+  """
+  @spec commit_ingestion(
+          Mnemosyne.GraphBackend.ingestion_record(),
+          Mnemosyne.Graph.Changeset.t(),
+          map()
+        ) :: :ok | {:error, term()}
+  def commit_ingestion(record, changeset, %{ref: ref}) do
+    with :ok <- insert_nodes(changeset.additions, ref),
+         :ok <- persist_links(changeset.links, ref),
+         :ok <- insert_metadata(changeset.metadata, ref),
+         :ok <- :dets.insert(ref, {{:ingestion, record.source_id}, record}) do
+      :dets.sync(ref)
+    end
+  rescue
+    exception -> {:error, exception}
+  catch
+    :exit, reason -> {:error, reason}
   end
 
   @doc """
@@ -74,15 +107,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
   @doc "Persists metadata entries as `{{:meta, id}, metadata}` records."
   @spec save_metadata(%{String.t() => struct()}, map()) :: :ok | {:error, term()}
   def save_metadata(entries, %{ref: ref}) do
-    result =
-      Enum.reduce_while(entries, :ok, fn {id, meta}, :ok ->
-        case :dets.insert(ref, {{:meta, id}, meta}) do
-          :ok -> {:cont, :ok}
-          {:error, _} = error -> {:halt, error}
-        end
-      end)
-
-    with :ok <- result, do: :dets.sync(ref)
+    with :ok <- insert_metadata(entries, ref), do: :dets.sync(ref)
   end
 
   @doc "Removes metadata entries by node ID from DETS."
@@ -97,6 +122,15 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
       end)
 
     with :ok <- result, do: :dets.sync(ref)
+  end
+
+  defp insert_metadata(entries, ref) do
+    Enum.reduce_while(entries, :ok, fn {id, meta}, :ok ->
+      case :dets.insert(ref, {{:meta, id}, meta}) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp insert_nodes(additions, ref) do
