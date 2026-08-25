@@ -143,7 +143,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
   end
 
   describe "Episode.append/4 telemetry" do
-    test "emits start and stop events" do
+    test "emits start and stop events with optional source correlation" do
       stub_append_cycle()
       attach_telemetry([:mnemosyne, :episode, :append, :start])
       attach_telemetry([:mnemosyne, :episode, :append, :stop])
@@ -152,12 +152,12 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
       {:ok, _updated, _trace} = Episode.append(episode, "obs", "act", @default_opts)
 
       assert_received {:telemetry, [:mnemosyne, :episode, :append, :start], start_measurements,
-                       %{episode_id: _}}
+                       %{episode_id: _, repo_id: nil, source_id: nil}}
 
       assert is_integer(start_measurements.monotonic_time)
 
       assert_received {:telemetry, [:mnemosyne, :episode, :append, :stop], stop_measurements,
-                       %{episode_id: _}}
+                       %{episode_id: _, repo_id: nil, source_id: nil}}
 
       assert is_integer(stop_measurements.duration)
       assert is_integer(stop_measurements.step_count)
@@ -178,23 +178,32 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
   end
 
   describe "Structuring.extract/2 telemetry" do
-    test "emits start and stop events" do
+    test "emits source correlation for extraction and trajectory events" do
       stub_extraction_llm()
       attach_telemetry([:mnemosyne, :structuring, :extract, :start])
       attach_telemetry([:mnemosyne, :structuring, :extract, :stop])
+      attach_telemetry([:mnemosyne, :structuring, :extract_trajectory, :start])
+      attach_telemetry([:mnemosyne, :structuring, :extract_trajectory, :stop])
 
       episode = Episode.new("Test goal")
       {:ok, episode, _trace} = Episode.append(episode, "obs", "act", @default_opts)
       {:ok, closed} = Episode.close(episode)
 
+      opts = @default_opts ++ [repo_id: "repo-1", source_id: "source-1"]
       stub_extraction_llm()
-      {:ok, _cs} = Structuring.extract(closed, @default_opts)
+      {:ok, _cs} = Structuring.extract(closed, opts)
 
       assert_received {:telemetry, [:mnemosyne, :structuring, :extract, :start], _,
-                       %{episode_id: _}}
+                       %{episode_id: _, repo_id: "repo-1", source_id: "source-1"}}
 
       assert_received {:telemetry, [:mnemosyne, :structuring, :extract, :stop], stop_measurements,
-                       %{episode_id: _}}
+                       %{episode_id: _, repo_id: "repo-1", source_id: "source-1"}}
+
+      assert_received {:telemetry, [:mnemosyne, :structuring, :extract_trajectory, :start], _,
+                       %{trajectory_id: _, repo_id: "repo-1", source_id: "source-1"}}
+
+      assert_received {:telemetry, [:mnemosyne, :structuring, :extract_trajectory, :stop], _,
+                       %{trajectory_id: _, repo_id: "repo-1", source_id: "source-1"}}
 
       assert is_integer(stop_measurements.trajectory_count)
       assert is_integer(stop_measurements.nodes_created)
@@ -249,7 +258,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
             }
           ]
 
-      opts = opts ++ [repo_id: "repo-1", source_id: "source-1", session_id: "legacy-session"]
+      opts = opts ++ [repo_id: "repo-1", source_id: "source-1"]
       {:ok, _result, _trace} = Retrieval.retrieve("Tell me about Elixir", opts)
 
       assert_received {:telemetry, [:mnemosyne, :retrieval, :retrieve, :start], _, start_metadata}
@@ -296,8 +305,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
           llm: Mnemosyne.MockLLM,
           query: "test query",
           repo_id: "repo-1",
-          source_id: "source-1",
-          session_id: "legacy-session"
+          source_id: "source-1"
         )
 
       assert_received {:telemetry, [:mnemosyne, :reasoning, :reason, :start], _, start_metadata}

@@ -20,8 +20,10 @@ defmodule Mnemosyne.Telemetry do
   - `[:mnemosyne, :structuring, :extract, :start | :stop | :exception]`
   - `[:mnemosyne, :structuring, :extract_trajectory, :start | :stop | :exception]`
   - `[:mnemosyne, :retrieval, :retrieve, :start | :stop | :exception]`
+  - `[:mnemosyne, :retrieval, :hop_control, :start | :stop | :exception]`
   - `[:mnemosyne, :retrieval, :hop_refinement, :start | :stop | :exception]`
   - `[:mnemosyne, :reasoning, :reason, :start | :stop | :exception]`
+  - `[:mnemosyne, :tag_deduplicator, :deduplicate, :start | :stop | :exception]`
 
   ### Ingestion
   - `[:mnemosyne, :ingestion, :ingest, :start | :stop | :exception]`
@@ -32,14 +34,8 @@ defmodule Mnemosyne.Telemetry do
   - `[:mnemosyne, :decay, :prune, :start | :stop | :exception]`
   - `[:mnemosyne, :consolidator, :consolidate, :start | :stop | :exception]`
   - `[:mnemosyne, :intent_merger, :merge, :start | :stop | :exception]`
-
-  ### Session
-  - `[:mnemosyne, :session, :transition, :start | :stop | :exception]`
-  - `[:mnemosyne, :session, :op_enqueue]` — point event on enqueue
-    - Metadata: `op`, `queue_depth`, `projected_state`, `session_id`, `repo_id`
-  - `[:mnemosyne, :session, :op_drain, :start | :stop | :exception]` — span around drain
-    - Start metadata: `queue_depth`, `session_id`, `repo_id`
-    - Stop measurements: `ops_executed`, `ops_failed`
+  - `[:mnemosyne, :episodic_validation, :validate, :start | :stop | :exception]`
+  - `[:mnemosyne, :graph_repair, :repair, :start | :stop | :exception]`
 
   ### Repository Lifecycle
   - `[:mnemosyne, :repo, :open, :start | :stop | :exception]`
@@ -52,8 +48,6 @@ defmodule Mnemosyne.Telemetry do
 
   ### Storage / Graph
   - `[:mnemosyne, :graph, :apply_changeset, :start | :stop | :exception]`
-  - `[:mnemosyne, :storage, :persist, :start | :stop | :exception]`
-  - `[:mnemosyne, :storage, :load, :start | :stop | :exception]`
   """
 
   @prefix [:mnemosyne]
@@ -67,21 +61,20 @@ defmodule Mnemosyne.Telemetry do
     @prefix ++ [:structuring, :extract],
     @prefix ++ [:structuring, :extract_trajectory],
     @prefix ++ [:retrieval, :retrieve],
+    @prefix ++ [:retrieval, :hop_control],
     @prefix ++ [:retrieval, :hop_refinement],
     @prefix ++ [:reasoning, :reason],
+    @prefix ++ [:tag_deduplicator, :deduplicate],
     @prefix ++ [:decay, :prune],
     @prefix ++ [:consolidator, :consolidate],
     @prefix ++ [:intent_merger, :merge],
+    @prefix ++ [:episodic_validation, :validate],
+    @prefix ++ [:graph_repair, :repair],
     @prefix ++ [:ingestion, :ingest],
-    @prefix ++ [:session, :transition],
-    @prefix ++ [:session, :op_enqueue],
-    @prefix ++ [:session, :op_drain],
     @prefix ++ [:repo, :open],
     @prefix ++ [:repo, :close],
     @prefix ++ [:memory_store, :queue],
-    @prefix ++ [:graph, :apply_changeset],
-    @prefix ++ [:storage, :persist],
-    @prefix ++ [:storage, :load]
+    @prefix ++ [:graph, :apply_changeset]
   ]
 
   @doc "Returns all event prefixes emitted by Mnemosyne."

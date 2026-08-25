@@ -83,13 +83,13 @@ defmodule Mnemosyne.Telemetry.DefaultHandlerTest do
     log =
       capture_log([level: :debug], fn ->
         :telemetry.execute(
-          [:mnemosyne, :storage, :persist, :stop],
+          [:mnemosyne, :repo, :close, :stop],
           %{duration: System.convert_time_unit(20, :millisecond, :native)},
           %{}
         )
       end)
 
-    assert log =~ "storage.persist completed in"
+    assert log =~ "repo.close completed in"
     assert log =~ "ms"
   end
 end

@@ -22,27 +22,39 @@ defmodule Mnemosyne.TelemetryTest do
     :ok
   end
 
-  test "events/0 returns all event prefixes" do
+  test "events/0 returns the complete active event catalog" do
     events = Telemetry.events()
-    assert length(events) == 23
-    assert [:mnemosyne, :llm, :chat] in events
-    assert [:mnemosyne, :llm, :chat_structured] in events
-    assert [:mnemosyne, :embedding, :embed] in events
-    assert [:mnemosyne, :embedding, :embed_batch] in events
-    assert [:mnemosyne, :episode, :append] in events
-    assert [:mnemosyne, :structuring, :extract] in events
-    assert [:mnemosyne, :retrieval, :retrieve] in events
-    assert [:mnemosyne, :reasoning, :reason] in events
-    assert [:mnemosyne, :decay, :prune] in events
-    assert [:mnemosyne, :consolidator, :consolidate] in events
-    assert [:mnemosyne, :intent_merger, :merge] in events
+
+    expected_events =
+      MapSet.new([
+        [:mnemosyne, :llm, :chat],
+        [:mnemosyne, :llm, :chat_structured],
+        [:mnemosyne, :embedding, :embed],
+        [:mnemosyne, :embedding, :embed_batch],
+        [:mnemosyne, :episode, :append],
+        [:mnemosyne, :structuring, :extract],
+        [:mnemosyne, :structuring, :extract_trajectory],
+        [:mnemosyne, :retrieval, :retrieve],
+        [:mnemosyne, :retrieval, :hop_control],
+        [:mnemosyne, :retrieval, :hop_refinement],
+        [:mnemosyne, :reasoning, :reason],
+        [:mnemosyne, :tag_deduplicator, :deduplicate],
+        [:mnemosyne, :decay, :prune],
+        [:mnemosyne, :consolidator, :consolidate],
+        [:mnemosyne, :intent_merger, :merge],
+        [:mnemosyne, :episodic_validation, :validate],
+        [:mnemosyne, :graph_repair, :repair],
+        [:mnemosyne, :ingestion, :ingest],
+        [:mnemosyne, :repo, :open],
+        [:mnemosyne, :repo, :close],
+        [:mnemosyne, :memory_store, :queue],
+        [:mnemosyne, :graph, :apply_changeset]
+      ])
+
+    assert MapSet.new(events) == expected_events
     assert [:mnemosyne, :ingestion, :ingest] in events
-    assert [:mnemosyne, :session, :transition] in events
-    assert [:mnemosyne, :repo, :open] in events
-    assert [:mnemosyne, :repo, :close] in events
-    assert [:mnemosyne, :graph, :apply_changeset] in events
-    assert [:mnemosyne, :storage, :persist] in events
-    assert [:mnemosyne, :storage, :load] in events
+    assert [:mnemosyne, :memory_store, :queue] in events
+    refute Enum.any?(events, &match?([:mnemosyne, :session | _], &1))
   end
 
   test "span/3 emits start and stop events on success" do

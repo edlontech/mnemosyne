@@ -3,7 +3,7 @@ defmodule Mnemosyne.Notifier do
   Behaviour for pluggable event notification.
 
   Implementations receive real-time events about graph changes, trajectory ingestion,
-  session transitions, and maintenance operations.
+  recall, and maintenance operations.
   """
 
   require Logger
@@ -11,7 +11,6 @@ defmodule Mnemosyne.Notifier do
   @type metadata :: %{
           optional(:repo_id) => String.t() | nil,
           optional(:source_id) => String.t() | nil,
-          optional(:session_id) => String.t() | nil,
           optional(:trace) => struct() | nil,
           optional(:node_ids) => [String.t()]
         }
@@ -48,24 +47,8 @@ defmodule Mnemosyne.Notifier do
                orphans_deleted: non_neg_integer(),
                orphan_ids: [String.t()]
              }, metadata()}
-          | {:session_transition, session_id :: String.t(), old_state :: atom(),
-             new_state :: atom(), metadata()}
           | {:recall_executed, query :: String.t(), results :: term(), metadata()}
           | {:recall_failed, query :: String.t(), reason :: term(), metadata()}
-          | {:step_appended, session_id :: String.t(),
-             %{
-               step_index: non_neg_integer(),
-               trajectory_id: String.t(),
-               boundary_detected: boolean()
-             }, metadata()}
-          | {:trajectory_committed, session_id :: String.t(), trajectory_id :: String.t(),
-             %{node_count: non_neg_integer(), node_ids: [String.t()]}, metadata()}
-          | {:trajectory_flushed, session_id :: String.t(), trajectory_id :: String.t(),
-             %{node_count: non_neg_integer(), node_ids: [String.t()]}, metadata()}
-          | {:session_expired, session_id :: String.t(), metadata()}
-          | {:trajectory_extraction_failed, session_id :: String.t(), trajectory_id :: String.t(),
-             reason :: term(), metadata()}
-          | {:append_failed, session_id :: String.t(), %{error: term()}}
           | {:write_failed, operation :: atom(), reason :: term(), metadata()}
           | {:write_crashed, operation :: atom(), reason :: term(), metadata()}
 

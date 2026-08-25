@@ -1,6 +1,7 @@
 defmodule Mnemosyne.NotifierTest do
   use ExUnit.Case, async: true
 
+  alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.Notifier
 
   defmodule RaisingNotifier do
@@ -39,9 +40,14 @@ defmodule Mnemosyne.NotifierTest do
       assert :ok = Notifier.Noop.notify("repo_1", event)
     end
 
-    test "returns :ok for session_transition" do
-      assert :ok =
-               Notifier.Noop.notify("repo_1", {:session_transition, "s1", :open, :closed, %{}})
+    test "returns :ok for trajectory_ingested" do
+      receipt = %IngestionReceipt{
+        source_id: "source-1",
+        node_ids: ["node-1"],
+        stored_at: ~U[2026-08-25 00:00:00Z]
+      }
+
+      assert :ok = Notifier.Noop.notify("repo_1", {:trajectory_ingested, receipt, %{}})
     end
 
     test "returns :ok for recall_executed" do

@@ -40,7 +40,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
       %{
         episode_id: episode.id,
         repo_id: Keyword.get(opts, :repo_id),
-        session_id: Keyword.get(opts, :session_id)
+        source_id: Keyword.get(opts, :source_id)
       },
       fn ->
         changesets =
@@ -88,7 +88,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
       %{
         trajectory_id: trajectory.id,
         repo_id: Keyword.get(opts, :repo_id),
-        session_id: Keyword.get(opts, :session_id)
+        source_id: Keyword.get(opts, :source_id)
       },
       fn ->
         episode_id = Keyword.get_lazy(opts, :episode_id, fn -> generate_id("ep") end)

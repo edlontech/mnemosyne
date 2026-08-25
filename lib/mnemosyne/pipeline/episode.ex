@@ -82,7 +82,7 @@ defmodule Mnemosyne.Pipeline.Episode do
       %{
         episode_id: episode.id,
         repo_id: Keyword.get(opts, :repo_id),
-        session_id: Keyword.get(opts, :session_id)
+        source_id: Keyword.get(opts, :source_id)
       },
       fn ->
         llm = Keyword.fetch!(opts, :llm)

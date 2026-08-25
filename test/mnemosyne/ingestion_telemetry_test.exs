@@ -5,11 +5,10 @@ defmodule Mnemosyne.IngestionTelemetryTest do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Errors.Framework.NotFoundError
-  alias Mnemosyne.Graph.Changeset
-  alias Mnemosyne.Graph.Node.Semantic
+  alias Mnemosyne.Graph.Node.Source
   alias Mnemosyne.GraphBackends.InMemory
   alias Mnemosyne.GraphBackends.Persistence.DETS
-  alias Mnemosyne.Pipeline.Ingestion
+  alias Mnemosyne.LLM
   alias Mnemosyne.Trajectory
 
   @moduletag :tmp_dir
@@ -61,6 +60,48 @@ defmodule Mnemosyne.IngestionTelemetryTest do
     }
   end
 
+  defp stub_extraction_success do
+    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+      {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+      system_content =
+        messages
+        |> Enum.find(%{content: ""}, &(&1.role == :system))
+        |> Map.fetch!(:content)
+
+      content =
+        cond do
+          String.contains?(system_content, "subgoal") ->
+            %{reasoning: "analysis", subgoal: "test subgoal"}
+
+          String.contains?(system_content, "factual knowledge") ->
+            %{facts: [%{proposition: "some fact", concepts: ["concept"]}]}
+
+          String.contains?(system_content, "actionable instructions") ->
+            %{
+              instructions: [
+                %{
+                  intent: "goal",
+                  condition: "condition",
+                  instruction: "action",
+                  expected_outcome: "outcome"
+                }
+              ]
+            }
+
+          String.contains?(system_content, "prescription quality") ->
+            %{scores: [%{index: 0, return_score: 8}]}
+
+          true ->
+            %{}
+        end
+
+      {:ok, %LLM.Response{content: content, model: "test", usage: %{}}}
+    end)
+  end
+
   defp attach_telemetry(event_name) do
     test_pid = self()
     handler_id = "test-#{inspect(event_name)}-#{System.unique_integer()}"
@@ -77,19 +118,22 @@ defmodule Mnemosyne.IngestionTelemetryTest do
     on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
-  test "emits ingestion start and stop with node_count", %{tmp_dir: tmp_dir} do
-    attach_telemetry([:mnemosyne, :ingestion, :ingest, :start])
-    attach_telemetry([:mnemosyne, :ingestion, :ingest, :stop])
+  test "correlates a public ingestion through pipeline telemetry and source provenance", %{
+    tmp_dir: tmp_dir
+  } do
+    stub_extraction_success()
+
+    for event <- [
+          [:mnemosyne, :ingestion, :ingest, :start],
+          [:mnemosyne, :ingestion, :ingest, :stop],
+          [:mnemosyne, :episode, :append, :start],
+          [:mnemosyne, :structuring, :extract, :start],
+          [:mnemosyne, :structuring, :extract_trajectory, :start]
+        ] do
+      attach_telemetry(event)
+    end
+
     source_id = "telemetry-success"
-
-    stub(Ingestion, :run, fn _trajectory, _opts ->
-      {:ok,
-       Changeset.add_node(
-         Changeset.new(),
-         %Semantic{id: "telemetry-node", proposition: "Stored", confidence: 0.9}
-       )}
-    end)
-
     supervisor = start_supervisor()
     repo_id = open_repo(tmp_dir, supervisor)
 
@@ -103,7 +147,24 @@ defmodule Mnemosyne.IngestionTelemetryTest do
                      %{repo_id: ^repo_id, source_id: ^source_id}}
 
     assert is_integer(measurements.duration)
-    assert measurements.node_count == 1
+    assert measurements.node_count > 0
+
+    assert_received {:telemetry, [:mnemosyne, :episode, :append, :start], _,
+                     %{repo_id: ^repo_id, source_id: ^source_id, episode_id: ^source_id}}
+
+    assert_received {:telemetry, [:mnemosyne, :structuring, :extract, :start], _,
+                     %{repo_id: ^repo_id, source_id: ^source_id, episode_id: ^source_id}}
+
+    assert_received {:telemetry, [:mnemosyne, :structuring, :extract_trajectory, :start], _,
+                     %{repo_id: ^repo_id, source_id: ^source_id, trajectory_id: _}}
+
+    source_nodes =
+      Mnemosyne.get_graph(repo_id, supervisor: supervisor).nodes
+      |> Map.values()
+      |> Enum.filter(&match?(%Source{}, &1))
+
+    assert [_ | _] = source_nodes
+    assert Enum.all?(source_nodes, &(&1.episode_id == source_id))
   end
 
   test "emits a stop event without node_count for a structured error" do
