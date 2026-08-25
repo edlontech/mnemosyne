@@ -72,7 +72,13 @@ defmodule Mnemosyne.MemoryStore do
   @spec recall(GenServer.server(), String.t(), keyword()) ::
           {:ok, RecallResult.t()} | {:error, Mnemosyne.Errors.error()}
   def recall(server, query, opts \\ []) do
-    GenServer.call(server, {:recall, query, opts}, :timer.seconds(120))
+    augmented_query = augment_query_with_context(Keyword.get(opts, :context), query)
+
+    GenServer.call(
+      server,
+      {:recall, augmented_query, Keyword.delete(opts, :context)},
+      :timer.seconds(120)
+    )
   end
 
   @doc "Fetches session context, augments the query, then runs recall."
@@ -354,18 +360,19 @@ defmodule Mnemosyne.MemoryStore do
 
   @impl true
   def handle_call({:recall, query, opts}, from, state) do
-    session_id = Keyword.get(opts, :session_id)
+    source_id = Keyword.get(opts, :source_id)
     task = spawn_recall_task(state, query, opts)
-    pending = Map.put(state.pending_recalls, task.ref, {from, query, session_id})
+    pending = Map.put(state.pending_recalls, task.ref, {from, query, source_id})
     {:noreply, %{state | pending_recalls: pending}}
   end
 
   @impl true
   def handle_call({:recall_in_context, session_id, query, opts}, from, state) do
-    augmented_query = augment_query_with_context(session_id, query)
-    opts_session_id = Keyword.get(opts, :session_id, session_id)
-    task = spawn_recall_task(state, augmented_query, opts)
-    pending = Map.put(state.pending_recalls, task.ref, {from, augmented_query, opts_session_id})
+    augmented_query = augment_query_with_session_context(session_id, query)
+    task_opts = Keyword.put_new(opts, :source_id, session_id)
+    source_id = Keyword.fetch!(task_opts, :source_id)
+    task = spawn_recall_task(state, augmented_query, task_opts)
+    pending = Map.put(state.pending_recalls, task.ref, {from, augmented_query, source_id})
     {:noreply, %{state | pending_recalls: pending}}
   end
 
@@ -962,9 +969,9 @@ defmodule Mnemosyne.MemoryStore do
   # -- Private: Recall Lane --
 
   defp handle_recall_complete(ref, result, state) do
-    {{from, query, session_id}, pending} = Map.pop(state.pending_recalls, ref)
+    {{from, query, source_id}, pending} = Map.pop(state.pending_recalls, ref)
     Process.demonitor(ref, [:flush])
-    metadata = %{session_id: session_id}
+    metadata = %{source_id: source_id}
 
     case result do
       {:ok, %RecallResult{} = recall_result} ->
@@ -996,7 +1003,7 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   defp handle_recall_crash(ref, reason, state) do
-    {{from, _query, _session_id}, pending} = Map.pop(state.pending_recalls, ref)
+    {{from, _query, _source_id}, pending} = Map.pop(state.pending_recalls, ref)
     GenServer.reply(from, {:error, PipelineError.exception(reason: {:task_crashed, reason})})
     {:noreply, %{state | pending_recalls: pending}}
   end
@@ -1009,7 +1016,7 @@ defmodule Mnemosyne.MemoryStore do
     embedding = state.embedding
     value_fn = config.value_function
     max_hops = Keyword.get(opts, :max_hops, 2)
-    session_id = Keyword.get(opts, :session_id)
+    source_id = Keyword.get(opts, :source_id)
     backend = state.backend
     repo_id = state.repo_id
     verbosity = config.trace_verbosity
@@ -1017,7 +1024,7 @@ defmodule Mnemosyne.MemoryStore do
     Task.Supervisor.async_nolink(state.task_supervisor, fn ->
       retrieval_opts = [
         repo_id: repo_id,
-        session_id: session_id,
+        source_id: source_id,
         llm: llm,
         embedding: embedding,
         backend: backend,
@@ -1030,7 +1037,7 @@ defmodule Mnemosyne.MemoryStore do
            {:ok, reasoned} <-
              Reasoning.reason(result,
                repo_id: repo_id,
-               session_id: session_id,
+               source_id: source_id,
                llm: llm,
                query: query,
                config: config
@@ -1102,13 +1109,31 @@ defmodule Mnemosyne.MemoryStore do
     )
   end
 
-  defp augment_query_with_context(session_ref, query) do
+  defp augment_query_with_context(nil, query), do: query
+
+  defp augment_query_with_context(%{goal: goal, recent_steps: steps}, query)
+       when is_binary(goal) and is_list(steps) do
+    recent_steps =
+      steps
+      |> Enum.map(fn %{observation: observation, action: action}
+                     when is_binary(observation) and is_binary(action) ->
+        "- #{observation} -> #{action}"
+      end)
+      |> Enum.take(-3)
+
+    case recent_steps do
+      [] -> "Goal: #{goal}\n\nQuery: #{query}"
+      steps -> "Goal: #{goal}\nRecent context:\n#{Enum.join(steps, "\n")}\n\nQuery: #{query}"
+    end
+  end
+
+  defp augment_query_with_session_context(session_ref, query) do
     case Mnemosyne.Session.get_context(session_ref) do
       {:ok, %{goal: goal, recent_steps: steps}} when steps != [] ->
         step_summary =
           steps
           |> Enum.take(-3)
-          |> Enum.map_join("\n", fn s -> "- #{s}" end)
+          |> Enum.map_join("\n", fn step -> "- #{step}" end)
 
         "Goal: #{goal}\nRecent context:\n#{step_summary}\n\nQuery: #{query}"
 

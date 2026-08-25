@@ -118,6 +118,35 @@ defmodule MnemosyneTest do
     end)
   end
 
+  defp stub_recall_query_capture(test_pid) do
+    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+      {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+      user_content = messages |> List.last() |> Map.fetch!(:content)
+      [_, query] = Regex.run(~r/Query: (.*?)\n\nKnown Facts:/s, user_content)
+      send(test_pid, {:reasoning_query, query})
+
+      {:ok,
+       %LLM.Response{
+         content: %{reasoning: "analysis", information: "Summary."},
+         model: "test",
+         usage: %{}
+       }}
+    end)
+
+    stub(Mnemosyne.MockEmbedding, :embed, fn text, _opts ->
+      send(test_pid, {:retrieval_query, text})
+      {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
+    end)
+
+    stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+      vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+    end)
+  end
+
   defp build_config do
     {:ok, config} =
       Zoi.parse(Mnemosyne.Config.t(), %{
@@ -310,6 +339,64 @@ defmodule MnemosyneTest do
 
       assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}}} =
                Mnemosyne.recall(repo, "what is elixir?")
+    end
+
+    test "passes formatted caller context to retrieval and reasoning", %{tmp_dir: tmp_dir} do
+      test_pid = self()
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      node = %Semantic{id: "context-node", proposition: "Inspect timeout logs", confidence: 0.9}
+      :ok = Mnemosyne.apply_changeset(repo, Changeset.add_node(Changeset.new(), node))
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["context-node"] != nil)
+
+      stub_recall_query_capture(test_pid)
+
+      context = %{
+        goal: "Diagnose intermittent timeouts",
+        recent_steps: [
+          %{observation: "First observation", action: "First action"},
+          %{observation: "Second observation", action: "Second action"},
+          %{observation: "Third observation", action: "Third action"},
+          %{observation: "Fourth observation", action: "Fourth action"}
+        ]
+      }
+
+      expected_query =
+        "Goal: Diagnose intermittent timeouts\n" <>
+          "Recent context:\n" <>
+          "- Second observation -> Second action\n" <>
+          "- Third observation -> Third action\n" <>
+          "- Fourth observation -> Fourth action\n\n" <>
+          "Query: What should I try next?"
+
+      assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}} = result} =
+               Mnemosyne.recall(repo, "What should I try next?",
+                 context: context,
+                 source_id: "missing-session",
+                 max_hops: 0
+               )
+
+      assert result.trace.source_id == "missing-session"
+      assert_received {:retrieval_query, ^expected_query}
+      assert_received {:reasoning_query, ^expected_query}
+    end
+
+    test "passes the original query unchanged with explicit nil context", %{tmp_dir: tmp_dir} do
+      test_pid = self()
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      node = %Semantic{id: "plain-node", proposition: "Plain recall", confidence: 0.9}
+      :ok = Mnemosyne.apply_changeset(repo, Changeset.add_node(Changeset.new(), node))
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["plain-node"] != nil)
+      stub_recall_query_capture(test_pid)
+
+      assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}}} =
+               Mnemosyne.recall(repo, "Unchanged query", context: nil, max_hops: 0)
+
+      assert_received {:retrieval_query, "Unchanged query"}
+      assert_received {:reasoning_query, "Unchanged query"}
     end
 
     test "returns error when repo does not exist", %{tmp_dir: tmp_dir} do

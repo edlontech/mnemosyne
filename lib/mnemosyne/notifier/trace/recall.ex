@@ -3,7 +3,8 @@ defmodule Mnemosyne.Notifier.Trace.Recall do
   Trace struct capturing recall pipeline execution details.
   """
 
-  defstruct verbosity: :summary,
+  defstruct source_id: nil,
+            verbosity: :summary,
             mode: nil,
             tags: [],
             candidate_count: 0,
@@ -18,6 +19,7 @@ defmodule Mnemosyne.Notifier.Trace.Recall do
             stopped_early_at: nil
 
   @type t :: %__MODULE__{
+          source_id: String.t() | nil,
           verbosity: :summary | :detailed,
           mode: atom(),
           tags: [String.t()],

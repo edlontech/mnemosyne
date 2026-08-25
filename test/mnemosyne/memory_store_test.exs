@@ -805,6 +805,84 @@ defmodule Mnemosyne.MemoryStoreTest do
       assert trace.candidates_per_hop != nil
       assert trace.scores != nil
     end
+
+    test "formats an empty context without lookup, persistence, or source reservation", %{
+      tmp_dir: tmp_dir
+    } do
+      test_pid = self()
+
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed, fn text, _opts ->
+        send(test_pid, {:retrieval_query, text})
+        {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
+      end)
+
+      pid = start_store(tmp_dir)
+      state_before = :sys.get_state(pid)
+      context = %{goal: "Diagnose timeouts", recent_steps: []}
+
+      assert {:ok, %RecallResult{}} =
+               MemoryStore.recall(pid, "What next?",
+                 context: context,
+                 source_id: "missing-session",
+                 max_hops: 0
+               )
+
+      assert_received {:retrieval_query, "Goal: Diagnose timeouts\n\nQuery: What next?"}
+
+      state_after = :sys.get_state(pid)
+      {InMemory, backend_before} = state_before.backend
+      {InMemory, backend_after} = state_after.backend
+
+      assert backend_after.graph == backend_before.graph
+      assert backend_after.metadata == backend_before.metadata
+      assert backend_after.ingestions == backend_before.ingestions
+      assert state_after.write_active == state_before.write_active
+      assert state_after.write_queue == state_before.write_queue
+      assert state_after.pending_recalls == %{}
+
+      node = make_semantic("later-ingestion", "Recall did not reserve this source")
+
+      stub(Ingestion, :run, fn _trajectory, _opts ->
+        {:ok, Changeset.add_node(Changeset.new(), node)}
+      end)
+
+      assert {:ok, %IngestionReceipt{source_id: "missing-session"}} =
+               MemoryStore.ingest(pid, trajectory(source_id: "missing-session"))
+    end
+
+    test "rejects every malformed step before contacting the store", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      valid_steps = [
+        %{observation: "Second", action: "Act two"},
+        %{observation: "Third", action: "Act three"},
+        %{observation: "Fourth", action: "Act four"}
+      ]
+
+      malformed_contexts = [
+        %{goal: "Goal", recent_steps: valid_steps ++ [%{observation: "Malformed"}]},
+        %{goal: "Goal", recent_steps: [%{observation: "Malformed"} | valid_steps]}
+      ]
+
+      for context <- malformed_contexts do
+        assert_raise FunctionClauseError, fn ->
+          MemoryStore.recall(pid, "Query", context: context, max_hops: 0)
+        end
+
+        assert Process.alive?(pid)
+        assert :sys.get_state(pid).pending_recalls == %{}
+        assert %Graph{nodes: %{}} = MemoryStore.get_graph(pid)
+      end
+    end
   end
 
   describe "recall task crash" do
@@ -823,7 +901,10 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       pid = start_store(tmp_dir)
 
-      assert {:error, _reason} = MemoryStore.recall(pid, "crash query")
+      assert {:error, _reason} =
+               MemoryStore.recall(pid, "crash query", source_id: "crashed-source")
+
+      assert :sys.get_state(pid).pending_recalls == %{}
     end
   end
 

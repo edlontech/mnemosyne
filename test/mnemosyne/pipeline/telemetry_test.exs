@@ -249,13 +249,16 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
             }
           ]
 
+      opts = opts ++ [repo_id: "repo-1", source_id: "source-1", session_id: "legacy-session"]
       {:ok, _result, _trace} = Retrieval.retrieve("Tell me about Elixir", opts)
 
-      assert_received {:telemetry, [:mnemosyne, :retrieval, :retrieve, :start], _, %{}}
+      assert_received {:telemetry, [:mnemosyne, :retrieval, :retrieve, :start], _, start_metadata}
+      assert start_metadata == %{repo_id: "repo-1", source_id: "source-1"}
 
       assert_received {:telemetry, [:mnemosyne, :retrieval, :retrieve, :stop], stop_measurements,
-                       %{}}
+                       stop_metadata}
 
+      assert stop_metadata == %{repo_id: "repo-1", source_id: "source-1"}
       assert is_integer(stop_measurements.candidates_found)
     end
   end
@@ -288,13 +291,22 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
         }
       }
 
-      {:ok, _memory} = Reasoning.reason(result, llm: Mnemosyne.MockLLM, query: "test query")
+      {:ok, _memory} =
+        Reasoning.reason(result,
+          llm: Mnemosyne.MockLLM,
+          query: "test query",
+          repo_id: "repo-1",
+          source_id: "source-1",
+          session_id: "legacy-session"
+        )
 
-      assert_received {:telemetry, [:mnemosyne, :reasoning, :reason, :start], _, %{}}
+      assert_received {:telemetry, [:mnemosyne, :reasoning, :reason, :start], _, start_metadata}
+      assert start_metadata == %{repo_id: "repo-1", source_id: "source-1"}
 
       assert_received {:telemetry, [:mnemosyne, :reasoning, :reason, :stop], stop_measurements,
-                       %{}}
+                       stop_metadata}
 
+      assert stop_metadata == %{repo_id: "repo-1", source_id: "source-1"}
       assert is_list(stop_measurements.candidate_types)
       assert :semantic in stop_measurements.candidate_types
     end

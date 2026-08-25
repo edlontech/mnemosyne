@@ -495,16 +495,33 @@ defmodule Mnemosyne do
   ## Options
 
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+      This option is used only to locate the repository.
+    * `:context` - Transient active-task context shaped as
+      `%{goal: goal, recent_steps: [%{observation: observation, action: action}]}`.
+      The goal and last three recent steps augment the query without being persisted.
+    * `:source_id` - Optional correlation identifier included in recall traces,
+      notifier metadata, and pipeline telemetry. It does not augment the query.
 
   ## Examples
 
       {:ok, memories} = Mnemosyne.recall("my-repo", "How to handle GenServer timeouts?")
+
+      {:ok, memories} =
+        Mnemosyne.recall("my-repo", "What should I try next?",
+          source_id: "task-42",
+          context: %{
+            goal: "Diagnose intermittent timeouts",
+            recent_steps: [
+              %{observation: "Request timed out", action: "Inspected application logs"}
+            ]
+          }
+        )
   """
   @spec recall(String.t(), String.t(), keyword()) ::
           {:ok, RecallResult.t()} | {:error, Mnemosyne.Errors.error()}
   def recall(repo_id, query, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
-      MemoryStore.recall(pid, query, opts)
+      MemoryStore.recall(pid, query, Keyword.delete(opts, :supervisor))
     end
   end
 
@@ -529,11 +546,13 @@ defmodule Mnemosyne do
             pid,
             session_pid,
             query,
-            Keyword.put(opts, :session_id, session_id)
+            opts
+            |> Keyword.delete(:supervisor)
+            |> Keyword.put(:source_id, session_id)
           )
 
         {:error, %NotFoundError{}} ->
-          MemoryStore.recall(pid, query, opts)
+          MemoryStore.recall(pid, query, Keyword.delete(opts, :supervisor))
       end
     end
   end

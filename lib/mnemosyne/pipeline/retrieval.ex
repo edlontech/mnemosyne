@@ -58,13 +58,14 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     - `:llm_opts` - Additional LLM options (default: [])
     - `:config` - Config struct for per-step model overrides
     - `:max_hops` - Maximum traversal hops (default: 2)
+    - `:source_id` - Optional correlation identifier for telemetry and the recall trace
   """
   @spec retrieve(String.t(), keyword()) ::
           {:ok, Result.t(), RecallTrace.t()} | {:error, Mnemosyne.Errors.error()}
   def retrieve(query, opts) do
     Mnemosyne.Telemetry.span(
       [:retrieval, :retrieve],
-      %{repo_id: Keyword.get(opts, :repo_id), session_id: Keyword.get(opts, :session_id)},
+      %{repo_id: Keyword.get(opts, :repo_id), source_id: Keyword.get(opts, :source_id)},
       fn ->
         llm = Keyword.fetch!(opts, :llm)
         embedding = Keyword.fetch!(opts, :embedding)
@@ -84,6 +85,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
                embedding.embed(query, Config.embedding_opts(config)) do
           execute_pipeline(%{
             query: query,
+            source_id: Keyword.get(opts, :source_id),
             mode: mode,
             tags: tags,
             query_vector: query_vector,
@@ -178,6 +180,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     }
 
     trace = %RecallTrace{
+      source_id: ctx.source_id,
       verbosity: ctx.verbosity,
       mode: ctx.mode,
       tags: ctx.tags,

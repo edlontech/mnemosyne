@@ -41,13 +41,14 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     - `:query` (required) - The original query string
     - `:llm_opts` - Additional LLM options (default: [])
     - `:config` - Config struct for per-step model overrides
+    - `:source_id` - Optional correlation identifier for telemetry
   """
   @spec reason(Retrieval.Result.t(), keyword()) ::
           {:ok, ReasonedMemory.t()} | {:error, Mnemosyne.Errors.error()}
   def reason(%Retrieval.Result{candidates: candidates}, opts) do
     Mnemosyne.Telemetry.span(
       [:reasoning, :reason],
-      %{repo_id: Keyword.get(opts, :repo_id), session_id: Keyword.get(opts, :session_id)},
+      %{repo_id: Keyword.get(opts, :repo_id), source_id: Keyword.get(opts, :source_id)},
       fn ->
         do_reason(candidates, opts)
       end

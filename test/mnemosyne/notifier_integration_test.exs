@@ -1307,18 +1307,23 @@ defmodule Mnemosyne.NotifierRecallIntegrationTest do
         Enum.any?(TestNotifier.events(repo_id), &match?({:changeset_applied, _, %{}}, &1))
       )
 
-      {:ok, _} = MemoryStore.recall(pid, "what is elixir?")
+      context = %{
+        goal: "Learn Elixir",
+        recent_steps: [%{observation: "Read docs", action: "Took notes"}]
+      }
 
-      events = TestNotifier.events(repo_id)
+      {:ok, _} =
+        MemoryStore.recall(pid, "what is elixir?", context: context, source_id: "source-1")
 
-      assert Enum.any?(events, fn
-               {:recall_executed, "what is elixir?", {:ok, _},
-                %{trace: %Mnemosyne.Notifier.Trace.Recall{}}} ->
-                 true
+      expected_query =
+        "Goal: Learn Elixir\nRecent context:\n- Read docs -> Took notes\n\nQuery: what is elixir?"
 
-               _ ->
-                 false
-             end)
+      assert {:recall_executed, ^expected_query, {:ok, _}, metadata} =
+               Enum.find(TestNotifier.events(repo_id), &match?({:recall_executed, _, _, _}, &1))
+
+      assert metadata.source_id == "source-1"
+      assert metadata.trace.source_id == "source-1"
+      refute Map.has_key?(metadata, :session_id)
     end
 
     test "emits {:recall_failed, query, reason, metadata} on failure", %{tmp_dir: tmp_dir} do
@@ -1337,14 +1342,13 @@ defmodule Mnemosyne.NotifierRecallIntegrationTest do
       repo_id = unique_repo_id()
       pid = start_store(tmp_dir, repo_id: repo_id)
 
-      {:error, _} = MemoryStore.recall(pid, "failing query")
+      {:error, _} = MemoryStore.recall(pid, "failing query", source_id: "source-2")
 
-      events = TestNotifier.events(repo_id)
+      assert {:recall_failed, "failing query", _reason, metadata} =
+               Enum.find(TestNotifier.events(repo_id), &match?({:recall_failed, _, _, _}, &1))
 
-      assert Enum.any?(events, fn
-               {:recall_failed, "failing query", _reason, %{}} -> true
-               _ -> false
-             end)
+      assert metadata == %{source_id: "source-2"}
+      assert :sys.get_state(pid).pending_recalls == %{}
     end
   end
 end
