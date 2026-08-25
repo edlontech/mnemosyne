@@ -832,7 +832,7 @@ defmodule Mnemosyne.MemoryStoreTest do
       assert {:ok, %RecallResult{}} =
                MemoryStore.recall(pid, "What next?",
                  context: context,
-                 source_id: "missing-session",
+                 source_id: "active-task",
                  max_hops: 0
                )
 
@@ -855,8 +855,8 @@ defmodule Mnemosyne.MemoryStoreTest do
         {:ok, Changeset.add_node(Changeset.new(), node)}
       end)
 
-      assert {:ok, %IngestionReceipt{source_id: "missing-session"}} =
-               MemoryStore.ingest(pid, trajectory(source_id: "missing-session"))
+      assert {:ok, %IngestionReceipt{source_id: "active-task"}} =
+               MemoryStore.ingest(pid, trajectory(source_id: "active-task"))
     end
 
     test "rejects every malformed step before contacting the store", %{tmp_dir: tmp_dir} do
@@ -1073,46 +1073,6 @@ defmodule Mnemosyne.MemoryStoreTest do
         %Semantic{proposition: "Post-maintenance fact"} =
           Graph.get_node(MemoryStore.get_graph(pid), "new-2")
       )
-    end
-  end
-
-  describe "recall_in_context/4" do
-    test "falls back to raw query when Session module is unavailable", %{tmp_dir: tmp_dir} do
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
-      end)
-
-      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        {:ok,
-         %LLM.Response{
-           content: %{reasoning: "analysis", information: "Summary."},
-           model: "test",
-           usage: %{}
-         }}
-      end)
-
-      stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
-        {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
-      end)
-
-      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
-        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
-        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
-      end)
-
-      pid = start_store(tmp_dir)
-
-      node = make_semantic("s1", "Elixir is functional")
-
-      changeset =
-        Changeset.add_node(Changeset.new(), node)
-
-      :ok = MemoryStore.apply_changeset(pid, changeset)
-
-      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "s1") != nil)
-
-      assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}}} =
-               MemoryStore.recall_in_context(pid, "nonexistent-session", "what is elixir?")
     end
   end
 

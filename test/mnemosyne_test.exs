@@ -6,7 +6,6 @@ defmodule MnemosyneTest do
 
   alias Mnemosyne.Embedding
   alias Mnemosyne.Errors.Framework.NotFoundError
-  alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Procedural
@@ -23,25 +22,6 @@ defmodule MnemosyneTest do
   @moduletag :tmp_dir
 
   setup :set_mimic_global
-
-  defp stub_llm_for_episode do
-    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-      {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
-    end)
-
-    stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-      {:ok,
-       %LLM.Response{
-         content: %{reasoning: "analysis", subgoal: "test subgoal"},
-         model: "test",
-         usage: %{}
-       }}
-    end)
-
-    stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
-      {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
-    end)
-  end
 
   defp stub_extraction_success do
     stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
@@ -151,8 +131,7 @@ defmodule MnemosyneTest do
     {:ok, config} =
       Zoi.parse(Mnemosyne.Config.t(), %{
         llm: %{model: "test-model", opts: %{}},
-        embedding: %{model: "test-embed", opts: %{}},
-        session: %{auto_commit: false, flush_timeout_ms: :infinity, session_timeout_ms: :infinity}
+        embedding: %{model: "test-embed", opts: %{}}
       })
 
     config
@@ -278,48 +257,6 @@ defmodule MnemosyneTest do
     end
   end
 
-  describe "start_session/2" do
-    test "returns {:ok, session_id} with valid string ID", %{tmp_dir: tmp_dir} do
-      start_supervisor(tmp_dir)
-      repo = open_test_repo(tmp_dir)
-
-      assert {:ok, session_id} = Mnemosyne.start_session("test goal", repo: repo)
-      assert is_binary(session_id)
-      assert String.starts_with?(session_id, "session_")
-    end
-
-    test "returns error when repo does not exist", %{tmp_dir: tmp_dir} do
-      start_supervisor(tmp_dir)
-
-      assert {:error, %NotFoundError{resource: :repo}} =
-               Mnemosyne.start_session("test goal", repo: "nonexistent")
-    end
-  end
-
-  describe "session_state/1" do
-    test "returns current state of a session", %{tmp_dir: tmp_dir} do
-      start_supervisor(tmp_dir)
-      repo = open_test_repo(tmp_dir)
-
-      {:ok, session_id} = Mnemosyne.start_session("test goal", repo: repo)
-      assert :collecting = Mnemosyne.session_state(session_id)
-    end
-  end
-
-  describe "full write path" do
-    test "start_session -> append -> close_and_commit produces graph nodes", %{tmp_dir: tmp_dir} do
-      stub_extraction_success()
-      start_supervisor(tmp_dir)
-      repo = open_test_repo(tmp_dir)
-
-      {:ok, session_id} = Mnemosyne.start_session("test goal", repo: repo)
-      assert :ok = Mnemosyne.append(session_id, "saw something", "did something")
-      assert :ok = Mnemosyne.close_and_commit(session_id)
-
-      assert_eventually(map_size(Mnemosyne.get_graph(repo).nodes) > 0)
-    end
-  end
-
   describe "recall/3" do
     test "returns {:ok, %ReasonedMemory{}}", %{tmp_dir: tmp_dir} do
       stub_recall_success()
@@ -373,11 +310,11 @@ defmodule MnemosyneTest do
       assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}} = result} =
                Mnemosyne.recall(repo, "What should I try next?",
                  context: context,
-                 source_id: "missing-session",
+                 source_id: "active-task",
                  max_hops: 0
                )
 
-      assert result.trace.source_id == "missing-session"
+      assert result.trace.source_id == "active-task"
       assert_received {:retrieval_query, ^expected_query}
       assert_received {:reasoning_query, ^expected_query}
     end
@@ -404,211 +341,6 @@ defmodule MnemosyneTest do
 
       assert {:error, %NotFoundError{resource: :repo}} =
                Mnemosyne.recall("nonexistent", "query")
-    end
-  end
-
-  describe "close_and_commit retries" do
-    test "retries on transient failure then succeeds", %{tmp_dir: tmp_dir} do
-      chat_count = :counters.new(1, [:atomics])
-      structured_count = :counters.new(1, [:atomics])
-
-      stub(Mnemosyne.MockLLM, :chat, fn messages, _opts ->
-        count = :counters.get(chat_count, 1)
-        :counters.add(chat_count, 1, 1)
-
-        system_content =
-          messages
-          |> Enum.find(%{content: ""}, &(&1.role == :system))
-          |> Map.get(:content, "")
-
-        if String.contains?(system_content, "return") and count < 2 do
-          {:error, :transient_failure}
-        else
-          {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
-        end
-      end)
-
-      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
-        count = :counters.get(structured_count, 1)
-        :counters.add(structured_count, 1, 1)
-
-        system_content =
-          messages
-          |> Enum.find(%{content: ""}, &(&1.role == :system))
-          |> Map.get(:content, "")
-
-        cond do
-          String.contains?(system_content, "subgoal") ->
-            {:ok,
-             %LLM.Response{
-               content: %{reasoning: "analysis", subgoal: "test subgoal"},
-               model: "test",
-               usage: %{}
-             }}
-
-          count < 4 ->
-            {:error, :transient_failure}
-
-          String.contains?(system_content, "factual knowledge") ->
-            {:ok,
-             %LLM.Response{
-               content: %{facts: [%{proposition: "a fact", concepts: ["c1", "c2"]}]},
-               model: "test",
-               usage: %{}
-             }}
-
-          String.contains?(system_content, "actionable instructions") ->
-            {:ok,
-             %LLM.Response{
-               content: %{
-                 instructions: [
-                   %{intent: "goal", condition: "c", instruction: "a", expected_outcome: "o"}
-                 ]
-               },
-               model: "test",
-               usage: %{}
-             }}
-
-          String.contains?(system_content, "prescription quality") ->
-            {:ok,
-             %LLM.Response{
-               content: %{scores: [%{index: 0, return_score: 8}]},
-               model: "test",
-               usage: %{}
-             }}
-
-          true ->
-            {:ok, %LLM.Response{content: %{}, model: "test", usage: %{}}}
-        end
-      end)
-
-      stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
-        {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
-      end)
-
-      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
-        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
-        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
-      end)
-
-      start_supervisor(tmp_dir)
-      repo = open_test_repo(tmp_dir)
-
-      {:ok, session_id} = Mnemosyne.start_session("test goal", repo: repo)
-      :ok = Mnemosyne.append(session_id, "saw something", "did something")
-      assert :ok = Mnemosyne.close_and_commit(session_id, max_retries: 2)
-    end
-
-    test "returns error after max retries exhausted", %{tmp_dir: tmp_dir} do
-      stub_llm_for_episode()
-      start_supervisor(tmp_dir)
-      repo = open_test_repo(tmp_dir)
-
-      {:ok, session_id} = Mnemosyne.start_session("test goal", repo: repo)
-      :ok = Mnemosyne.append(session_id, "saw something", "did something")
-
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        {:error, :permanent_failure}
-      end)
-
-      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        {:error, :permanent_failure}
-      end)
-
-      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
-        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
-        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
-      end)
-
-      assert {:error, %PipelineError{reason: :extraction_failed}} =
-               Mnemosyne.close_and_commit(session_id, max_retries: 1)
-    end
-  end
-
-  describe "recall_in_context/4" do
-    test "augments query with session context and returns ReasonedMemory", %{tmp_dir: tmp_dir} do
-      stub_llm_for_episode()
-      start_supervisor(tmp_dir)
-      repo = open_test_repo(tmp_dir)
-
-      node = %Semantic{
-        id: "ctx-1",
-        proposition: "Elixir uses pattern matching",
-        confidence: 0.9
-      }
-
-      changeset = Changeset.add_node(Changeset.new(), node)
-      :ok = Mnemosyne.apply_changeset(repo, changeset)
-
-      assert_eventually(Mnemosyne.get_graph(repo).nodes["ctx-1"] != nil)
-
-      {:ok, session_id} = Mnemosyne.start_session("learn elixir", repo: repo)
-      :ok = Mnemosyne.append(session_id, "read about pattern matching", "took notes")
-
-      queries_seen = :ets.new(:queries_seen, [:set, :public])
-
-      stub(Mnemosyne.MockEmbedding, :embed, fn text, _opts ->
-        :ets.insert(queries_seen, {:query, text})
-        {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
-      end)
-
-      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
-        vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
-        {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
-      end)
-
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
-      end)
-
-      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        {:ok,
-         %LLM.Response{
-           content: %{reasoning: "analysis", information: "Summary."},
-           model: "test",
-           usage: %{}
-         }}
-      end)
-
-      assert {:ok, %RecallResult{reasoned: %ReasonedMemory{}}} =
-               Mnemosyne.recall_in_context(repo, session_id, "what is pattern matching?")
-
-      [{:query, augmented_query}] = :ets.lookup(queries_seen, :query)
-      assert augmented_query =~ "learn elixir"
-      assert augmented_query =~ "read about pattern matching"
-      assert augmented_query =~ "what is pattern matching?"
-    end
-
-    test "returns error when repo does not exist", %{tmp_dir: tmp_dir} do
-      start_supervisor(tmp_dir)
-
-      assert {:error, %NotFoundError{resource: :repo}} =
-               Mnemosyne.recall_in_context("nonexistent", "session", "query")
-    end
-  end
-
-  describe "close_and_commit timeout" do
-    test "returns {:error, %PipelineError{reason: :extraction_timeout}} when extraction never settles",
-         %{tmp_dir: tmp_dir} do
-      stub_llm_for_episode()
-      start_supervisor(tmp_dir)
-      repo = open_test_repo(tmp_dir)
-
-      {:ok, session_id} = Mnemosyne.start_session("test goal", repo: repo)
-      :ok = Mnemosyne.append(session_id, "saw something", "did something")
-
-      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
-        receive do
-          :unblock -> :ok
-        end
-      end)
-
-      assert {:error, %PipelineError{reason: :extraction_timeout}} =
-               Mnemosyne.close_and_commit(session_id,
-                 max_retries: 0,
-                 max_polls: 3,
-                 poll_interval: 10
-               )
     end
   end
 

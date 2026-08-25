@@ -18,7 +18,6 @@ defmodule Mnemosyne.Errors do
           | Mnemosyne.Errors.Invalid.EpisodeError.t()
           | Mnemosyne.Errors.Invalid.IngestionError.t()
           | Mnemosyne.Errors.Invalid.PromptError.t()
-          | Mnemosyne.Errors.Framework.SessionError.t()
           | Mnemosyne.Errors.Framework.PipelineError.t()
           | Mnemosyne.Errors.Framework.StorageError.t()
           | Mnemosyne.Errors.Framework.AdapterError.t()

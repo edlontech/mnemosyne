@@ -52,7 +52,6 @@ defmodule Mnemosyne.MixProject do
       {:excoveralls, "~> 0.18", only: [:dev, :test]},
       {:exla, "~> 0.10", only: [:dev, :test]},
       {:emlx, "~> 0.2", only: [:dev, :test], runtime: false},
-      {:gen_state_machine, "~> 3.0"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:assert_eventually, "~> 1.0", only: :test},
       {:mimic, "~> 2.0", only: :test},
