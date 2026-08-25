@@ -27,6 +27,8 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
   - `:llm` - LLM adapter module
   - `:embedding` - embedding adapter module
   - `:config` - `%Config{}` with threshold settings
+  - `:llm_opts` - additional options passed to the LLM adapter
+  - `:embedding_opts` - additional options passed to the embedding adapter
   - `:value_function` - value function config map (`:module` + `:params`) for candidate scoring
   """
   @spec merge(Changeset.t(), keyword()) :: {:ok, Changeset.t()} | {:error, term()}
@@ -38,49 +40,47 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     else
       repo_id = Keyword.get(opts, :repo_id)
 
-      Mnemosyne.Telemetry.span(
-        [:intent_merger, :merge],
-        %{repo_id: repo_id, intent_count: length(intents)},
-        fn ->
-          {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
-          llm = Keyword.fetch!(opts, :llm)
-          embedding = Keyword.fetch!(opts, :embedding)
-          config = Keyword.fetch!(opts, :config)
+      result =
+        Mnemosyne.Telemetry.span(
+          [:intent_merger, :merge],
+          %{repo_id: repo_id, intent_count: length(intents)},
+          fn ->
+            {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
+            config = Keyword.fetch!(opts, :config)
 
-          value_function =
-            Keyword.get(opts, :value_function, %{
-              module: Mnemosyne.ValueFunction.Default,
-              params: %{}
-            })
+            value_function =
+              Keyword.get(opts, :value_function, %{
+                module: Mnemosyne.ValueFunction.Default,
+                params: %{}
+              })
 
-          {merged_intents, link_rewrites, updated_metadata} =
             process_intents(
               intents,
               backend_mod,
               backend_state,
-              llm,
-              embedding,
+              opts,
               config,
               value_function,
               changeset.metadata
             )
+          end
+        )
 
+      case result do
+        {:ok, {merged_intents, link_rewrites, updated_metadata}} ->
           rewritten_links = rewrite_links(changeset.links, link_rewrites)
-          merged_additions = other_nodes ++ merged_intents
-          rewrites_count = map_size(link_rewrites)
 
-          result =
-            {:ok,
-             %Changeset{
-               changeset
-               | additions: merged_additions,
-                 links: rewritten_links,
-                 metadata: updated_metadata
-             }}
+          {:ok,
+           %Changeset{
+             changeset
+             | additions: other_nodes ++ merged_intents,
+               links: rewritten_links,
+               metadata: updated_metadata
+           }}
 
-          {result, %{merged: length(merged_intents), rewrites: rewrites_count}}
-        end
-      )
+        {:error, _reason} = error ->
+          error
+      end
     end
   end
 
@@ -88,40 +88,48 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
          intents,
          backend_mod,
          backend_state,
-         llm,
-         embedding,
+         opts,
          config,
          value_function,
          metadata
        ) do
-    {final_intents, rewrites, _seen, updated_metadata} =
-      Enum.reduce(intents, {[], %{}, %{}, metadata}, fn intent,
-                                                        {acc_intents, acc_rewrites, seen,
-                                                         acc_meta} ->
-        graph_match = find_graph_match(intent, backend_mod, backend_state, value_function)
-        batch_match = find_batch_match(intent, seen)
-        best = pick_best_match(graph_match, batch_match)
+    Enum.reduce_while(intents, {:ok, {[], %{}, %{}, metadata}}, fn intent, {:ok, acc} ->
+      {acc_intents, acc_rewrites, seen, acc_meta} = acc
 
-        apply_strategy(
-          classify_match(best, config),
-          intent,
-          {acc_intents, acc_rewrites, seen, acc_meta},
-          llm,
-          embedding,
-          config
-        )
-      end)
+      case find_graph_match(intent, backend_mod, backend_state, value_function) do
+        {:ok, graph_match} ->
+          batch_match = find_batch_match(intent, seen)
+          best = pick_best_match(graph_match, batch_match)
 
-    {Enum.reverse(final_intents), rewrites, updated_metadata}
+          result =
+            apply_strategy(
+              classify_match(best, config),
+              intent,
+              {acc_intents, acc_rewrites, seen, acc_meta},
+              opts
+            )
+
+          {:cont, {:ok, result}}
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, {final_intents, rewrites, _seen, updated_metadata}} ->
+        result = {:ok, {Enum.reverse(final_intents), rewrites, updated_metadata}}
+        {result, %{merged: length(final_intents), rewrites: map_size(rewrites)}}
+
+      {:error, _reason} = error ->
+        {error, %{merged: 0, rewrites: 0}}
+    end
   end
 
   defp apply_strategy(
          :no_match,
          intent,
          {acc_intents, acc_rewrites, seen, meta},
-         _llm,
-         _emb,
-         _cfg
+         _opts
        ) do
     {[intent | acc_intents], acc_rewrites, Map.put(seen, intent.id, intent), meta}
   end
@@ -130,9 +138,7 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
          {:identity, existing},
          intent,
          {acc_intents, acc_rewrites, seen, meta},
-         _,
-         _,
-         _
+         _opts
        ) do
     updated_meta = propagate_reward(meta, intent.id, existing.id)
     {acc_intents, Map.put(acc_rewrites, intent.id, existing.id), seen, updated_meta}
@@ -142,11 +148,9 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
          {:merge, existing},
          intent,
          {acc_intents, acc_rewrites, seen, meta},
-         llm,
-         emb,
-         cfg
+         opts
        ) do
-    case llm_merge(intent, existing, llm, emb, cfg) do
+    case llm_merge(intent, existing, opts) do
       {:ok, merged} ->
         updated_meta = propagate_reward(meta, intent.id, merged.id)
         seen = Map.put(seen, merged.id, merged)
@@ -183,8 +187,9 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
            [],
            backend_state
          ) do
-      {:ok, [{node, score} | _], _state} -> {node, score}
-      _ -> nil
+      {:ok, [{node, score} | _], _state} -> {:ok, {node, score}}
+      {:ok, [], _state} -> {:ok, nil}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -221,7 +226,11 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     end
   end
 
-  defp llm_merge(new_intent, %Intent{} = existing, llm, embedding, config) do
+  defp llm_merge(new_intent, %Intent{} = existing, opts) do
+    llm = Keyword.fetch!(opts, :llm)
+    embedding = Keyword.fetch!(opts, :embedding)
+    config = Keyword.fetch!(opts, :config)
+
     messages =
       MergePrompt.build_messages(%{
         existing_intent: existing.description,
@@ -229,8 +238,8 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
         overlay: Config.resolve_overlay(config, :merge_intent)
       })
 
-    llm_opts = Config.llm_opts(config, :merge_intent, [])
-    embedding_opts = Config.embedding_opts(config)
+    llm_opts = Config.llm_opts(config, :merge_intent, Keyword.get(opts, :llm_opts, []))
+    embedding_opts = Config.embedding_opts(config) ++ Keyword.get(opts, :embedding_opts, [])
 
     with {:ok, %{content: content}} <-
            llm.chat_structured(messages, MergePrompt.schema(), llm_opts),

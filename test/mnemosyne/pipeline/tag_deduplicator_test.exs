@@ -2,6 +2,7 @@ defmodule Mnemosyne.Pipeline.TagDeduplicatorTest do
   use ExUnit.Case, async: true
   use Mimic
 
+  alias Mnemosyne.Errors.Framework.StorageError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Tag
@@ -239,25 +240,17 @@ defmodule Mnemosyne.Pipeline.TagDeduplicatorTest do
   end
 
   describe "deduplicate/2 error handling" do
-    test "returns changeset with intra-batch dedup when backend fails" do
+    test "propagates backend read errors" do
       tag = make_tag("tag_1", "database")
-      sem = make_semantic("sem_1")
-
-      cs =
-        Changeset.new()
-        |> Changeset.add_node(tag)
-        |> Changeset.add_node(sem)
-        |> Changeset.add_link("tag_1", "sem_1", :membership)
+      error = StorageError.exception(operation: :get_nodes_by_type, reason: :unavailable)
+      cs = Changeset.add_node(Changeset.new(), tag)
 
       InMemory
       |> expect(:get_nodes_by_type, fn [:tag], @backend_state ->
-        {:error, :boom}
+        {:error, error}
       end)
 
-      assert {:ok, result} = TagDeduplicator.deduplicate(cs, @base_opts)
-
-      tag_additions = Enum.filter(result.additions, &match?(%Tag{}, &1))
-      assert [%Tag{id: "tag_1"}] = tag_additions
+      assert {:error, ^error} = TagDeduplicator.deduplicate(cs, @base_opts)
     end
   end
 end

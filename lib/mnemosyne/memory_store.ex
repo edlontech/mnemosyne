@@ -3,7 +3,7 @@ defmodule Mnemosyne.MemoryStore do
   GenServer owning the graph backend state.
 
   Uses a two-lane queue for concurrent operations:
-  - **Write lane**: serialized queue for apply_changeset and delete_nodes.
+  - **Write lane**: serialized queue for changesets, ingestion commits, and deletions.
     Only one write runs at a time; others enqueue.
   - **Maintenance lane**: single slot for consolidate/decay operations.
   - **Recall lane**: multiple concurrent retrieval+reasoning tasks (unchanged).
@@ -17,12 +17,15 @@ defmodule Mnemosyne.MemoryStore do
   require Logger
 
   alias Mnemosyne.Errors.Framework.PipelineError
+  alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph
+  alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Notifier
   alias Mnemosyne.Pipeline.Decay
   alias Mnemosyne.Pipeline.EpisodicValidation
   alias Mnemosyne.Pipeline.GraphRepair
+  alias Mnemosyne.Pipeline.Ingestion
   alias Mnemosyne.Pipeline.IntentMerger
   alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.RecallResult
@@ -37,6 +40,15 @@ defmodule Mnemosyne.MemoryStore do
   def start_link(opts) do
     name = Keyword.fetch!(opts, :name)
     GenServer.start_link(__MODULE__, opts, name: name)
+  end
+
+  @doc "Stores a complete trajectory or returns an error without exposing partial memory."
+  @spec ingest(GenServer.server(), Mnemosyne.Trajectory.t(), keyword()) ::
+          {:ok, IngestionReceipt.t()} | {:error, Mnemosyne.Errors.error()}
+  def ingest(server, trajectory, opts \\ []) do
+    with {:ok, digest} <- Ingestion.prepare(trajectory) do
+      GenServer.call(server, {:ingest, trajectory, digest, opts}, :infinity)
+    end
   end
 
   @doc "Applies a changeset to the graph via the backend."
@@ -167,6 +179,8 @@ defmodule Mnemosyne.MemoryStore do
           embedding: Keyword.fetch!(opts, :embedding),
           notifier: Keyword.get(opts, :notifier, Mnemosyne.Notifier.Noop),
           task_supervisor: Keyword.fetch!(opts, :task_supervisor),
+          pending_ingestions: %{},
+          ingestion_tasks: %{},
           pending_recalls: %{},
           write_queue: :queue.new(),
           write_active: nil,
@@ -239,6 +253,23 @@ defmodule Mnemosyne.MemoryStore do
     else
       Logger.debug("maintenance already active, dropping repair request")
       {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:ingest, trajectory, digest, opts}, from, state) do
+    source_id = trajectory.source_id
+
+    case Map.get(state.pending_ingestions, source_id) do
+      %{digest: ^digest} = pending ->
+        pending = %{pending | waiters: [from | pending.waiters]}
+        {:noreply, put_in(state.pending_ingestions[source_id], pending)}
+
+      %{digest: _other_digest} ->
+        {:reply, source_conflict(source_id), state}
+
+      nil ->
+        admit_ingestion(trajectory, digest, opts, from, state)
     end
   end
 
@@ -345,6 +376,9 @@ defmodule Mnemosyne.MemoryStore do
       match?({^ref, _}, state.maintenance_active) ->
         handle_maintenance_complete(ref, result, state)
 
+      Map.has_key?(state.ingestion_tasks, ref) ->
+        handle_ingestion_complete(ref, result, state)
+
       Map.has_key?(state.pending_recalls, ref) ->
         handle_recall_complete(ref, result, state)
 
@@ -363,6 +397,9 @@ defmodule Mnemosyne.MemoryStore do
       match?({^ref, _}, state.maintenance_active) ->
         handle_maintenance_crash(ref, reason, state)
 
+      Map.has_key?(state.ingestion_tasks, ref) ->
+        handle_ingestion_crash(ref, reason, state)
+
       Map.has_key?(state.pending_recalls, ref) ->
         handle_recall_crash(ref, reason, state)
 
@@ -379,6 +416,84 @@ defmodule Mnemosyne.MemoryStore do
   def handle_info(msg, state) do
     Logger.debug("MemoryStore received unexpected message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  # -- Private: Ingestion --
+
+  defp admit_ingestion(trajectory, digest, opts, from, state) do
+    {backend_mod, backend_state} = state.backend
+    fingerprint_version = Ingestion.fingerprint_version()
+
+    case backend_mod.get_ingestion(trajectory.source_id, backend_state) do
+      {:ok,
+       %{
+         fingerprint_version: version,
+         payload_digest: stored_digest,
+         receipt: receipt
+       }, _backend_state}
+      when version == fingerprint_version and stored_digest == digest ->
+        {:reply, {:ok, receipt}, state}
+
+      {:ok, nil, _backend_state} ->
+        {:noreply, start_ingestion(trajectory, digest, opts, from, state)}
+
+      {:ok, _record, _backend_state} ->
+        {:reply, source_conflict(trajectory.source_id), state}
+
+      {:error, _reason} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  defp start_ingestion(trajectory, digest, opts, from, state) do
+    execution_opts =
+      opts
+      |> Keyword.put_new(:config, state.config)
+      |> Keyword.put_new(:llm, state.llm)
+      |> Keyword.put_new(:embedding, state.embedding)
+      |> Keyword.put(:repo_id, state.repo_id)
+
+    task =
+      Task.Supervisor.async_nolink(state.task_supervisor, fn ->
+        Ingestion.run(trajectory, execution_opts)
+      end)
+
+    pending = %{
+      digest: digest,
+      waiters: [from],
+      task_ref: task.ref,
+      execution_opts: execution_opts
+    }
+
+    %{
+      state
+      | pending_ingestions: Map.put(state.pending_ingestions, trajectory.source_id, pending),
+        ingestion_tasks: Map.put(state.ingestion_tasks, task.ref, trajectory.source_id)
+    }
+  end
+
+  defp handle_ingestion_complete(ref, {:ok, changeset}, state) do
+    Process.demonitor(ref, [:flush])
+    source_id = Map.fetch!(state.ingestion_tasks, ref)
+    %{digest: digest} = Map.fetch!(state.pending_ingestions, source_id)
+    operation = {:commit_ingestion, source_id, digest, changeset}
+    {:noreply, enqueue_or_dispatch_write(operation, state)}
+  end
+
+  defp handle_ingestion_complete(ref, {:error, _reason} = error, state) do
+    Process.demonitor(ref, [:flush])
+    source_id = Map.fetch!(state.ingestion_tasks, ref)
+    {:noreply, complete_ingestion(state, source_id, error)}
+  end
+
+  defp handle_ingestion_crash(ref, reason, state) do
+    source_id = Map.fetch!(state.ingestion_tasks, ref)
+    error = {:error, PipelineError.exception(reason: {:task_crashed, reason})}
+    {:noreply, complete_ingestion(state, source_id, error)}
+  end
+
+  defp source_conflict(source_id) do
+    {:error, IngestionError.exception(source_id: source_id, reason: :source_conflict)}
   end
 
   # -- Private: Write Lane --
@@ -414,29 +529,36 @@ defmodule Mnemosyne.MemoryStore do
 
   defp spawn_write_task({:apply_changeset, changeset, from}, state) do
     backend = state.backend
-    llm = state.llm
-    embedding = state.embedding
-    config = state.config
-    repo_id = state.repo_id
+
+    execution_opts = [
+      repo_id: state.repo_id,
+      llm: state.llm,
+      embedding: state.embedding,
+      config: state.config
+    ]
 
     task =
       Task.Supervisor.async_nolink(state.task_supervisor, fn ->
-        merge_opts = [
-          repo_id: repo_id,
-          backend: backend,
-          llm: llm,
-          embedding: embedding,
-          config: config,
-          value_function: config.value_function
-        ]
-
-        with {:ok, deduped_cs} <- TagDeduplicator.deduplicate(changeset, merge_opts),
-             {:ok, merged_cs} <- IntentMerger.merge(deduped_cs, merge_opts) do
+        with {:ok, merged_cs} <- merge_changeset(changeset, backend, execution_opts) do
           {:ok, {:apply_changeset, merged_cs}}
         end
       end)
 
     {task.ref, {:apply_changeset, from}}
+  end
+
+  defp spawn_write_task({:commit_ingestion, source_id, digest, changeset}, state) do
+    backend = state.backend
+    pending = Map.fetch!(state.pending_ingestions, source_id)
+
+    task =
+      Task.Supervisor.async_nolink(state.task_supervisor, fn ->
+        with {:ok, merged_cs} <- merge_changeset(changeset, backend, pending.execution_opts) do
+          {:ok, {:commit_ingestion, source_id, digest, merged_cs}}
+        end
+      end)
+
+    {task.ref, {:commit_ingestion, source_id}}
   end
 
   defp spawn_write_task({:delete_nodes, node_ids, from}, state) do
@@ -448,6 +570,20 @@ defmodule Mnemosyne.MemoryStore do
     {task.ref, {:delete_nodes, from}}
   end
 
+  defp merge_changeset(changeset, backend, execution_opts) do
+    config = Keyword.fetch!(execution_opts, :config)
+
+    merge_opts =
+      execution_opts
+      |> Keyword.put(:backend, backend)
+      |> Keyword.put(:value_function, config.value_function)
+
+    case TagDeduplicator.deduplicate(changeset, merge_opts) do
+      {:ok, deduped_cs} -> IntentMerger.merge(deduped_cs, merge_opts)
+      {:error, _reason} = error -> error
+    end
+  end
+
   defp handle_write_complete(ref, result, state) do
     Process.demonitor(ref, [:flush])
     {_ref, operation} = state.write_active
@@ -456,13 +592,54 @@ defmodule Mnemosyne.MemoryStore do
       {{:ok, {:apply_changeset, merged_cs}}, {:apply_changeset, from}} ->
         apply_changeset_to_backend(merged_cs, from, state)
 
+      {{:ok, {:commit_ingestion, source_id, digest, merged_cs}}, {:commit_ingestion, source_id}} ->
+        commit_ingestion_to_backend(source_id, digest, merged_cs, state)
+
       {{:ok, {:delete_nodes, node_ids}}, {:delete_nodes, from}} ->
         delete_nodes_from_backend(node_ids, from, state)
+
+      {{:error, reason} = error, {:commit_ingestion, source_id}} ->
+        Logger.error("Write task failed (commit_ingestion): #{inspect(reason)}")
+        notify_write_failure(:commit_ingestion, reason, state)
+        {:noreply, fail_ingestion_and_dispatch(source_id, error, state)}
 
       {{:error, reason} = error, {op_type, from}} ->
         Logger.error("Write task failed (#{op_type}): #{inspect(reason)}")
         notify_write_failure(op_type, reason, state)
         reply_and_dispatch(from, error, state)
+    end
+  end
+
+  defp commit_ingestion_to_backend(source_id, digest, merged_cs, state) do
+    {backend_mod, backend_state} = state.backend
+
+    receipt = %IngestionReceipt{
+      source_id: source_id,
+      node_ids: Enum.map(merged_cs.additions, &Mnemosyne.Graph.Node.id/1),
+      stored_at: DateTime.utc_now()
+    }
+
+    record = %{
+      source_id: source_id,
+      payload_digest: digest,
+      fingerprint_version: Ingestion.fingerprint_version(),
+      receipt: receipt
+    }
+
+    case backend_mod.commit_ingestion(record, merged_cs, backend_state) do
+      {:ok, authoritative_receipt, final_bs} ->
+        new_state =
+          state
+          |> Map.put(:backend, {backend_mod, final_bs})
+          |> complete_ingestion(source_id, {:ok, authoritative_receipt})
+          |> dispatch_write()
+
+        {:noreply, new_state}
+
+      {:error, reason} = error ->
+        Logger.error("Backend commit_ingestion failed: #{inspect(reason)}")
+        notify_write_failure(:commit_ingestion, reason, state)
+        {:noreply, fail_ingestion_and_dispatch(source_id, error, state)}
     end
   end
 
@@ -513,21 +690,57 @@ defmodule Mnemosyne.MemoryStore do
 
   defp handle_write_crash(ref, reason, state) do
     Process.demonitor(ref, [:flush])
-    {_ref, {op_type, from}} = state.write_active
+    {_ref, operation} = state.write_active
 
-    Logger.error("Write task crashed (#{op_type}): #{inspect(reason)}")
+    case operation do
+      {:commit_ingestion, source_id} ->
+        Logger.error("Write task crashed (commit_ingestion): #{inspect(reason)}")
 
-    Notifier.safe_notify(
-      state.notifier,
-      state.repo_id,
-      {:write_crashed, op_type, reason, %{}}
-    )
+        Notifier.safe_notify(
+          state.notifier,
+          state.repo_id,
+          {:write_crashed, :commit_ingestion, reason, %{}}
+        )
 
-    if from do
-      GenServer.reply(from, {:error, PipelineError.exception(reason: {:task_crashed, reason})})
+        error = {:error, PipelineError.exception(reason: {:task_crashed, reason})}
+        {:noreply, fail_ingestion_and_dispatch(source_id, error, state)}
+
+      {op_type, from} ->
+        Logger.error("Write task crashed (#{op_type}): #{inspect(reason)}")
+
+        Notifier.safe_notify(
+          state.notifier,
+          state.repo_id,
+          {:write_crashed, op_type, reason, %{}}
+        )
+
+        if from do
+          GenServer.reply(
+            from,
+            {:error, PipelineError.exception(reason: {:task_crashed, reason})}
+          )
+        end
+
+        {:noreply, dispatch_write(%{state | write_active: nil})}
     end
+  end
 
-    {:noreply, dispatch_write(%{state | write_active: nil})}
+  defp fail_ingestion_and_dispatch(source_id, error, state) do
+    state
+    |> complete_ingestion(source_id, error)
+    |> Map.put(:write_active, nil)
+    |> dispatch_write()
+  end
+
+  defp complete_ingestion(state, source_id, result) do
+    {pending, pending_ingestions} = Map.pop!(state.pending_ingestions, source_id)
+    Enum.each(pending.waiters, &GenServer.reply(&1, result))
+
+    %{
+      state
+      | pending_ingestions: pending_ingestions,
+        ingestion_tasks: Map.delete(state.ingestion_tasks, pending.task_ref)
+    }
   end
 
   # -- Private: Maintenance Lane --

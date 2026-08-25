@@ -8,8 +8,6 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
   it are rewritten to point to the existing tag.
   """
 
-  require Logger
-
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Tag
   alias Mnemosyne.NodeMetadata
@@ -38,33 +36,33 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
   defp do_deduplicate(tags, other_nodes, %Changeset{} = changeset, opts) do
     {kept_tags, rewrites} = deduplicate_batch(tags)
 
-    rewrites = maybe_deduplicate_against_graph(kept_tags, rewrites, opts)
+    case maybe_deduplicate_against_graph(kept_tags, rewrites, opts) do
+      {:ok, rewrites} ->
+        {surviving_tags, rewrites} = remove_replaced_tags(kept_tags, rewrites)
+        rewritten_links = rewrite_links(changeset.links, rewrites)
+        deduped_links = Enum.uniq(rewritten_links)
+        cleaned_metadata = clean_metadata(changeset.metadata, rewrites)
 
-    {surviving_tags, rewrites} = remove_replaced_tags(kept_tags, rewrites)
-    rewritten_links = rewrite_links(changeset.links, rewrites)
-    deduped_links = Enum.uniq(rewritten_links)
-    cleaned_metadata = clean_metadata(changeset.metadata, rewrites)
+        result =
+          {:ok,
+           %Changeset{
+             changeset
+             | additions: other_nodes ++ surviving_tags,
+               links: deduped_links,
+               metadata: cleaned_metadata
+           }}
 
-    result =
-      {:ok,
-       %Changeset{
-         changeset
-         | additions: other_nodes ++ surviving_tags,
-           links: deduped_links,
-           metadata: cleaned_metadata
-       }}
+        {result, map_size(rewrites)}
 
-    {result, map_size(rewrites)}
+      {:error, _reason} = error ->
+        {error, 0}
+    end
   end
 
   defp maybe_deduplicate_against_graph(kept_tags, rewrites, opts) do
-    case fetch_graph_tags(opts) do
-      {:ok, graph_tags} ->
-        graph_lookup = build_graph_lookup(graph_tags)
-        deduplicate_against_graph(kept_tags, graph_lookup, rewrites)
-
-      :error ->
-        rewrites
+    with {:ok, graph_tags} <- fetch_graph_tags(opts) do
+      graph_lookup = build_graph_lookup(graph_tags)
+      {:ok, deduplicate_against_graph(kept_tags, graph_lookup, rewrites)}
     end
   end
 
@@ -94,9 +92,8 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
       {:ok, tags, _state} ->
         {:ok, tags}
 
-      {:error, reason} ->
-        Logger.warning("TagDeduplicator: failed to fetch graph tags: #{inspect(reason)}")
-        :error
+      {:error, _reason} = error ->
+        error
     end
   end
 

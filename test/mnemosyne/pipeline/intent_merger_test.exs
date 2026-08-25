@@ -4,6 +4,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
+  alias Mnemosyne.Errors.Framework.StorageError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Node.Procedural
@@ -359,6 +360,21 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
       assert {:ok, result} = IntentMerger.merge(cs, @base_opts)
 
       assert %NodeMetadata{cumulative_reward: 1.0} = result.metadata["int_new"]
+    end
+  end
+
+  describe "merge/2 backend errors" do
+    test "propagates candidate read errors" do
+      intent = make_intent("int_new", "Deploy to production", [1.0, 0.0, 0.0])
+      error = StorageError.exception(operation: :find_candidates, reason: :unavailable)
+      cs = Changeset.add_node(Changeset.new(), intent)
+
+      InMemory
+      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
+        {:error, error}
+      end)
+
+      assert {:error, ^error} = IntentMerger.merge(cs, @base_opts)
     end
   end
 end

@@ -11,6 +11,10 @@ defmodule Mnemosyne.Pipeline.Ingestion do
   @fingerprint_version 1
   @external_term_minor_version 2
 
+  @doc "Returns the version used by the current payload fingerprint."
+  @spec fingerprint_version() :: pos_integer()
+  def fingerprint_version, do: @fingerprint_version
+
   @doc """
   Validates a trajectory and returns its versioned SHA-256 payload digest.
   """
