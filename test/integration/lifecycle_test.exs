@@ -1,49 +1,61 @@
 defmodule Mnemosyne.Integration.LifecycleTest do
   use Mnemosyne.IntegrationCase, async: false
-  use AssertEventually, timeout: 2000, interval: 50
 
   @moduletag :tmp_dir
 
   alias Mnemosyne.Graph.Node, as: NodeProtocol
+  alias Mnemosyne.Graph.Node.Episodic
+  alias Mnemosyne.Graph.Node.Procedural
+  alias Mnemosyne.Graph.Node.Semantic
+  alias Mnemosyne.Graph.Node.Source
+  alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
   alias Mnemosyne.Pipeline.RecallResult
+  alias Mnemosyne.Trajectory
 
   @repo "integration"
 
   @tag timeout: 120_000
-  test "full memory write-read cycle with real LLM and embeddings" do
-    {:ok, session_id} = Mnemosyne.start_session("Learning Elixir OTP patterns", repo: @repo)
+  test "ingests and recalls a complete trajectory with real LLM and embeddings" do
+    source_id = "integration-elixir-otp-trajectory"
 
-    :ok =
-      Mnemosyne.append(
-        session_id,
-        "GenServer is a behaviour module for implementing server processes in Elixir. It provides init/1, handle_call/3, handle_cast/2, and handle_info/2 callbacks.",
-        "Studied the GenServer documentation and wrote a simple counter GenServer with increment and get operations."
-      )
+    trajectory = %Trajectory{
+      source_id: source_id,
+      goal: "Learning Elixir OTP patterns",
+      steps: [
+        %{
+          observation:
+            "GenServer is a behaviour module for implementing server processes in Elixir. It provides init/1, handle_call/3, handle_cast/2, and handle_info/2 handlers.",
+          action:
+            "Studied the GenServer documentation and wrote a simple counter GenServer with increment and get operations."
+        },
+        %{
+          observation:
+            "Supervisors monitor child processes and restart them according to a strategy. The common strategies are :one_for_one, :one_for_all, and :rest_for_one.",
+          action:
+            "Built a supervision tree with a top-level supervisor using :one_for_one strategy to manage multiple GenServer workers."
+        },
+        %{
+          observation:
+            "Task module provides conveniences for spawning and awaiting async computations. Task.async/1 and Task.await/2 are used for fire-and-forget and result-gathering patterns.",
+          action:
+            "Implemented parallel data fetching using Task.async_stream to process multiple API calls concurrently."
+        }
+      ],
+      metadata: %{topic: "elixir-otp"}
+    }
 
-    :ok =
-      Mnemosyne.append(
-        session_id,
-        "Supervisors monitor child processes and restart them according to a strategy. The common strategies are :one_for_one, :one_for_all, and :rest_for_one.",
-        "Built a supervision tree with a top-level supervisor using :one_for_one strategy to manage multiple GenServer workers."
-      )
+    assert {:ok,
+            %IngestionReceipt{
+              source_id: ^source_id,
+              node_ids: node_ids,
+              stored_at: %DateTime{}
+            } = receipt} = Mnemosyne.ingest(@repo, trajectory)
 
-    :ok =
-      Mnemosyne.append(
-        session_id,
-        "Task module provides conveniences for spawning and awaiting async computations. Task.async/1 and Task.await/2 are used for fire-and-forget and result-gathering patterns.",
-        "Implemented parallel data fetching using Task.async_stream to process multiple API calls concurrently."
-      )
+    assert node_ids != []
 
-    assert :ok =
-             Mnemosyne.close_and_commit(session_id,
-               max_polls: 600,
-               poll_interval: 200,
-               max_retries: 2
-             )
-
-    assert_eventually(map_size(Mnemosyne.get_graph(@repo).nodes) > 0)
     graph = Mnemosyne.get_graph(@repo)
+    assert Enum.all?(node_ids, &Map.has_key?(graph.nodes, &1))
 
     node_types =
       graph.nodes
@@ -51,15 +63,14 @@ defmodule Mnemosyne.Integration.LifecycleTest do
       |> Enum.map(& &1.__struct__)
       |> Enum.uniq()
 
-    assert node_types != []
-    assert Mnemosyne.Graph.Node.Episodic in node_types
+    assert Episodic in node_types
 
     known_types = [
-      Mnemosyne.Graph.Node.Episodic,
-      Mnemosyne.Graph.Node.Semantic,
-      Mnemosyne.Graph.Node.Procedural,
+      Episodic,
+      Semantic,
+      Procedural,
       Mnemosyne.Graph.Node.Subgoal,
-      Mnemosyne.Graph.Node.Source,
+      Source,
       Mnemosyne.Graph.Node.Tag,
       Mnemosyne.Graph.Node.Intent
     ]
@@ -68,84 +79,47 @@ defmodule Mnemosyne.Integration.LifecycleTest do
       assert type in known_types, "Unexpected node type: #{inspect(type)}"
     end
 
-    semantic_nodes =
-      graph.nodes
-      |> Map.values()
-      |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
+    source_nodes = Enum.filter(graph.nodes, fn {_id, node} -> match?(%Source{}, node) end)
+    semantic_nodes = Enum.filter(graph.nodes, fn {_id, node} -> match?(%Semantic{}, node) end)
+    procedural_nodes = Enum.filter(graph.nodes, fn {_id, node} -> match?(%Procedural{}, node) end)
 
     episodic_ids =
       graph.nodes
       |> Map.values()
-      |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Episodic{}, &1))
+      |> Enum.filter(&match?(%Episodic{}, &1))
       |> MapSet.new(& &1.id)
 
-    procedural_nodes =
-      graph.nodes
-      |> Map.values()
-      |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Procedural{}, &1))
-
+    assert source_nodes != [], "expected source nodes in graph"
+    assert Enum.all?(source_nodes, fn {_id, source} -> source.episode_id == source_id end)
     assert semantic_nodes != [], "expected semantic nodes in graph"
     assert procedural_nodes != [], "expected procedural nodes in graph"
     assert MapSet.size(episodic_ids) > 0, "expected episodic nodes in graph"
 
-    Enum.each(semantic_nodes, fn sem ->
+    Enum.each(semantic_nodes, fn {_id, semantic} ->
       provenance =
-        sem
+        semantic
         |> NodeProtocol.links(:provenance)
         |> MapSet.intersection(episodic_ids)
 
       assert MapSet.size(provenance) > 0,
-             "semantic node #{sem.id} should have provenance links to episodic nodes"
+             "semantic node #{semantic.id} should have provenance links to episodic nodes"
     end)
 
-    Enum.each(procedural_nodes, fn proc ->
+    Enum.each(procedural_nodes, fn {_id, procedural} ->
       provenance =
-        proc
+        procedural
         |> NodeProtocol.links(:provenance)
         |> MapSet.intersection(episodic_ids)
 
       assert MapSet.size(provenance) > 0,
-             "procedural node #{proc.id} should have provenance links to episodic nodes"
+             "procedural node #{procedural.id} should have provenance links to episodic nodes"
     end)
+
+    assert {:ok, ^receipt} = Mnemosyne.ingest(@repo, trajectory)
+    assert graph == Mnemosyne.get_graph(@repo)
 
     assert {:ok, %RecallResult{reasoned: %ReasonedMemory{} = result}} =
              Mnemosyne.recall(@repo, "how do supervisors work in Elixir?")
-
-    assert result.episodic != nil or result.semantic != nil or result.procedural != nil
-  end
-
-  @tag timeout: 120_000
-  test "recall_in_context augments query with session context" do
-    {:ok, write_session} =
-      Mnemosyne.start_session("Understanding process isolation in BEAM", repo: @repo)
-
-    :ok =
-      Mnemosyne.append(
-        write_session,
-        "Each Erlang process has its own heap and stack, providing strong isolation. A crash in one process does not affect others.",
-        "Experimented with spawning processes that crash and observed that the parent process continues running unaffected."
-      )
-
-    assert :ok =
-             Mnemosyne.close_and_commit(write_session,
-               max_polls: 600,
-               poll_interval: 200,
-               max_retries: 2
-             )
-
-    assert_eventually(map_size(Mnemosyne.get_graph(@repo).nodes) > 0)
-
-    {:ok, read_session} = Mnemosyne.start_session("Exploring BEAM internals", repo: @repo)
-
-    :ok =
-      Mnemosyne.append(
-        read_session,
-        "The BEAM scheduler distributes work across available CPU cores using preemptive scheduling with reduction counting.",
-        "Read about how the BEAM VM manages scheduling and ran observer to see scheduler utilization across cores."
-      )
-
-    assert {:ok, %RecallResult{reasoned: %ReasonedMemory{} = result}} =
-             Mnemosyne.recall_in_context(@repo, read_session, "how does process memory work?")
 
     assert result.episodic != nil or result.semantic != nil or result.procedural != nil
   end
