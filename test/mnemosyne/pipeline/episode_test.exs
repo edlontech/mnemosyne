@@ -76,6 +76,14 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     end
   end
 
+  describe "new/2" do
+    test "uses an explicit episode ID" do
+      episode = Episode.new("Find the answer", id: "task-42")
+
+      assert episode.id == "task-42"
+    end
+  end
+
   describe "append/4" do
     test "first append stores step with derived state and subgoal" do
       stub_first_append()

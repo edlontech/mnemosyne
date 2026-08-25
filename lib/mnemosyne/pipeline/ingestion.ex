@@ -4,6 +4,8 @@ defmodule Mnemosyne.Pipeline.Ingestion do
   """
 
   alias Mnemosyne.Errors.Invalid.IngestionError
+  alias Mnemosyne.Pipeline.Episode
+  alias Mnemosyne.Pipeline.Structuring
   alias Mnemosyne.Trajectory
 
   @fingerprint_version 1
@@ -25,6 +27,30 @@ defmodule Mnemosyne.Pipeline.Ingestion do
 
   def prepare(_trajectory) do
     {:error, IngestionError.exception(reason: :invalid_trajectory)}
+  end
+
+  @doc "Transforms a complete trajectory into a graph changeset."
+  @spec run(Trajectory.t(), keyword()) ::
+          {:ok, Mnemosyne.Graph.Changeset.t()} | {:error, Mnemosyne.Errors.error()}
+  def run(%Trajectory{} = trajectory, opts) do
+    opts = Keyword.put(opts, :source_id, trajectory.source_id)
+    episode = Episode.new(trajectory.goal, id: trajectory.source_id)
+
+    with {:ok, episode} <- append_steps(episode, trajectory.steps, opts),
+         {:ok, episode} <- Episode.score_pending_reward(episode, opts),
+         {:ok, episode} <- Episode.close(episode) do
+      Structuring.extract(episode, opts)
+    end
+  end
+
+  defp append_steps(episode, steps, opts) do
+    Enum.reduce_while(steps, {:ok, episode}, fn %{observation: observation, action: action},
+                                                {:ok, episode} ->
+      case Episode.append(episode, observation, action, opts) do
+        {:ok, episode, _trace} -> {:cont, {:ok, episode}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp validate(trajectory) do

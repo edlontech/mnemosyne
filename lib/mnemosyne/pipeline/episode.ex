@@ -61,10 +61,10 @@ defmodule Mnemosyne.Pipeline.Episode do
         }
 
   @doc "Creates a new open episode targeting the given goal."
-  @spec new(String.t()) :: t()
-  def new(goal) do
+  @spec new(String.t(), keyword()) :: t()
+  def new(goal, opts \\ []) do
     %__MODULE__{
-      id: generate_id("ep"),
+      id: Keyword.get_lazy(opts, :id, fn -> generate_id("ep") end),
       goal: goal,
       current_trajectory_id: generate_id("traj")
     }
