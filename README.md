@@ -11,7 +11,7 @@ Add `mnemosyne` to your dependencies:
 ```elixir
 def deps do
   [
-    {:mnemosyne, "~> 0.2.0"} # x-release-please-version
+    {:mnemosyne, "~> 0.3.0"} # x-release-please-version
   ]
 end
 ```

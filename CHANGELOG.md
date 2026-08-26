@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.2.0...mnemosyne-v0.3.0) (2026-08-26)
+
+
+### Features
+
+* **api:** expose trajectory ingestion ([f2206bc](https://github.com/edlontech/mnemosyne/commit/f2206bc8da9b2db352255483970592d27117cd03))
+* **backend:** persist ingestion receipts ([aea7735](https://github.com/edlontech/mnemosyne/commit/aea7735b2a9bcde6ba270871a7a9a41c54c2041f))
+* **ingestion:** build trajectory pipeline ([2d02387](https://github.com/edlontech/mnemosyne/commit/2d023876a81c127d9986f9f4be5899a809c43778))
+* **ingestion:** define trajectory contracts ([867e795](https://github.com/edlontech/mnemosyne/commit/867e795cd448c0f61a06486df8f757c0784cd231))
+* **notifier:** emit ingestion outcomes ([085c97d](https://github.com/edlontech/mnemosyne/commit/085c97dc473f3c973909a7abf97f51ac3a368c6f))
+* **recall:** accept explicit task context ([9b52002](https://github.com/edlontech/mnemosyne/commit/9b520022f1491d14c5fb405bcdfe2f2b9a219af9))
+* **store:** coordinate trajectory ingestion ([6765535](https://github.com/edlontech/mnemosyne/commit/6765535937fef2b47e76e2d44b234e7d37365069))
+
+
+### Bug Fixes
+
+* Fixed default threshold ([d9c8a8d](https://github.com/edlontech/mnemosyne/commit/d9c8a8d1b99fffc52cceca4c7c89c07cacc208aa))
+
 ## [0.2.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.1.6...mnemosyne-v0.2.0) (2026-07-14)
 
 
