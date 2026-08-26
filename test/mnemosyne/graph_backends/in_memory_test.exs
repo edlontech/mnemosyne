@@ -4,6 +4,7 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
   alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
+  alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Node.Procedural
   alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Subgoal
@@ -313,6 +314,58 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
         InMemory.find_candidates([:subgoal], @test_vector, [], @value_fns, [], state)
 
       assert candidates == []
+    end
+
+    test "built-in thresholds admit matching fresh nodes" do
+      {:ok, state} = InMemory.init([])
+
+      {:ok, config} =
+        Zoi.parse(Mnemosyne.Config.t(), %{
+          llm: %{model: "test"},
+          embedding: %{model: "test"}
+        })
+
+      neutral_reward = NodeMetadata.new(cumulative_reward: 0.0, reward_count: 1)
+
+      nodes = [
+        {%Procedural{
+           id: "proc-1",
+           instruction: "do the thing",
+           condition: "when needed",
+           expected_outcome: "it is done",
+           embedding: @test_vector
+         }, neutral_reward},
+        {%Subgoal{id: "subgoal-1", description: "do the thing", embedding: @test_vector},
+         NodeMetadata.new()},
+        {%Tag{id: "tag-1", label: "thing", embedding: @test_vector}, neutral_reward},
+        {%Intent{id: "intent-1", description: "do the thing", embedding: @test_vector},
+         neutral_reward}
+      ]
+
+      changeset =
+        Enum.reduce(nodes, Changeset.new(), fn {node, metadata}, changeset ->
+          changeset
+          |> Changeset.add_node(node)
+          |> Changeset.put_metadata(node.id, metadata)
+        end)
+
+      {:ok, state} = InMemory.apply_changeset(changeset, state)
+
+      for {type, expected_id} <-
+            [procedural: "proc-1", subgoal: "subgoal-1", tag: "tag-1", intent: "intent-1"] do
+        assert {:ok, [{node, score}], _state} =
+                 InMemory.find_candidates(
+                   [type],
+                   @test_vector,
+                   [],
+                   config.value_function,
+                   [],
+                   state
+                 )
+
+        assert node.id == expected_id
+        assert score >= config.value_function.params[type].threshold
+      end
     end
 
     test "deduplicates nodes across types" do

@@ -56,12 +56,12 @@ defmodule Mnemosyne.Config do
 
   @vf_param_defaults %{
     semantic: %{threshold: 0.0, top_k: 20, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    procedural: %{threshold: 0.8, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+    procedural: %{threshold: 0.12, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
     episodic: %{threshold: 0.0, top_k: 30, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    subgoal: %{threshold: 0.75, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    tag: %{threshold: 0.9, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+    subgoal: %{threshold: 0.225, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+    tag: %{threshold: 0.135, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
     source: %{threshold: 0.0, top_k: 50, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    intent: %{threshold: 0.7, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+    intent: %{threshold: 0.105, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
   }
 
   @vf_safe_default %{threshold: 0.0, top_k: 20, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}

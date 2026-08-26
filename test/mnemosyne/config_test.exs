@@ -132,7 +132,7 @@ defmodule Mnemosyne.ConfigTest do
       assert semantic.beta == 1.0
 
       procedural = config.value_function.params[:procedural]
-      assert procedural.threshold == 0.8
+      assert procedural.threshold == 0.12
       assert procedural.top_k == 10
 
       episodic = config.value_function.params[:episodic]
@@ -140,11 +140,11 @@ defmodule Mnemosyne.ConfigTest do
       assert episodic.top_k == 30
 
       subgoal = config.value_function.params[:subgoal]
-      assert subgoal.threshold == 0.75
+      assert subgoal.threshold == 0.225
       assert subgoal.top_k == 10
 
       tag = config.value_function.params[:tag]
-      assert tag.threshold == 0.9
+      assert tag.threshold == 0.135
       assert tag.top_k == 10
 
       source = config.value_function.params[:source]
@@ -152,7 +152,7 @@ defmodule Mnemosyne.ConfigTest do
       assert source.top_k == 50
 
       intent = config.value_function.params[:intent]
-      assert intent.threshold == 0.7
+      assert intent.threshold == 0.105
       assert intent.top_k == 10
     end
 
@@ -226,7 +226,7 @@ defmodule Mnemosyne.ConfigTest do
       {:ok, config} = Zoi.parse(Config.t(), input)
 
       params = Config.resolve_value_function(config, :procedural)
-      assert params.threshold == 0.8
+      assert params.threshold == 0.12
       assert params.top_k == 10
       assert params.lambda == 0.01
       assert params.k == 5
@@ -291,7 +291,7 @@ defmodule Mnemosyne.ConfigTest do
       {:ok, config} = Zoi.parse(Config.t(), input)
 
       params = Config.resolve_value_function(config, :procedural)
-      assert params.threshold == 0.8
+      assert params.threshold == 0.12
       assert params.top_k == 10
       assert params.base_floor == 0.3
     end

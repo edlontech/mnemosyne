@@ -106,7 +106,7 @@ config = %Mnemosyne.Config{
     module: Mnemosyne.ValueFunction.Default,
     params: %{
       semantic: %{threshold: 0.1, top_k: 30, lambda: 0.005, k: 10, base_floor: 0.2, beta: 1.5},
-      procedural: %{threshold: 0.8, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      procedural: %{threshold: 0.12, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
       episodic: %{threshold: 0.0, top_k: 30, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
     }
   }
@@ -129,14 +129,15 @@ config = %Mnemosyne.Config{
 | Type | Threshold | Top K |
 |------|-----------|-------|
 | `semantic` | 0.0 | 20 |
-| `procedural` | 0.8 | 10 |
+| `procedural` | 0.12 | 10 |
 | `episodic` | 0.0 | 30 |
-| `subgoal` | 0.75 | 10 |
-| `tag` | 0.9 | 10 |
+| `subgoal` | 0.225 | 10 |
+| `tag` | 0.135 | 10 |
 | `source` | 0.0 | 50 |
-| `intent` | 0.7 | 10 |
+| `intent` | 0.105 | 10 |
 
-Procedural nodes have a high threshold (0.8) because vague procedural matches tend to be unhelpful. Semantic and episodic nodes use 0.0 to let the value function handle ranking.
+Thresholds apply to the final multiplied score, not directly to cosine similarity. For example, a fresh, neutrally rewarded procedural node has frequency `0.3` and reward `0.5`, so its `0.12`. 
+Positive reward or repeated access makes a node easier to retrieve; age, negative reward, or low usage makes it harder. Semantic and episodic nodes use `0.0` to let the value function handle ranking.
 
 These defaults can be overridden per node type via [extraction profiles](extraction-profiles.md), which merge domain-specific parameter tweaks on top of config-level settings.
 
