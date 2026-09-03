@@ -23,6 +23,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
   alias Mnemosyne.Graph.Node.Helpers, as: NodeHelpers
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.LLM
+  alias Mnemosyne.ModelCall
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Prompts.MergeSemantic
   alias Mnemosyne.ValueFunction
@@ -62,6 +63,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     config = Keyword.fetch!(opts, :config)
     llm = Keyword.fetch!(opts, :llm)
     embedding = Keyword.fetch!(opts, :embedding)
+    model_context = Keyword.get(opts, :model_context)
     threshold = Keyword.get(opts, :threshold, @default_threshold)
 
     with {:ok, sem_nodes, bs} <- backend_mod.get_nodes_by_type([:semantic], backend_state),
@@ -72,7 +74,16 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
       candidate_pairs = find_candidate_pairs(sem_nodes, threshold)
 
       {merge_cs, meta_updates, loser_ids, merged_count} =
-        decide_merges(candidate_pairs, sem_nodes, all_meta, params, llm, embedding, config)
+        decide_merges(
+          candidate_pairs,
+          sem_nodes,
+          all_meta,
+          params,
+          model_context,
+          llm,
+          embedding,
+          config
+        )
 
       with {:ok, bs} <- apply_if_nonempty(merge_cs, backend_mod, bs),
            {:ok, bs} <- update_if_nonempty(meta_updates, backend_mod, bs),
@@ -157,7 +168,16 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     end
   end
 
-  defp decide_merges(candidate_pairs, sem_nodes, all_meta, params, llm, embedding, config) do
+  defp decide_merges(
+         candidate_pairs,
+         sem_nodes,
+         all_meta,
+         params,
+         model_context,
+         llm,
+         embedding,
+         config
+       ) do
     nodes_by_id = Map.new(sem_nodes, &{NodeProtocol.id(&1), &1})
 
     {merges, merge_map} =
@@ -165,7 +185,15 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
         node_a = Map.fetch!(nodes_by_id, id_a)
         node_b = Map.fetch!(nodes_by_id, id_b)
 
-        case llm_merge_decision(node_a, node_b, all_meta, llm, embedding, config) do
+        case llm_merge_decision(
+               node_a,
+               node_b,
+               all_meta,
+               model_context,
+               llm,
+               embedding,
+               config
+             ) do
           {:merge, statement, statement_embedding} ->
             {winner_id, loser_id} = pick_winner_loser(id_a, id_b, all_meta, params)
             winner = Map.fetch!(nodes_by_id, winner_id)
@@ -181,7 +209,15 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     build_merge_ops(Enum.reverse(merges), merge_map, nodes_by_id, all_meta)
   end
 
-  defp llm_merge_decision(node_a, node_b, all_meta, llm, embedding, config) do
+  defp llm_merge_decision(
+         node_a,
+         node_b,
+         all_meta,
+         model_context,
+         llm,
+         embedding,
+         config
+       ) do
     {earlier, later} = order_by_creation(node_a, node_b, all_meta)
 
     messages =
@@ -194,10 +230,23 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
     llm_opts = Config.llm_opts(config, :merge_semantic, [])
 
     with {:ok, %LLM.Response{content: content}} <-
-           llm.chat_structured(messages, MergeSemantic.schema(), llm_opts),
+           ModelCall.chat_structured(
+             model_context,
+             llm,
+             :merge_semantic,
+             messages,
+             MergeSemantic.schema(),
+             llm_opts
+           ),
          {:ok, {:merge, statement}} <- MergeSemantic.parse_response(content),
          {:ok, %Embedding.Response{vectors: [vector | _]}} <-
-           embedding.embed(statement, Config.embedding_opts(config)) do
+           ModelCall.embed(
+             model_context,
+             embedding,
+             :merge_semantic,
+             statement,
+             Config.embedding_opts(config)
+           ) do
       {:merge, statement, vector}
     else
       {:ok, :keep_both} ->

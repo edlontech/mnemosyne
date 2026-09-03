@@ -15,6 +15,7 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Similarity
+  alias Mnemosyne.ModelCall
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Prompts.MergeIntent, as: MergePrompt
 
@@ -230,6 +231,7 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     llm = Keyword.fetch!(opts, :llm)
     embedding = Keyword.fetch!(opts, :embedding)
     config = Keyword.fetch!(opts, :config)
+    model_context = Keyword.get(opts, :model_context)
 
     messages =
       MergePrompt.build_messages(%{
@@ -242,10 +244,23 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     embedding_opts = Config.embedding_opts(config) ++ Keyword.get(opts, :embedding_opts, [])
 
     with {:ok, %{content: content}} <-
-           llm.chat_structured(messages, MergePrompt.schema(), llm_opts),
+           ModelCall.chat_structured(
+             model_context,
+             llm,
+             :merge_intent,
+             messages,
+             MergePrompt.schema(),
+             llm_opts
+           ),
          {:ok, merged_desc} <- MergePrompt.parse_response(content),
          {:ok, %{vectors: [new_embedding]}} <-
-           embedding.embed_batch([merged_desc], embedding_opts) do
+           ModelCall.embed_batch(
+             model_context,
+             embedding,
+             :merge_intent,
+             [merged_desc],
+             embedding_opts
+           ) do
       merged = %Intent{existing | description: merged_desc, embedding: new_embedding}
       {:ok, merged}
     else
