@@ -38,11 +38,13 @@ defmodule Mnemosyne.ModelCall do
     :total_cost
   ]
 
+  @doc "Invokes an LLM chat call with optional repository-attributed telemetry."
   @spec chat(Context.t() | nil, module(), atom(), [LLM.message()], keyword()) ::
           {:ok, LLM.Response.t()} | {:error, term()}
   def chat(context, adapter, step, messages, opts),
     do: invoke(context, :llm, :chat, adapter, step, opts, fn -> adapter.chat(messages, opts) end)
 
+  @doc "Invokes a structured LLM chat call with optional repository-attributed telemetry."
   @spec chat_structured(Context.t() | nil, module(), atom(), [LLM.message()], term(), keyword()) ::
           {:ok, LLM.Response.t()} | {:error, term()}
   def chat_structured(context, adapter, step, messages, schema, opts),
@@ -51,12 +53,14 @@ defmodule Mnemosyne.ModelCall do
         adapter.chat_structured(messages, schema, opts)
       end)
 
+  @doc "Invokes one embedding call with optional repository-attributed telemetry."
   @spec embed(Context.t() | nil, module(), atom(), String.t(), keyword()) ::
           {:ok, Embedding.Response.t()} | {:error, term()}
   def embed(context, adapter, step, text, opts),
     do:
       invoke(context, :embedding, :embed, adapter, step, opts, fn -> adapter.embed(text, opts) end)
 
+  @doc "Invokes a batched embedding call with optional repository-attributed telemetry."
   @spec embed_batch(Context.t() | nil, module(), atom(), [String.t()], keyword()) ::
           {:ok, Embedding.Response.t()} | {:error, term()}
   def embed_batch(context, adapter, step, texts, opts),
