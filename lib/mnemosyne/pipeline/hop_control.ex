@@ -17,6 +17,7 @@ defmodule Mnemosyne.Pipeline.HopControl do
   alias Mnemosyne.Embedding
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.LLM
+  alias Mnemosyne.ModelCall
   alias Mnemosyne.Pipeline.Prompts.GetRefinedQuery
   alias Mnemosyne.Pipeline.Prompts.MultiHopControl
   alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
@@ -95,7 +96,7 @@ defmodule Mnemosyne.Pipeline.HopControl do
 
       llm_opts = Config.llm_opts(ctx.config, :multi_hop_control, ctx.llm_opts)
 
-      case run_control(ctx.llm, messages, llm_opts) do
+      case run_control(Map.get(ctx, :model_context), ctx.llm, messages, llm_opts) do
         {:ok, %{enough: true}} ->
           {{:stop, %{state | stopped_early_at: hop}}, %{decision: :stop}}
 
@@ -161,9 +162,16 @@ defmodule Mnemosyne.Pipeline.HopControl do
   def node_content(%{description: d}) when is_binary(d), do: d
   def node_content(_), do: ""
 
-  defp run_control(llm, messages, llm_opts) do
+  defp run_control(model_context, llm, messages, llm_opts) do
     with {:ok, %LLM.Response{content: content}} <-
-           llm.chat_structured(messages, MultiHopControl.schema(), llm_opts),
+           ModelCall.chat_structured(
+             model_context,
+             llm,
+             :multi_hop_control,
+             messages,
+             MultiHopControl.schema(),
+             llm_opts
+           ),
          {:ok, decision} <- MultiHopControl.parse_response(content) do
       {:ok, decision}
     else
@@ -188,10 +196,23 @@ defmodule Mnemosyne.Pipeline.HopControl do
     llm_opts = Config.llm_opts(ctx.config, :get_refined_query, ctx.llm_opts)
 
     with {:ok, %LLM.Response{content: content}} <-
-           ctx.llm.chat_structured(messages, GetRefinedQuery.schema(), llm_opts),
+           ModelCall.chat_structured(
+             Map.get(ctx, :model_context),
+             ctx.llm,
+             :get_refined_query,
+             messages,
+             GetRefinedQuery.schema(),
+             llm_opts
+           ),
          {:ok, [_ | _] = tags} <- GetRefinedQuery.parse_response(content),
          {:ok, %Embedding.Response{vectors: vectors}} <-
-           ctx.embedding.embed_batch(tags, Config.embedding_opts(ctx.config)) do
+           ModelCall.embed_batch(
+             Map.get(ctx, :model_context),
+             ctx.embedding,
+             :get_refined_query,
+             tags,
+             Config.embedding_opts(ctx.config)
+           ) do
       {:ok, tags, vectors}
     else
       error ->

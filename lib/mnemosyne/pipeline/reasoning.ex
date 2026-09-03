@@ -12,6 +12,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
 
   alias Mnemosyne.Config
   alias Mnemosyne.LLM
+  alias Mnemosyne.ModelCall
   alias Mnemosyne.Pipeline.Prompts.ReasonEpisodic
   alias Mnemosyne.Pipeline.Prompts.ReasonProcedural
   alias Mnemosyne.Pipeline.Prompts.ReasonSemantic
@@ -60,6 +61,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     query = Keyword.fetch!(opts, :query)
     llm_opts = Keyword.get(opts, :llm_opts, [])
     config = Keyword.get(opts, :config)
+    model_context = Keyword.get(opts, :model_context)
 
     candidate_types =
       candidates
@@ -69,9 +71,33 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     tasks =
       Enum.reject(
         [
-          maybe_reason(:episodic, candidates, query, llm, llm_opts, config),
-          maybe_reason(:semantic, candidates, query, llm, llm_opts, config),
-          maybe_reason(:procedural, candidates, query, llm, llm_opts, config)
+          maybe_reason(
+            :episodic,
+            candidates,
+            query,
+            model_context,
+            llm,
+            llm_opts,
+            config
+          ),
+          maybe_reason(
+            :semantic,
+            candidates,
+            query,
+            model_context,
+            llm,
+            llm_opts,
+            config
+          ),
+          maybe_reason(
+            :procedural,
+            candidates,
+            query,
+            model_context,
+            llm,
+            llm_opts,
+            config
+          )
         ],
         &is_nil/1
       )
@@ -102,14 +128,14 @@ defmodule Mnemosyne.Pipeline.Reasoning do
       reraise e, __STACKTRACE__
   end
 
-  defp maybe_reason(type, candidates, query, llm, llm_opts, config) do
+  defp maybe_reason(type, candidates, query, model_context, llm, llm_opts, config) do
     nodes = extract_nodes(candidates, type, config)
 
     if nodes == [] do
       nil
     else
       Task.async(fn ->
-        run_reasoning(type, query, nodes, llm, llm_opts, config)
+        run_reasoning(type, query, nodes, model_context, llm, llm_opts, config)
       end)
     end
   end
@@ -134,7 +160,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   defp default_top_k(:semantic), do: 20
   defp default_top_k(:procedural), do: 10
 
-  defp run_reasoning(:episodic, query, nodes, llm, llm_opts, config) do
+  defp run_reasoning(:episodic, query, nodes, model_context, llm, llm_opts, config) do
     messages =
       ReasonEpisodic.build_messages(%{
         query: query,
@@ -143,7 +169,10 @@ defmodule Mnemosyne.Pipeline.Reasoning do
       })
 
     with {:ok, %LLM.Response{content: content}} <-
-           llm.chat_structured(
+           ModelCall.chat_structured(
+             model_context,
+             llm,
+             :reason_episodic,
              messages,
              ReasonEpisodic.schema(),
              Config.llm_opts(config, :reason_episodic, llm_opts)
@@ -153,7 +182,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     end
   end
 
-  defp run_reasoning(:semantic, query, nodes, llm, llm_opts, config) do
+  defp run_reasoning(:semantic, query, nodes, model_context, llm, llm_opts, config) do
     messages =
       ReasonSemantic.build_messages(%{
         query: query,
@@ -162,7 +191,10 @@ defmodule Mnemosyne.Pipeline.Reasoning do
       })
 
     with {:ok, %LLM.Response{content: content}} <-
-           llm.chat_structured(
+           ModelCall.chat_structured(
+             model_context,
+             llm,
+             :reason_semantic,
              messages,
              ReasonSemantic.schema(),
              Config.llm_opts(config, :reason_semantic, llm_opts)
@@ -172,7 +204,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     end
   end
 
-  defp run_reasoning(:procedural, query, nodes, llm, llm_opts, config) do
+  defp run_reasoning(:procedural, query, nodes, model_context, llm, llm_opts, config) do
     messages =
       ReasonProcedural.build_messages(%{
         query: query,
@@ -181,7 +213,10 @@ defmodule Mnemosyne.Pipeline.Reasoning do
       })
 
     with {:ok, %LLM.Response{content: content}} <-
-           llm.chat_structured(
+           ModelCall.chat_structured(
+             model_context,
+             llm,
+             :reason_procedural,
              messages,
              ReasonProcedural.schema(),
              Config.llm_opts(config, :reason_procedural, llm_opts)

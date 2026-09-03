@@ -19,6 +19,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Node.Helpers, as: NodeHelpers
   alias Mnemosyne.Graph.Similarity
+  alias Mnemosyne.ModelCall
   alias Mnemosyne.Notifier.Trace.Recall, as: RecallTrace
   alias Mnemosyne.Pipeline.HopControl
   alias Mnemosyne.Pipeline.Prompts.GetMode
@@ -73,14 +74,21 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         value_fns = Keyword.fetch!(opts, :value_function)
         llm_opts = Keyword.get(opts, :llm_opts, [])
         config = Keyword.get(opts, :config)
+        model_context = Keyword.get(opts, :model_context)
         max_hops = Keyword.get(opts, :max_hops, @default_max_hops)
         verbosity = if config, do: config.trace_verbosity, else: :summary
         start_time = System.monotonic_time(:microsecond)
 
-        with {:ok, mode} <- classify_mode(query, llm, llm_opts, config),
-             {:ok, tags} <- generate_plan(query, mode, llm, llm_opts, config),
+        with {:ok, mode} <- classify_mode(query, model_context, llm, llm_opts, config),
+             {:ok, tags} <- generate_plan(query, mode, model_context, llm, llm_opts, config),
              {:ok, %Embedding.Response{vectors: [query_vector | tag_vectors]}} <-
-               embedding.embed_batch([query | tags], Config.embedding_opts(config)) do
+               ModelCall.embed_batch(
+                 model_context,
+                 embedding,
+                 :retrieval,
+                 [query | tags],
+                 Config.embedding_opts(config)
+               ) do
           execute_pipeline(%{
             query: query,
             source_id: Keyword.get(opts, :source_id),
@@ -94,6 +102,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
             embedding: embedding,
             llm_opts: llm_opts,
             config: config,
+            model_context: model_context,
             max_hops: max_hops,
             verbosity: verbosity,
             start_time: start_time
@@ -124,6 +133,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       embedding: ctx.embedding,
       config: ctx.config,
       llm_opts: ctx.llm_opts,
+      model_context: ctx.model_context,
       query: ctx.query
     }
 
@@ -198,17 +208,23 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     {{:ok, result, trace}, %{candidates_found: total_candidates}}
   end
 
-  defp classify_mode(query, llm, llm_opts, config) do
+  defp classify_mode(query, model_context, llm, llm_opts, config) do
     messages =
       GetMode.build_messages(%{query: query, overlay: Config.resolve_overlay(config, :get_mode)})
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :get_mode, llm_opts)) do
+           ModelCall.chat(
+             model_context,
+             llm,
+             :get_mode,
+             messages,
+             Config.llm_opts(config, :get_mode, llm_opts)
+           ) do
       GetMode.parse_response(content)
     end
   end
 
-  defp generate_plan(query, mode, llm, llm_opts, config) do
+  defp generate_plan(query, mode, model_context, llm, llm_opts, config) do
     messages =
       GetPlan.build_messages(%{
         query: query,
@@ -217,7 +233,13 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       })
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :get_plan, llm_opts)) do
+           ModelCall.chat(
+             model_context,
+             llm,
+             :get_plan,
+             messages,
+             Config.llm_opts(config, :get_plan, llm_opts)
+           ) do
       GetPlan.parse_response(content)
     end
   end
@@ -375,7 +397,13 @@ defmodule Mnemosyne.Pipeline.Retrieval do
 
     next_query = "#{refine_ctx.query}\n#{focus_text}"
 
-    case refine_ctx.embedding.embed(next_query, Config.embedding_opts(refine_ctx.config)) do
+    case ModelCall.embed(
+           refine_ctx.model_context,
+           refine_ctx.embedding,
+           :retrieval_focus,
+           next_query,
+           Config.embedding_opts(refine_ctx.config)
+         ) do
       {:ok, %Embedding.Response{vectors: [vector | _]}} -> vector
       _ -> nil
     end
