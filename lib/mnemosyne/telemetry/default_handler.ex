@@ -69,8 +69,11 @@ defmodule Mnemosyne.Telemetry.DefaultHandler do
     parts =
       []
       |> maybe_add("repo", metadata[:repo_id])
-      |> maybe_add("tokens_in", measurements[:tokens_input])
-      |> maybe_add("tokens_out", measurements[:tokens_output])
+      |> maybe_add("tokens_in", measurements[:input_tokens] || measurements[:tokens_input])
+      |> maybe_add("tokens_out", measurements[:output_tokens] || measurements[:tokens_output])
+      |> maybe_add("total_cost", measurements[:total_cost])
+      |> maybe_add_currency(metadata[:currency])
+      |> maybe_add("status", metadata[:status])
       |> maybe_add("batch_size", measurements[:batch_size])
       |> maybe_add("nodes", measurements[:nodes_added])
       |> maybe_add("links", measurements[:links_added])
@@ -82,6 +85,8 @@ defmodule Mnemosyne.Telemetry.DefaultHandler do
       |> maybe_add("merged", measurements[:merged])
       |> maybe_add("rewrites", measurements[:rewrites])
       |> maybe_add("model", metadata[:model])
+      |> maybe_add("requested_model", metadata[:requested_model])
+      |> maybe_add("response_model", metadata[:response_model])
       |> maybe_add("step", metadata[:step])
       |> maybe_add("mode", metadata[:mode])
       |> maybe_add("from", metadata[:from_state])
@@ -93,6 +98,9 @@ defmodule Mnemosyne.Telemetry.DefaultHandler do
       _ -> " " <> Enum.join(parts, " ")
     end
   end
+
+  defp maybe_add_currency(parts, ""), do: parts
+  defp maybe_add_currency(parts, currency), do: maybe_add(parts, "currency", currency)
 
   defp maybe_add(parts, _label, nil), do: parts
   defp maybe_add(parts, label, value), do: ["#{label}=#{value}" | parts]

@@ -31,6 +31,69 @@ defmodule Mnemosyne.Telemetry.DefaultHandlerTest do
     assert log =~ "model=test-model"
   end
 
+  test "logs model-call costs and terminal dimensions" do
+    log =
+      capture_log([level: :debug], fn ->
+        :telemetry.execute(
+          [:mnemosyne, :model, :call, :stop],
+          %{
+            duration: System.convert_time_unit(150, :millisecond, :native),
+            input_tokens: 100,
+            output_tokens: 50,
+            total_cost: 0.0012
+          },
+          %{
+            repo_id: "repo-1",
+            step: :get_semantic,
+            requested_model: "requested-model",
+            response_model: "response-model",
+            currency: "USD",
+            status: :ok,
+            labels: %{api_key: "never-log"}
+          }
+        )
+      end)
+
+    assert log =~ "model.call completed in"
+    assert log =~ "repo=repo-1"
+    assert log =~ "tokens_in=100"
+    assert log =~ "tokens_out=50"
+    assert log =~ "total_cost=0.0012"
+    assert log =~ "currency=USD"
+    assert log =~ "status=ok"
+    assert log =~ "requested_model=requested-model"
+    assert log =~ "response_model=response-model"
+    assert log =~ "step=get_semantic"
+    refute log =~ "api_key"
+    refute log =~ "never-log"
+  end
+
+  test "logs error model calls without unknown cost or currency" do
+    log =
+      capture_log([level: :debug], fn ->
+        :telemetry.execute(
+          [:mnemosyne, :model, :call, :stop],
+          %{
+            duration: System.convert_time_unit(50, :millisecond, :native),
+            total_cost: nil
+          },
+          %{
+            status: :error,
+            currency: "",
+            requested_model: "requested-model",
+            response_model: "requested-model"
+          }
+        )
+      end)
+
+    assert log =~ "model.call completed in"
+    assert log =~ "status=error"
+    assert log =~ "requested_model=requested-model"
+    assert log =~ "response_model=requested-model"
+    refute log =~ "total_cost="
+    refute log =~ "currency="
+  end
+
   test "logs exception events at error level" do
     log =
       capture_log([level: :error], fn ->
