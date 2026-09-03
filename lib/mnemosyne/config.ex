@@ -140,7 +140,7 @@ defmodule Mnemosyne.Config do
                          "Cosine similarity threshold above which incoming intents are silently deduplicated"
                      ),
                    refinement_budget:
-                     Zoi.default(Zoi.non_negative(Zoi.integer()), 2,
+                     Zoi.default(Zoi.non_negative(Zoi.integer()), 1,
                        description:
                          "Maximum number of per-hop tag refinement LLM calls per recall. Capped at max_hops at runtime."
                      ),
@@ -180,7 +180,7 @@ defmodule Mnemosyne.Config do
           "Cosine similarity threshold above which incoming intents are silently deduplicated"
       ),
     refinement_budget:
-      Zoi.default(Zoi.non_negative(Zoi.integer()), 2,
+      Zoi.default(Zoi.non_negative(Zoi.integer()), 1,
         description:
           "Maximum number of per-hop tag refinement LLM calls per recall. Capped at max_hops at runtime."
       ),

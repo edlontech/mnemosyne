@@ -43,7 +43,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
           }
   end
 
-  @default_max_hops 2
+  @default_max_hops 1
   @max_candidates_per_hop 100
   @provenance_decay 0.5
 
@@ -57,7 +57,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     - `:value_function` (required) - Map with `:module` (ValueFunction impl) and `:params` (per-type params)
     - `:llm_opts` - Additional LLM options (default: [])
     - `:config` - Config struct for per-step model overrides
-    - `:max_hops` - Maximum traversal hops (default: 2)
+    - `:max_hops` - Maximum traversal hops (default: 1)
     - `:source_id` - Optional correlation identifier for telemetry and the recall trace
   """
   @spec retrieve(String.t(), keyword()) ::
@@ -79,10 +79,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
 
         with {:ok, mode} <- classify_mode(query, llm, llm_opts, config),
              {:ok, tags} <- generate_plan(query, mode, llm, llm_opts, config),
-             {:ok, %Embedding.Response{vectors: tag_vectors}} <-
-               embedding.embed_batch(tags, Config.embedding_opts(config)),
-             {:ok, %Embedding.Response{vectors: [query_vector]}} <-
-               embedding.embed(query, Config.embedding_opts(config)) do
+             {:ok, %Embedding.Response{vectors: [query_vector | tag_vectors]}} <-
+               embedding.embed_batch([query | tags], Config.embedding_opts(config)) do
           execute_pipeline(%{
             query: query,
             source_id: Keyword.get(opts, :source_id),

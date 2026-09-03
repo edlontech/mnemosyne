@@ -116,12 +116,12 @@ defmodule MnemosyneTest do
        }}
     end)
 
-    stub(Mnemosyne.MockEmbedding, :embed, fn text, _opts ->
-      send(test_pid, {:retrieval_query, text})
+    stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
       {:ok, %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "test", usage: %{}}}
     end)
 
-    stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+    stub(Mnemosyne.MockEmbedding, :embed_batch, fn [query | _tags] = texts, _opts ->
+      send(test_pid, {:retrieval_query, query})
       vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
       {:ok, %Embedding.Response{vectors: vectors, model: "test", usage: %{}}}
     end)
