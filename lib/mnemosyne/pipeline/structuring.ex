@@ -20,6 +20,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
   alias Mnemosyne.Graph.Node.Source
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
+  alias Mnemosyne.ModelCall
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Notifier.Trace.Structuring, as: StructuringTrace
   alias Mnemosyne.Pipeline.Episode
@@ -78,10 +79,10 @@ defmodule Mnemosyne.Pipeline.Structuring do
   @spec extract_trajectory(Episode.trajectory(), String.t(), keyword()) ::
           {:ok, Changeset.t()} | {:error, Mnemosyne.Errors.error()}
   def extract_trajectory(trajectory, goal, opts) do
-    llm = Keyword.fetch!(opts, :llm)
-    embedding = Keyword.fetch!(opts, :embedding)
+    adapters = %{llm: Keyword.fetch!(opts, :llm), embedding: Keyword.fetch!(opts, :embedding)}
     llm_opts = Keyword.get(opts, :llm_opts, [])
     config = Keyword.get(opts, :config)
+    model_context = Keyword.get(opts, :model_context)
 
     Mnemosyne.Telemetry.span(
       [:structuring, :extract_trajectory],
@@ -93,7 +94,15 @@ defmodule Mnemosyne.Pipeline.Structuring do
       fn ->
         episode_id = Keyword.get_lazy(opts, :episode_id, fn -> generate_id("ep") end)
 
-        case do_extract_trajectory(trajectory, goal, episode_id, llm, embedding, llm_opts, config) do
+        case do_extract_trajectory(
+               trajectory,
+               goal,
+               episode_id,
+               model_context,
+               adapters,
+               llm_opts,
+               config
+             ) do
           {:ok, cs, trace} ->
             {{:ok, cs, trace},
              %{nodes_created: length(cs.additions), links_created: length(cs.links)}}
@@ -105,16 +114,25 @@ defmodule Mnemosyne.Pipeline.Structuring do
     )
   end
 
-  defp do_extract_trajectory(trajectory, goal, episode_id, llm, embedding, llm_opts, config) do
+  defp do_extract_trajectory(
+         trajectory,
+         goal,
+         episode_id,
+         model_context,
+         adapters,
+         llm_opts,
+         config
+       ) do
     start_time = System.monotonic_time(:microsecond)
 
-    with {:ok, trajectory} <- derive_progressive_states(trajectory, llm, llm_opts, config) do
+    with {:ok, trajectory} <-
+           derive_progressive_states(trajectory, model_context, adapters.llm, llm_opts, config) do
       do_extract_trajectory_inner(
         trajectory,
         goal,
         episode_id,
-        llm,
-        embedding,
+        model_context,
+        adapters,
         llm_opts,
         config,
         start_time
@@ -126,8 +144,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
          trajectory,
          goal,
          episode_id,
-         llm,
-         embedding,
+         model_context,
+         adapters,
          llm_opts,
          config,
          start_time
@@ -140,8 +158,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
         extract_semantic(
           trajectory,
           goal,
-          llm,
-          embedding,
+          model_context,
+          adapters,
           llm_opts,
           config,
           avg_reward,
@@ -152,8 +170,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
         extract_procedural(
           trajectory,
           goal,
-          llm,
-          embedding,
+          model_context,
+          adapters,
           llm_opts,
           config,
           avg_reward,
@@ -174,11 +192,28 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
     with {:ok, semantic_cs} <- tag_result(semantic_result, :semantic),
          {:ok, procedural_cs, instructions} <- tag_procedural_result(procedural_result),
-         {:ok, scores} <- compute_return(trajectory, goal, instructions, llm, llm_opts, config) do
+         {:ok, scores} <-
+           compute_return(
+             trajectory,
+             goal,
+             instructions,
+             model_context,
+             adapters.llm,
+             llm_opts,
+             config
+           ) do
       procedural_cs = stamp_return_scores(procedural_cs, scores)
 
       base_cs =
-        build_base_changeset(goal, episode_id, trajectory, episodic_ids, embedding, config)
+        build_base_changeset(
+          goal,
+          episode_id,
+          trajectory,
+          episodic_ids,
+          model_context,
+          adapters.embedding,
+          config
+        )
 
       cs =
         base_cs
@@ -202,15 +237,15 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end
   end
 
-  defp derive_progressive_states(trajectory, llm, llm_opts, config) do
+  defp derive_progressive_states(trajectory, model_context, llm, llm_opts, config) do
     if Enum.all?(trajectory.steps, &(&1.state != nil)) do
       {:ok, trajectory}
     else
-      do_derive_progressive_states(trajectory, llm, llm_opts, config)
+      do_derive_progressive_states(trajectory, model_context, llm, llm_opts, config)
     end
   end
 
-  defp do_derive_progressive_states(trajectory, llm, llm_opts, config) do
+  defp do_derive_progressive_states(trajectory, model_context, llm, llm_opts, config) do
     trajectory.steps
     |> Enum.reduce_while({:ok, []}, fn step, {:ok, acc} ->
       previous_state =
@@ -229,7 +264,13 @@ defmodule Mnemosyne.Pipeline.Structuring do
         })
 
       with {:ok, %{content: content}} <-
-             llm.chat(messages, Config.llm_opts(config, :get_state, llm_opts)),
+             ModelCall.chat(
+               model_context,
+               llm,
+               :get_state,
+               messages,
+               Config.llm_opts(config, :get_state, llm_opts)
+             ),
            {:ok, state} <- GetState.parse_response(content) do
         {:cont, {:ok, [%{step | state: state} | acc]}}
       else
@@ -260,7 +301,15 @@ defmodule Mnemosyne.Pipeline.Structuring do
     NodeMetadata.new(cumulative_reward: avg / 1, reward_count: 1)
   end
 
-  defp build_base_changeset(goal, episode_id, trajectory, episodic_ids, embedding, config) do
+  defp build_base_changeset(
+         goal,
+         episode_id,
+         trajectory,
+         episodic_ids,
+         model_context,
+         embedding,
+         config
+       ) do
     subgoal_node = %Subgoal{
       id: generate_id("sg"),
       description: trajectory.subgoal,
@@ -270,7 +319,13 @@ defmodule Mnemosyne.Pipeline.Structuring do
     observations = Enum.map(trajectory.steps, & &1.observation)
 
     observation_embeddings =
-      case embedding.embed_batch(observations, Config.embedding_opts(config)) do
+      case ModelCall.embed_batch(
+             model_context,
+             embedding,
+             :episodic_embedding,
+             observations,
+             Config.embedding_opts(config)
+           ) do
         {:ok, %Embedding.Response{vectors: vectors}} -> vectors
         _ -> List.duplicate(nil, length(observations))
       end
@@ -318,8 +373,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
   defp extract_semantic(
          trajectory,
          goal,
-         llm,
-         embedding,
+         model_context,
+         adapters,
          llm_opts,
          config,
          avg_reward,
@@ -333,16 +388,25 @@ defmodule Mnemosyne.Pipeline.Structuring do
       })
 
     with {:ok, %{content: content}} <-
-           llm.chat_structured(
+           ModelCall.chat_structured(
+             model_context,
+             adapters.llm,
+             :get_semantic,
              messages,
              SemanticPrompt.schema(),
              Config.llm_opts(config, :get_semantic, llm_opts)
            ),
          {:ok, facts} <- SemanticPrompt.parse_response(content),
          {:ok, %Embedding.Response{vectors: prop_embeddings}} <-
-           embedding.embed_batch(Enum.map(facts, & &1.proposition), Config.embedding_opts(config)) do
+           ModelCall.embed_batch(
+             model_context,
+             adapters.embedding,
+             :get_semantic,
+             Enum.map(facts, & &1.proposition),
+             Config.embedding_opts(config)
+           ) do
       all_concepts = facts |> Enum.flat_map(& &1.concepts) |> Enum.uniq()
-      concept_map = build_concept_map(all_concepts, embedding, config)
+      concept_map = build_concept_map(all_concepts, model_context, adapters.embedding, config)
 
       reward_meta = reward_meta(avg_reward)
 
@@ -400,8 +464,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
   defp extract_procedural(
          trajectory,
          goal,
-         llm,
-         embedding,
+         model_context,
+         adapters,
          llm_opts,
          config,
          avg_reward,
@@ -415,19 +479,25 @@ defmodule Mnemosyne.Pipeline.Structuring do
       })
 
     with {:ok, %{content: content}} <-
-           llm.chat_structured(
+           ModelCall.chat_structured(
+             model_context,
+             adapters.llm,
+             :get_procedural,
              messages,
              ProceduralPrompt.schema(),
              Config.llm_opts(config, :get_procedural, llm_opts)
            ),
          {:ok, instructions} <- ProceduralPrompt.parse_response(content),
          {:ok, %Embedding.Response{vectors: proc_embeddings}} <-
-           embedding.embed_batch(
+           ModelCall.embed_batch(
+             model_context,
+             adapters.embedding,
+             :get_procedural,
              Enum.map(instructions, & &1.instruction),
              Config.embedding_opts(config)
            ) do
       all_intents = instructions |> Enum.map(& &1.intent) |> Enum.uniq()
-      intent_map = build_intent_map(all_intents, embedding, config)
+      intent_map = build_intent_map(all_intents, model_context, adapters.embedding, config)
 
       reward_meta = reward_meta(avg_reward)
 
@@ -478,9 +548,18 @@ defmodule Mnemosyne.Pipeline.Structuring do
     {proc_node, cs}
   end
 
-  defp compute_return(_trajectory, _goal, [], _llm, _llm_opts, _config), do: {:ok, []}
+  defp compute_return(
+         _trajectory,
+         _goal,
+         [],
+         _model_context,
+         _llm,
+         _llm_opts,
+         _config
+       ),
+       do: {:ok, []}
 
-  defp compute_return(trajectory, goal, instructions, llm, llm_opts, config) do
+  defp compute_return(trajectory, goal, instructions, model_context, llm, llm_opts, config) do
     prescriptions =
       instructions
       |> Enum.with_index()
@@ -503,7 +582,10 @@ defmodule Mnemosyne.Pipeline.Structuring do
       })
 
     with {:ok, %{content: content}} <-
-           llm.chat_structured(
+           ModelCall.chat_structured(
+             model_context,
+             llm,
+             :get_return,
              messages,
              GetReturn.schema(),
              Config.llm_opts(config, :get_return, llm_opts)
@@ -572,10 +654,16 @@ defmodule Mnemosyne.Pipeline.Structuring do
     err
   end
 
-  defp build_concept_map([], _embedding, _config), do: %{}
+  defp build_concept_map([], _model_context, _embedding, _config), do: %{}
 
-  defp build_concept_map(concepts, embedding, config) do
-    case embedding.embed_batch(concepts, Config.embedding_opts(config)) do
+  defp build_concept_map(concepts, model_context, embedding, config) do
+    case ModelCall.embed_batch(
+           model_context,
+           embedding,
+           :get_semantic,
+           concepts,
+           Config.embedding_opts(config)
+         ) do
       {:ok, %Embedding.Response{vectors: embeddings}} ->
         Enum.zip(concepts, embeddings)
         |> Map.new(fn {label, emb} ->
@@ -588,10 +676,16 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end
   end
 
-  defp build_intent_map([], _embedding, _config), do: %{}
+  defp build_intent_map([], _model_context, _embedding, _config), do: %{}
 
-  defp build_intent_map(intents, embedding, config) do
-    case embedding.embed_batch(intents, Config.embedding_opts(config)) do
+  defp build_intent_map(intents, model_context, embedding, config) do
+    case ModelCall.embed_batch(
+           model_context,
+           embedding,
+           :get_procedural,
+           intents,
+           Config.embedding_opts(config)
+         ) do
       {:ok, %Embedding.Response{vectors: embeddings}} ->
         Enum.zip(intents, embeddings)
         |> Map.new(fn {desc, emb} ->

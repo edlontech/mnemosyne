@@ -12,6 +12,7 @@ defmodule Mnemosyne.Pipeline.Episode do
   alias Mnemosyne.Embedding
   alias Mnemosyne.Errors.Invalid.EpisodeError
   alias Mnemosyne.Graph.Similarity
+  alias Mnemosyne.ModelCall
   alias Mnemosyne.Notifier.Trace.Episode, as: EpisodeTrace
   alias Mnemosyne.Pipeline.Prompts.GetReward
   alias Mnemosyne.Pipeline.Prompts.GetState
@@ -89,6 +90,7 @@ defmodule Mnemosyne.Pipeline.Episode do
         embedding = Keyword.fetch!(opts, :embedding)
         llm_opts = Keyword.get(opts, :llm_opts, [])
         config = Keyword.get(opts, :config)
+        model_context = Keyword.get(opts, :model_context)
         verbosity = if config, do: config.trace_verbosity, else: :summary
         start_time = System.monotonic_time(:microsecond)
 
@@ -97,6 +99,7 @@ defmodule Mnemosyne.Pipeline.Episode do
 
         with {:ok, state} <-
                derive_state(
+                 model_context,
                  llm,
                  previous_state,
                  previous_action,
@@ -106,11 +109,33 @@ defmodule Mnemosyne.Pipeline.Episode do
                  llm_opts
                ),
              {:ok, subgoal} <-
-               infer_subgoal(llm, observation, action, episode.goal, state, config, llm_opts),
+               infer_subgoal(
+                 model_context,
+                 llm,
+                 observation,
+                 action,
+                 episode.goal,
+                 state,
+                 config,
+                 llm_opts
+               ),
              {:ok, %Embedding.Response{vectors: [subgoal_embedding | _]}} <-
-               embedding.embed(subgoal, Config.embedding_opts(config)),
+               ModelCall.embed(
+                 model_context,
+                 embedding,
+                 :get_subgoal,
+                 subgoal,
+                 Config.embedding_opts(config)
+               ),
              {:ok, episode} <-
-               score_previous_step(episode, observation, llm, config, llm_opts) do
+               score_previous_step(
+                 episode,
+                 observation,
+                 model_context,
+                 llm,
+                 config,
+                 llm_opts
+               ) do
           step = %{
             index: length(episode.steps),
             observation: observation,
@@ -168,6 +193,7 @@ defmodule Mnemosyne.Pipeline.Episode do
     llm = Keyword.fetch!(opts, :llm)
     config = Keyword.get(opts, :config)
     llm_opts = Keyword.get(opts, :llm_opts, [])
+    model_context = Keyword.get(opts, :model_context)
 
     {prev_steps, [last_step]} = Enum.split(episode.steps, -1)
 
@@ -177,6 +203,7 @@ defmodule Mnemosyne.Pipeline.Episode do
       sentinel = "[Episode ended - no further observation]"
 
       case evaluate_reward(
+             model_context,
              llm,
              last_step.observation,
              last_step.action,
@@ -205,7 +232,7 @@ defmodule Mnemosyne.Pipeline.Episode do
     {:ok, %{episode | closed: true, trajectories: trajectories}}
   end
 
-  defp infer_subgoal(llm, observation, action, goal, state, config, llm_opts) do
+  defp infer_subgoal(model_context, llm, observation, action, goal, state, config, llm_opts) do
     messages =
       GetSubgoal.build_messages(%{
         observation: observation,
@@ -216,7 +243,10 @@ defmodule Mnemosyne.Pipeline.Episode do
       })
 
     with {:ok, %{content: content}} <-
-           llm.chat_structured(
+           ModelCall.chat_structured(
+             model_context,
+             llm,
+             :get_subgoal,
              messages,
              GetSubgoal.schema(),
              Config.llm_opts(config, :get_subgoal, llm_opts)
@@ -225,7 +255,16 @@ defmodule Mnemosyne.Pipeline.Episode do
     end
   end
 
-  defp derive_state(llm, previous_state, previous_action, observation, goal, config, llm_opts) do
+  defp derive_state(
+         model_context,
+         llm,
+         previous_state,
+         previous_action,
+         observation,
+         goal,
+         config,
+         llm_opts
+       ) do
     messages =
       GetState.build_messages(%{
         previous_state: previous_state,
@@ -236,7 +275,13 @@ defmodule Mnemosyne.Pipeline.Episode do
       })
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :get_state, llm_opts)) do
+           ModelCall.chat(
+             model_context,
+             llm,
+             :get_state,
+             messages,
+             Config.llm_opts(config, :get_state, llm_opts)
+           ) do
       GetState.parse_response(content)
     end
   end
@@ -247,7 +292,16 @@ defmodule Mnemosyne.Pipeline.Episode do
   defp previous_step_action([]), do: nil
   defp previous_step_action(steps), do: List.last(steps).action
 
-  defp evaluate_reward(llm, observation, action, subgoal, next_observation, config, llm_opts) do
+  defp evaluate_reward(
+         model_context,
+         llm,
+         observation,
+         action,
+         subgoal,
+         next_observation,
+         config,
+         llm_opts
+       ) do
     messages =
       GetReward.build_messages(%{
         observation: observation,
@@ -258,21 +312,35 @@ defmodule Mnemosyne.Pipeline.Episode do
       })
 
     with {:ok, %{content: content}} <-
-           llm.chat(messages, Config.llm_opts(config, :get_reward, llm_opts)) do
+           ModelCall.chat(
+             model_context,
+             llm,
+             :get_reward,
+             messages,
+             Config.llm_opts(config, :get_reward, llm_opts)
+           ) do
       GetReward.parse_response(content)
     end
   end
 
-  defp score_previous_step(%{steps: []} = episode, _next_obs, _llm, _config, _llm_opts),
-    do: {:ok, episode}
+  defp score_previous_step(
+         %{steps: []} = episode,
+         _next_obs,
+         _model_context,
+         _llm,
+         _config,
+         _llm_opts
+       ),
+       do: {:ok, episode}
 
-  defp score_previous_step(episode, next_observation, llm, config, llm_opts) do
+  defp score_previous_step(episode, next_observation, model_context, llm, config, llm_opts) do
     {prev_steps, [last_step]} = Enum.split(episode.steps, -1)
 
     if last_step.reward != nil do
       {:ok, episode}
     else
       case evaluate_reward(
+             model_context,
              llm,
              last_step.observation,
              last_step.action,
