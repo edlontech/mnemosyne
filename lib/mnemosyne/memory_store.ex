@@ -20,6 +20,7 @@ defmodule Mnemosyne.MemoryStore do
   alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph
   alias Mnemosyne.IngestionReceipt
+  alias Mnemosyne.ModelCall.Context
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Notifier
   alias Mnemosyne.Pipeline.Decay
@@ -160,6 +161,7 @@ defmodule Mnemosyne.MemoryStore do
       {:ok, backend_state} ->
         state = %{
           repo_id: Keyword.get(opts, :repo_id),
+          telemetry_labels: Keyword.get(opts, :telemetry_labels, %{}),
           backend: {backend_mod, backend_state},
           config: Keyword.fetch!(opts, :config),
           llm: Keyword.fetch!(opts, :llm),
@@ -422,6 +424,7 @@ defmodule Mnemosyne.MemoryStore do
       |> Keyword.put_new(:llm, state.llm)
       |> Keyword.put_new(:embedding, state.embedding)
       |> Keyword.put(:repo_id, state.repo_id)
+      |> Keyword.put(:model_context, model_context(state, :ingest, trajectory.source_id))
 
     task =
       Task.Supervisor.async_nolink(state.task_supervisor, fn ->
@@ -521,12 +524,17 @@ defmodule Mnemosyne.MemoryStore do
   defp spawn_write_task({:apply_changeset, changeset, from}, state) do
     backend = state.backend
 
-    execution_opts = [
-      repo_id: state.repo_id,
-      llm: state.llm,
-      embedding: state.embedding,
-      config: state.config
-    ]
+    execution_opts =
+      Keyword.put(
+        [
+          repo_id: state.repo_id,
+          llm: state.llm,
+          embedding: state.embedding,
+          config: state.config
+        ],
+        :model_context,
+        model_context(state, :apply_changeset)
+      )
 
     task =
       Task.Supervisor.async_nolink(state.task_supervisor, fn ->
@@ -741,11 +749,14 @@ defmodule Mnemosyne.MemoryStore do
     repo_id = state.repo_id
     llm = state.llm
     embedding = state.embedding
+    context = model_context(state, :consolidate_semantics)
 
     task =
       Task.Supervisor.async_nolink(state.task_supervisor, fn ->
         consolidation_opts =
-          Keyword.merge(opts, backend: backend, config: config, llm: llm, embedding: embedding)
+          opts
+          |> Keyword.merge(backend: backend, config: config, llm: llm, embedding: embedding)
+          |> Keyword.put(:model_context, context)
 
         Telemetry.span([:consolidator, :consolidate], %{repo_id: repo_id}, fn ->
           run_maintenance(&SemanticConsolidator.consolidate/1, consolidation_opts)
@@ -978,28 +989,40 @@ defmodule Mnemosyne.MemoryStore do
     backend = state.backend
     repo_id = state.repo_id
     verbosity = config.trace_verbosity
+    context = model_context(state, :recall, source_id)
 
     Task.Supervisor.async_nolink(state.task_supervisor, fn ->
-      retrieval_opts = [
-        repo_id: repo_id,
-        source_id: source_id,
-        llm: llm,
-        embedding: embedding,
-        backend: backend,
-        value_function: value_fn,
-        config: config,
-        max_hops: max_hops
-      ]
+      retrieval_opts =
+        Keyword.put(
+          [
+            repo_id: repo_id,
+            source_id: source_id,
+            llm: llm,
+            embedding: embedding,
+            backend: backend,
+            value_function: value_fn,
+            config: config,
+            max_hops: max_hops
+          ],
+          :model_context,
+          context
+        )
+
+      reasoning_opts =
+        Keyword.put(
+          [
+            repo_id: repo_id,
+            source_id: source_id,
+            llm: llm,
+            query: query,
+            config: config
+          ],
+          :model_context,
+          context
+        )
 
       with {:ok, result, trace} <- Retrieval.retrieve(query, retrieval_opts),
-           {:ok, reasoned} <-
-             Reasoning.reason(result,
-               repo_id: repo_id,
-               source_id: source_id,
-               llm: llm,
-               query: query,
-               config: config
-             ) do
+           {:ok, reasoned} <- Reasoning.reason(result, reasoning_opts) do
         touched_nodes =
           result.candidates
           |> Map.values()
@@ -1065,6 +1088,15 @@ defmodule Mnemosyne.MemoryStore do
       },
       %{repo_id: state.repo_id, event: event}
     )
+  end
+
+  defp model_context(state, operation, source_id \\ nil) do
+    %Context{
+      repo_id: state.repo_id,
+      labels: state.telemetry_labels,
+      operation: operation,
+      source_id: source_id
+    }
   end
 
   defp augment_query_with_context(nil, query), do: query

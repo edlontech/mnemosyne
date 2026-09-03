@@ -1,3 +1,8 @@
+Mimic.copy(Mnemosyne.Pipeline.IntentMerger)
+Mimic.copy(Mnemosyne.Pipeline.Reasoning)
+Mimic.copy(Mnemosyne.Pipeline.Retrieval)
+Mimic.copy(Mnemosyne.Pipeline.SemanticConsolidator)
+
 defmodule Mnemosyne.MemoryStoreTest do
   use ExUnit.Case, async: false
   use AssertEventually, timeout: 500, interval: 10
@@ -20,10 +25,15 @@ defmodule Mnemosyne.MemoryStoreTest do
   alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.LLM
   alias Mnemosyne.MemoryStore
+  alias Mnemosyne.ModelCall.Context
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Ingestion
+  alias Mnemosyne.Pipeline.IntentMerger
+  alias Mnemosyne.Pipeline.Reasoning
   alias Mnemosyne.Pipeline.Reasoning.ReasonedMemory
   alias Mnemosyne.Pipeline.RecallResult
+  alias Mnemosyne.Pipeline.Retrieval
+  alias Mnemosyne.Pipeline.SemanticConsolidator
   alias Mnemosyne.Trajectory
 
   @moduletag :tmp_dir
@@ -158,7 +168,8 @@ defmodule Mnemosyne.MemoryStoreTest do
         {:ok, changeset}
       end)
 
-      pid = start_store(tmp_dir, repo_id: "repo-1")
+      labels = %{environment: :test}
+      pid = start_store(tmp_dir, repo_id: "repo-1", telemetry_labels: labels)
 
       assert {:error, %IngestionError{reason: :invalid_goal}} =
                MemoryStore.ingest(:missing_store, trajectory(goal: " "))
@@ -168,7 +179,8 @@ defmodule Mnemosyne.MemoryStoreTest do
                  config: override_config,
                  llm: __MODULE__,
                  embedding: __MODULE__,
-                 llm_opts: [temperature: 0.0]
+                 llm_opts: [temperature: 0.0],
+                 model_context: :caller_supplied
                )
 
       assert_receive {:execution_opts, opts}
@@ -177,6 +189,14 @@ defmodule Mnemosyne.MemoryStoreTest do
       assert opts[:embedding] == __MODULE__
       assert opts[:llm_opts] == [temperature: 0.0]
       assert opts[:repo_id] == "repo-1"
+
+      assert opts[:model_context] == %Context{
+               repo_id: "repo-1",
+               labels: labels,
+               operation: :ingest,
+               source_id: "source-1"
+             }
+
       assert receipt.source_id == "source-1"
       assert receipt.node_ids == ["ingested-1"]
       assert %Semantic{} = Graph.get_node(MemoryStore.get_graph(pid), "ingested-1")
@@ -203,6 +223,11 @@ defmodule Mnemosyne.MemoryStoreTest do
       assert_eventually(%Intent{} = Graph.get_node(MemoryStore.get_graph(pid), "intent-existing"))
 
       extraction_gate(test_pid)
+
+      stub(IntentMerger, :merge, fn changeset, opts ->
+        send(test_pid, {:write_intent_merge_opts, opts})
+        Mimic.call_original(IntentMerger, :merge, [changeset, opts])
+      end)
 
       override_config = %{
         build_config()
@@ -241,11 +266,21 @@ defmodule Mnemosyne.MemoryStoreTest do
           llm: __MODULE__,
           embedding: __MODULE__,
           llm_opts: [test_pid: test_pid, caller_llm_opt: true],
-          embedding_opts: [test_pid: test_pid, caller_embedding_opt: true]
+          embedding_opts: [test_pid: test_pid, caller_embedding_opt: true],
+          model_context: :caller_supplied
         )
 
       assert_receive {:extraction_started, "write-options", worker, extraction_opts}
       assert extraction_opts[:config] == override_config
+
+      expected_context = %Context{
+        repo_id: "override-repo",
+        labels: %{},
+        operation: :ingest,
+        source_id: "write-options"
+      }
+
+      assert extraction_opts[:model_context] == expected_context
 
       second_tag =
         enqueue_ingest(pid, input,
@@ -274,6 +309,8 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       assert {:ok, receipt} = Task.await(first)
       assert_receive {^second_tag, {:ok, ^receipt}}
+      assert_receive {:write_intent_merge_opts, write_opts}
+      assert write_opts[:model_context] == expected_context
       assert_receive :override_value_function_used
       assert_receive {:override_llm_used, llm_opts}
       assert_receive {:override_embedding_used, embedding_opts}
@@ -629,6 +666,22 @@ defmodule Mnemosyne.MemoryStoreTest do
   end
 
   describe "init with empty DETS" do
+    test "keeps telemetry labels in process state and out of backend options", %{tmp_dir: tmp_dir} do
+      test_pid = self()
+      labels = %{team: "search"}
+
+      expect(InMemory, :init, fn opts ->
+        send(test_pid, {:backend_opts, opts})
+        Mimic.call_original(InMemory, :init, [opts])
+      end)
+
+      pid = start_store(tmp_dir, telemetry_labels: labels)
+
+      assert :sys.get_state(pid).telemetry_labels == labels
+      assert_receive {:backend_opts, backend_opts}
+      refute Keyword.has_key?(backend_opts, :telemetry_labels)
+    end
+
     test "starts with an empty graph", %{tmp_dir: tmp_dir} do
       pid = start_store(tmp_dir)
 
@@ -648,6 +701,29 @@ defmodule Mnemosyne.MemoryStoreTest do
   end
 
   describe "apply_changeset/2" do
+    test "passes trusted direct changeset context to intent merging", %{tmp_dir: tmp_dir} do
+      test_pid = self()
+      labels = %{team: "memory"}
+
+      stub(IntentMerger, :merge, fn changeset, opts ->
+        send(test_pid, {:intent_merge_opts, opts})
+        {:ok, changeset}
+      end)
+
+      pid = start_store(tmp_dir, repo_id: "write-repo", telemetry_labels: labels)
+      changeset = Changeset.add_node(Changeset.new(), make_semantic("context-node", "Fact"))
+
+      assert :ok = MemoryStore.apply_changeset(pid, changeset)
+      assert_receive {:intent_merge_opts, opts}
+
+      assert opts[:model_context] == %Context{
+               repo_id: "write-repo",
+               labels: labels,
+               operation: :apply_changeset,
+               source_id: nil
+             }
+    end
+
     test "updates graph and persists to storage", %{tmp_dir: tmp_dir} do
       pid = start_store(tmp_dir)
 
@@ -720,6 +796,51 @@ defmodule Mnemosyne.MemoryStoreTest do
   end
 
   describe "recall/3" do
+    test "passes trusted recall context to retrieval and reasoning", %{tmp_dir: tmp_dir} do
+      test_pid = self()
+      labels = %{team: "search"}
+
+      stub(Retrieval, :retrieve, fn _query, opts ->
+        send(test_pid, {:retrieval_opts, opts})
+
+        {:ok, %Retrieval.Result{candidates: %{}},
+         %Mnemosyne.Notifier.Trace.Recall{source_id: "recall-source"}}
+      end)
+
+      stub(Reasoning, :reason, fn _result, opts ->
+        send(test_pid, {:reasoning_opts, opts})
+        {:ok, %ReasonedMemory{}}
+      end)
+
+      pid = start_store(tmp_dir, repo_id: "recall-repo", telemetry_labels: labels)
+
+      assert {:ok, %RecallResult{}} =
+               MemoryStore.recall(pid, "query",
+                 source_id: "recall-source",
+                 model_context: :caller_supplied
+               )
+
+      expected_context = %Context{
+        repo_id: "recall-repo",
+        labels: labels,
+        operation: :recall,
+        source_id: "recall-source"
+      }
+
+      assert_receive {:retrieval_opts, retrieval_opts}
+      assert_receive {:reasoning_opts, reasoning_opts}
+      assert retrieval_opts[:model_context] == expected_context
+      assert reasoning_opts[:model_context] == expected_context
+
+      assert {:ok, %RecallResult{}} =
+               MemoryStore.recall(pid, "query without source", model_context: :caller_supplied)
+
+      assert_receive {:retrieval_opts, retrieval_opts}
+      assert_receive {:reasoning_opts, reasoning_opts}
+      assert retrieval_opts[:model_context].source_id == nil
+      assert reasoning_opts[:model_context].source_id == nil
+    end
+
     test "runs retrieval and reasoning pipeline, returns ReasonedMemory", %{tmp_dir: tmp_dir} do
       stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
         {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
@@ -909,6 +1030,36 @@ defmodule Mnemosyne.MemoryStoreTest do
   end
 
   describe "consolidate_semantics/2" do
+    test "passes trusted semantic consolidation context", %{tmp_dir: tmp_dir} do
+      test_pid = self()
+      labels = %{environment: "test"}
+
+      stub(SemanticConsolidator, :consolidate, fn opts ->
+        send(test_pid, {:consolidation_opts, opts})
+
+        result = %{checked: 0, deleted: 0, merged: 0, deleted_ids: []}
+        {:ok, result, Keyword.fetch!(opts, :backend)}
+      end)
+
+      pid = start_store(tmp_dir, repo_id: "maintenance-repo", telemetry_labels: labels)
+
+      :ok =
+        MemoryStore.consolidate_semantics(pid,
+          model_context: :caller_supplied,
+          threshold: 0.9
+        )
+
+      assert_receive {:consolidation_opts, opts}
+      assert opts[:threshold] == 0.9
+
+      assert opts[:model_context] == %Context{
+               repo_id: "maintenance-repo",
+               labels: labels,
+               operation: :consolidate_semantics,
+               source_id: nil
+             }
+    end
+
     test "consolidates near-duplicate semantic nodes", %{tmp_dir: tmp_dir} do
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
         {:ok,

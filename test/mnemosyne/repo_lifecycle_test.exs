@@ -43,6 +43,44 @@ defmodule Mnemosyne.RepoLifecycleTest do
                )
 
       assert is_pid(pid)
+      assert :sys.get_state(pid).telemetry_labels == %{}
+    end
+
+    test "retains valid telemetry labels for the open repository", %{tmp_dir: tmp_dir} do
+      sup = start_sup(tmp_dir)
+      labels = %{"team" => "search", environment: :test, shard: 2, billable: true}
+
+      assert {:ok, pid} =
+               Mnemosyne.open_repo("labelled",
+                 backend: {InMemory, []},
+                 supervisor: sup,
+                 telemetry_labels: labels
+               )
+
+      assert :sys.get_state(pid).telemetry_labels == labels
+    end
+
+    test "rejects invalid telemetry labels without starting a repository", %{tmp_dir: tmp_dir} do
+      sup = start_sup(tmp_dir)
+
+      invalid_labels = [
+        [],
+        Date.utc_today(),
+        %{1 => "value"},
+        %{nested: %{key: "value"}},
+        %{nested: ["value"]}
+      ]
+
+      for labels <- invalid_labels do
+        assert {:error, %RepoError{repo_id: "invalid-labels", reason: :invalid_telemetry_labels}} =
+                 Mnemosyne.open_repo("invalid-labels",
+                   backend: {InMemory, []},
+                   supervisor: sup,
+                   telemetry_labels: labels
+                 )
+
+        assert Mnemosyne.list_repos(supervisor: sup) == []
+      end
     end
 
     test "returns RepoError for duplicate repo ID", %{tmp_dir: tmp_dir} do

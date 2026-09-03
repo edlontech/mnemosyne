@@ -92,9 +92,22 @@ defmodule Mnemosyne do
     * `:config` - A `Mnemosyne.Config` struct overriding shared defaults.
     * `:llm` - LLM adapter module overriding shared defaults.
     * `:embedding` - Embedding adapter module overriding shared defaults.
+    * `:telemetry_labels` - Flat map of string or atom keys to string, atom,
+      number, or boolean values. Defaults to `%{}` and applies only while the
+      repository is open.
   """
   @spec open_repo(String.t(), keyword()) :: {:ok, pid()} | {:error, Mnemosyne.Errors.error()}
   def open_repo(repo_id, opts \\ []) do
+    telemetry_labels = Keyword.get(opts, :telemetry_labels, %{})
+
+    if valid_telemetry_labels?(telemetry_labels) do
+      start_repo(repo_id, opts, telemetry_labels)
+    else
+      {:error, RepoError.exception(repo_id: repo_id, reason: :invalid_telemetry_labels)}
+    end
+  end
+
+  defp start_repo(repo_id, opts, telemetry_labels) do
     sup_name = Keyword.get(opts, :supervisor, @default_sup)
     defaults = MneSupervisor.get_defaults(sup_name)
     repo_sup = MneSupervisor.repo_supervisor_name(sup_name)
@@ -106,6 +119,7 @@ defmodule Mnemosyne do
     store_opts = [
       name: via,
       repo_id: repo_id,
+      telemetry_labels: telemetry_labels,
       backend: Keyword.get(opts, :backend, defaults.backend),
       config: Keyword.get(opts, :config, defaults.config),
       llm: Keyword.get(opts, :llm, defaults.llm),
@@ -127,6 +141,17 @@ defmodule Mnemosyne do
       end
     end)
   end
+
+  defp valid_telemetry_labels?(labels) when is_struct(labels), do: false
+
+  defp valid_telemetry_labels?(labels) when is_map(labels) do
+    Enum.all?(labels, fn {key, value} ->
+      (is_binary(key) or is_atom(key)) and
+        (is_binary(value) or is_atom(value) or is_number(value) or is_boolean(value))
+    end)
+  end
+
+  defp valid_telemetry_labels?(_labels), do: false
 
   @doc """
   Closes a running memory repository.
