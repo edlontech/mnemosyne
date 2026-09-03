@@ -31,6 +31,7 @@ defmodule Mnemosyne.TelemetryTest do
         [:mnemosyne, :llm, :chat_structured],
         [:mnemosyne, :embedding, :embed],
         [:mnemosyne, :embedding, :embed_batch],
+        [:mnemosyne, :model, :call],
         [:mnemosyne, :episode, :append],
         [:mnemosyne, :structuring, :extract],
         [:mnemosyne, :structuring, :extract_trajectory],
@@ -74,6 +75,20 @@ defmodule Mnemosyne.TelemetryTest do
     assert measurements.tokens_output == 5
   end
 
+  test "span/3 merges terminal metadata only into the stop event" do
+    assert :ok ==
+             Telemetry.span([:model, :call], %{repo_id: "repo-1"}, fn ->
+               {:ok, %{input_tokens: 3}, %{status: :ok, response_model: "model-1"}}
+             end)
+
+    assert_receive {:telemetry, [:mnemosyne, :model, :call, :start], _, start_metadata}
+    assert start_metadata == %{repo_id: "repo-1"}
+
+    assert_receive {:telemetry, [:mnemosyne, :model, :call, :stop], measurements, metadata}
+    assert measurements.input_tokens == 3
+    assert metadata == %{repo_id: "repo-1", status: :ok, response_model: "model-1"}
+  end
+
   test "span/3 emits exception event on raise" do
     assert_raise RuntimeError, fn ->
       Telemetry.span([:llm, :chat], %{model: "test"}, fn ->
@@ -84,5 +99,39 @@ defmodule Mnemosyne.TelemetryTest do
     assert_receive {:telemetry, [:mnemosyne, :llm, :chat, :start], _, _}
     assert_receive {:telemetry, [:mnemosyne, :llm, :chat, :exception], %{duration: _}, metadata}
     assert metadata.kind == :error
+    assert metadata.exception_kind == :error
+    assert metadata.status == :exception
+  end
+
+  test "span/3 preserves an existing kind on exception" do
+    assert_raise RuntimeError, fn ->
+      Telemetry.span([:model, :call], %{kind: :llm}, fn ->
+        raise "boom"
+      end)
+    end
+
+    assert_receive {:telemetry, [:mnemosyne, :model, :call, :exception], _, metadata}
+    assert metadata.kind == :llm
+    assert metadata.exception_kind == :error
+  end
+
+  test "span/3 emits exception events for throw and exit" do
+    assert catch_throw(Telemetry.span([:llm, :chat], %{model: "test"}, fn -> throw(:boom) end)) ==
+             :boom
+
+    assert_receive {:telemetry, [:mnemosyne, :llm, :chat, :exception], _, throw_metadata}
+    assert throw_metadata.kind == :throw
+    assert throw_metadata.exception_kind == :throw
+    assert throw_metadata.reason == :boom
+    assert throw_metadata.status == :exception
+
+    assert catch_exit(Telemetry.span([:llm, :chat], %{model: "test"}, fn -> exit(:boom) end)) ==
+             :boom
+
+    assert_receive {:telemetry, [:mnemosyne, :llm, :chat, :exception], _, exit_metadata}
+    assert exit_metadata.kind == :exit
+    assert exit_metadata.exception_kind == :exit
+    assert exit_metadata.reason == :boom
+    assert exit_metadata.status == :exception
   end
 end

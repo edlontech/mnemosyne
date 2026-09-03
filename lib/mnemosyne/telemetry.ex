@@ -15,6 +15,9 @@ defmodule Mnemosyne.Telemetry do
   - `[:mnemosyne, :embedding, :embed, :start | :stop | :exception]`
   - `[:mnemosyne, :embedding, :embed_batch, :start | :stop | :exception]`
 
+  ### Model Calls
+  - `[:mnemosyne, :model, :call, :start | :stop | :exception]`
+
   ### Pipeline
   - `[:mnemosyne, :episode, :append, :start | :stop | :exception]`
   - `[:mnemosyne, :structuring, :extract, :start | :stop | :exception]`
@@ -57,6 +60,7 @@ defmodule Mnemosyne.Telemetry do
     @prefix ++ [:llm, :chat_structured],
     @prefix ++ [:embedding, :embed],
     @prefix ++ [:embedding, :embed_batch],
+    @prefix ++ [:model, :call],
     @prefix ++ [:episode, :append],
     @prefix ++ [:structuring, :extract],
     @prefix ++ [:structuring, :extract_trajectory],
@@ -85,10 +89,11 @@ defmodule Mnemosyne.Telemetry do
   Wraps a function in a telemetry span.
 
   The `suffix` is appended to `[:mnemosyne]` to form the event prefix.
-  The `fun` must return `{result, extra_measurements}` where
-  `extra_measurements` is a map merged into the `:stop` event.
+  The `fun` must return `{result, extra_measurements}` or
+  `{result, extra_measurements, extra_metadata}`. Measurements and terminal
+  metadata are merged into the `:stop` event.
   """
-  @spec span([atom()], map(), (-> {term(), map()})) :: term()
+  @spec span([atom()], map(), (-> {term(), map()} | {term(), map(), map()})) :: term()
   def span(suffix, metadata, fun)
       when is_list(suffix) and is_map(metadata) and is_function(fun, 0) do
     event_prefix = @prefix ++ suffix
@@ -101,27 +106,54 @@ defmodule Mnemosyne.Telemetry do
     )
 
     try do
-      {result, extra} = fun.()
+      {result, measurements, terminal_metadata} = terminal_result(fun.())
       duration = System.monotonic_time() - start_time
 
       :telemetry.execute(
         event_prefix ++ [:stop],
-        Map.merge(extra, %{monotonic_time: System.monotonic_time(), duration: duration}),
-        metadata
+        Map.merge(measurements, %{monotonic_time: System.monotonic_time(), duration: duration}),
+        Map.merge(metadata, terminal_metadata)
       )
 
       result
     rescue
-      e ->
-        duration = System.monotonic_time() - start_time
-
-        :telemetry.execute(
-          event_prefix ++ [:exception],
-          %{monotonic_time: System.monotonic_time(), duration: duration},
-          Map.merge(metadata, %{kind: :error, reason: e, stacktrace: __STACKTRACE__})
-        )
-
-        reraise e, __STACKTRACE__
+      exception ->
+        stacktrace = __STACKTRACE__
+        emit_exception(event_prefix, start_time, metadata, :error, exception, stacktrace)
+        reraise exception, stacktrace
+    catch
+      kind, reason ->
+        stacktrace = __STACKTRACE__
+        emit_exception(event_prefix, start_time, metadata, kind, reason, stacktrace)
+        :erlang.raise(kind, reason, stacktrace)
     end
+  end
+
+  defp terminal_result({result, measurements}), do: {result, measurements, %{}}
+
+  defp terminal_result({result, measurements, metadata}), do: {result, measurements, metadata}
+
+  defp emit_exception(event_prefix, start_time, metadata, exception_kind, reason, stacktrace) do
+    duration = System.monotonic_time() - start_time
+
+    exception_metadata = %{
+      exception_kind: exception_kind,
+      reason: reason,
+      stacktrace: stacktrace,
+      status: :exception
+    }
+
+    exception_metadata =
+      if Map.has_key?(metadata, :kind) do
+        exception_metadata
+      else
+        Map.put(exception_metadata, :kind, exception_kind)
+      end
+
+    :telemetry.execute(
+      event_prefix ++ [:exception],
+      %{monotonic_time: System.monotonic_time(), duration: duration},
+      Map.merge(metadata, exception_metadata)
+    )
   end
 end
