@@ -5,6 +5,10 @@ defmodule Mnemosyne.GraphTest do
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
   alias Mnemosyne.Graph.Node.Helpers
+  alias Mnemosyne.Graph.Node.Intent
+  alias Mnemosyne.Graph.Node.Procedural
+  alias Mnemosyne.Graph.Node.Semantic
+  alias Mnemosyne.Graph.Node.Source
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
 
@@ -24,6 +28,23 @@ defmodule Mnemosyne.GraphTest do
 
   defp make_subgoal(id, description) do
     %Subgoal{id: id, description: description}
+  end
+
+  defp all_nodes do
+    [
+      make_episodic("episodic"),
+      %Semantic{id: "semantic", proposition: "fact", confidence: 1.0},
+      %Procedural{
+        id: "procedural",
+        instruction: "act",
+        condition: "condition",
+        expected_outcome: "outcome"
+      },
+      %Source{id: "source", episode_id: "episodic", step_index: 0},
+      make_subgoal("subgoal", "goal"),
+      make_tag("tag", "concept"),
+      %Intent{id: "intent", description: "intent"}
+    ]
   end
 
   describe "new/0" do
@@ -57,6 +78,29 @@ defmodule Mnemosyne.GraphTest do
         Graph.put_node(Graph.new(), make_subgoal("sg1", "fix the bug"))
 
       assert MapSet.member?(g.by_subgoal["fix the bug"], "sg1")
+    end
+
+    test "assigns the current runtime timestamp to every node type" do
+      for node <- all_nodes() do
+        before = DateTime.utc_now()
+        graph = Graph.put_node(Graph.new(), node)
+        after_put = DateTime.utc_now()
+        stored = Graph.get_node(graph, node.id)
+
+        assert %DateTime{} = stored.created_at
+        assert DateTime.compare(stored.created_at, before) in [:eq, :gt]
+        assert DateTime.compare(stored.created_at, after_put) in [:eq, :lt]
+      end
+    end
+
+    test "preserves explicit historical timestamps for every node type" do
+      historical = ~U[2020-01-01 00:00:00Z]
+
+      for node <- all_nodes() do
+        node = %{node | created_at: historical}
+        graph = Graph.put_node(Graph.new(), node)
+        assert Graph.get_node(graph, node.id).created_at == historical
+      end
     end
   end
 

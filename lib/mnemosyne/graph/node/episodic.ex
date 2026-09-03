@@ -16,7 +16,7 @@ defmodule Mnemosyne.Graph.Node.Episodic do
     :trajectory_id,
     embedding: nil,
     links: Edge.empty_links(),
-    created_at: DateTime.utc_now()
+    created_at: nil
   ]
 
   @type t :: %__MODULE__{
@@ -29,7 +29,7 @@ defmodule Mnemosyne.Graph.Node.Episodic do
           trajectory_id: String.t(),
           embedding: [float()] | nil,
           links: %{Edge.edge_type() => MapSet.t()},
-          created_at: DateTime.t()
+          created_at: DateTime.t() | nil
         }
 
   defimpl Mnemosyne.Graph.Node do

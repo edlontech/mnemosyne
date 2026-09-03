@@ -27,6 +27,7 @@ defmodule Mnemosyne.Graph do
   @doc "Inserts a node into the graph, updating all secondary indexes."
   @spec put_node(t(), struct()) :: t()
   def put_node(%__MODULE__{} = graph, node) do
+    node = ensure_created_at(node)
     id = NodeProtocol.id(node)
     type = NodeProtocol.node_type(node)
 
@@ -92,6 +93,9 @@ defmodule Mnemosyne.Graph do
       {result, %{nodes_added: length(cs.additions), links_added: length(cs.links)}}
     end)
   end
+
+  defp ensure_created_at(%{created_at: nil} = node), do: %{node | created_at: DateTime.utc_now()}
+  defp ensure_created_at(node), do: node
 
   defp put_in_nodes(%__MODULE__{} = graph, id, node) do
     %{graph | nodes: Map.put(graph.nodes, id, node)}

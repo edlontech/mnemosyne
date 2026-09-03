@@ -12,7 +12,7 @@ defmodule Mnemosyne.Graph.Node.Subgoal do
     parent_goal: nil,
     embedding: nil,
     links: Edge.empty_links(),
-    created_at: DateTime.utc_now()
+    created_at: nil
   ]
 
   @type t :: %__MODULE__{
@@ -21,7 +21,7 @@ defmodule Mnemosyne.Graph.Node.Subgoal do
           parent_goal: String.t() | nil,
           embedding: [float()] | nil,
           links: %{Edge.edge_type() => MapSet.t()},
-          created_at: DateTime.t()
+          created_at: DateTime.t() | nil
         }
 
   defimpl Mnemosyne.Graph.Node do

@@ -11,7 +11,7 @@ defmodule Mnemosyne.Graph.Node.Semantic do
     :confidence,
     embedding: nil,
     links: Edge.empty_links(),
-    created_at: DateTime.utc_now()
+    created_at: nil
   ]
 
   @type t :: %__MODULE__{
@@ -20,7 +20,7 @@ defmodule Mnemosyne.Graph.Node.Semantic do
           confidence: float(),
           embedding: [float()] | nil,
           links: %{Edge.edge_type() => MapSet.t()},
-          created_at: DateTime.t()
+          created_at: DateTime.t() | nil
         }
 
   defimpl Mnemosyne.Graph.Node do

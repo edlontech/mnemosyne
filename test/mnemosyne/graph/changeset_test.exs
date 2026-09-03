@@ -3,6 +3,11 @@ defmodule Mnemosyne.Graph.ChangesetTest do
 
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
+  alias Mnemosyne.Graph.Node.Intent
+  alias Mnemosyne.Graph.Node.Procedural
+  alias Mnemosyne.Graph.Node.Semantic
+  alias Mnemosyne.Graph.Node.Source
+  alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
   alias Mnemosyne.NodeMetadata
 
@@ -33,7 +38,45 @@ defmodule Mnemosyne.Graph.ChangesetTest do
         |> Changeset.add_node(tag)
         |> Changeset.add_node(episodic)
 
-      assert [^episodic, ^tag] = cs.additions
+      assert [%Episodic{id: "e1"}, %Tag{id: "t1"}] = cs.additions
+    end
+
+    test "assigns the current runtime timestamp to every node type" do
+      before = DateTime.utc_now()
+
+      cs = Enum.reduce(all_nodes(), Changeset.new(), &Changeset.add_node(&2, &1))
+
+      after_add = DateTime.utc_now()
+
+      assert length(cs.additions) == 7
+
+      for node <- cs.additions do
+        assert %DateTime{} = node.created_at
+        assert DateTime.compare(node.created_at, before) in [:eq, :gt]
+        assert DateTime.compare(node.created_at, after_add) in [:eq, :lt]
+      end
+    end
+
+    test "nodes added at different times receive different timestamps" do
+      first = %Tag{id: "first", label: "first"}
+      second = %Tag{id: "second", label: "second"}
+
+      cs = Changeset.add_node(Changeset.new(), first)
+      Process.sleep(2)
+      cs = Changeset.add_node(cs, second)
+
+      [stored_second, stored_first] = cs.additions
+      assert DateTime.compare(stored_second.created_at, stored_first.created_at) == :gt
+    end
+
+    test "preserves explicit historical timestamps for every node type" do
+      historical = ~U[2020-01-01 00:00:00Z]
+
+      for node <- all_nodes() do
+        cs = Changeset.add_node(Changeset.new(), %{node | created_at: historical})
+        assert [stored] = cs.additions
+        assert stored.created_at == historical
+      end
     end
   end
 
@@ -80,6 +123,31 @@ defmodule Mnemosyne.Graph.ChangesetTest do
     end
   end
 
+  defp all_nodes do
+    [
+      %Episodic{
+        id: "episodic",
+        observation: "obs",
+        action: "act",
+        state: "state",
+        subgoal: "goal",
+        reward: 1.0,
+        trajectory_id: "trajectory"
+      },
+      %Semantic{id: "semantic", proposition: "fact", confidence: 1.0},
+      %Procedural{
+        id: "procedural",
+        instruction: "act",
+        condition: "condition",
+        expected_outcome: "outcome"
+      },
+      %Source{id: "source", episode_id: "episodic", step_index: 0},
+      %Subgoal{id: "subgoal", description: "goal"},
+      %Tag{id: "tag", label: "concept"},
+      %Intent{id: "intent", description: "intent"}
+    ]
+  end
+
   describe "merge/2" do
     test "concatenates additions and 3-tuple links from both changesets" do
       tag = %Tag{id: "t1", label: "test"}
@@ -108,8 +176,8 @@ defmodule Mnemosyne.Graph.ChangesetTest do
 
       assert length(merged.additions) == 2
       assert length(merged.links) == 2
-      assert tag in merged.additions
-      assert episodic in merged.additions
+      assert Enum.any?(merged.additions, &match?(%Tag{id: "t1"}, &1))
+      assert Enum.any?(merged.additions, &match?(%Episodic{id: "e1"}, &1))
       assert {"a", "b", :membership} in merged.links
       assert {"c", "d", :sibling} in merged.links
     end

@@ -23,8 +23,12 @@ defmodule Mnemosyne.Graph.Changeset do
   @doc "Appends a node to the changeset's addition list."
   @spec add_node(t(), struct()) :: t()
   def add_node(%__MODULE__{} = cs, node) do
+    node = ensure_created_at(node)
     %{cs | additions: [node | cs.additions]}
   end
+
+  defp ensure_created_at(%{created_at: nil} = node), do: %{node | created_at: DateTime.utc_now()}
+  defp ensure_created_at(node), do: node
 
   @doc "Records a typed link between two node IDs in the changeset."
   @spec add_link(t(), String.t(), String.t(), Edge.edge_type()) :: t()

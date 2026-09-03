@@ -46,7 +46,7 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert node.embedding == nil
       assert node.links == Edge.empty_links()
-      assert %DateTime{} = node.created_at
+      assert node.created_at == nil
     end
 
     test "protocol dispatch" do
@@ -91,7 +91,7 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert node.embedding == nil
       assert node.links == Edge.empty_links()
-      assert %DateTime{} = node.created_at
+      assert node.created_at == nil
     end
 
     test "protocol dispatch" do
@@ -139,7 +139,7 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert node.embedding == nil
       assert node.links == Edge.empty_links()
-      assert %DateTime{} = node.created_at
+      assert node.created_at == nil
     end
 
     test "protocol dispatch" do
@@ -171,7 +171,7 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert node.embedding == nil
       assert node.links == Edge.empty_links()
-      assert %DateTime{} = node.created_at
+      assert node.created_at == nil
     end
 
     test "protocol dispatch" do
@@ -198,7 +198,7 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert node.embedding == nil
       assert node.links == Edge.empty_links()
-      assert %DateTime{} = node.created_at
+      assert node.created_at == nil
     end
 
     test "protocol dispatch" do
@@ -226,7 +226,7 @@ defmodule Mnemosyne.Graph.NodeTest do
       assert node.embedding == nil
       assert node.links == Edge.empty_links()
       assert node.parent_goal == nil
-      assert %DateTime{} = node.created_at
+      assert node.created_at == nil
     end
 
     test "accepts optional parent_goal" do
@@ -260,7 +260,7 @@ defmodule Mnemosyne.Graph.NodeTest do
 
       assert node.embedding == nil
       assert node.links == Edge.empty_links()
-      assert %DateTime{} = node.created_at
+      assert node.created_at == nil
     end
 
     test "protocol dispatch" do
