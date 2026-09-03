@@ -90,6 +90,24 @@ end
 
 `embed_batch/2` must preserve input order. Use one compatible embedding model across a repository; mixing vector spaces invalidates cosine comparisons.
 
+## Usage and Cost Telemetry
+
+Keep adapter callbacks and response structs unchanged. For repository-backed calls, Mnemosyne copies recognized values from `Response.usage` into the canonical terminal telemetry event; it does not add internal options to adapter callbacks. Existing custom adapters therefore remain compatible.
+
+Recognized optional usage keys are:
+
+| Category | Keys |
+|---|---|
+| Tokens | `:input_tokens`, `:output_tokens`, `:cache_creation_input_tokens`, `:cache_read_input_tokens`, `:reasoning_tokens` |
+| Costs | `:input_cost`, `:output_cost`, `:cache_read_cost`, `:cache_write_cost`, `:reasoning_cost`, `:total_cost` |
+| Currency | `:currency` |
+
+Use non-negative integers for token counts, numbers for costs, and a string for currency. Nil and invalid values are omitted; valid zero values are preserved. Additional usage keys remain in the response but are not canonical telemetry fields.
+
+Missing cost is unknown, not zero. Mnemosyne does not price calls, sum component costs, convert currencies, aggregate or persist costs, invoice, or enforce budgets.
+
+Built-in adapter telemetry remains backward-compatible, but it is non-canonical for per-repository cost aggregation. Aggregate only `[:mnemosyne, :model, :call, :stop]` and `[:mnemosyne, :model, :call, :exception]` records; do not count adapter events as well.
+
 ## Registration and Overrides
 
 Configure shared defaults on the supervisor and optional repo defaults when opening a repo:
