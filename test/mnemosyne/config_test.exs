@@ -3,6 +3,9 @@ defmodule Mnemosyne.ConfigTest do
 
   alias Mnemosyne.Config
   alias Mnemosyne.ExtractionProfile
+  alias Mnemosyne.ValueFunction
+
+  @default_recency_lambda ValueFunction.default_recency_lambda()
 
   @valid_config %{
     llm: %{model: "gpt-4o", opts: %{temperature: 0.7}},
@@ -123,10 +126,13 @@ defmodule Mnemosyne.ConfigTest do
     test "each node type has the expected default values" do
       {:ok, config} = Zoi.parse(Config.t(), @valid_config)
 
+      for {_type, params} <- config.value_function.params do
+        assert params.lambda == @default_recency_lambda
+      end
+
       semantic = config.value_function.params[:semantic]
       assert semantic.threshold == 0.0
       assert semantic.top_k == 20
-      assert semantic.lambda == 0.01
       assert semantic.k == 5
       assert semantic.base_floor == 0.3
       assert semantic.beta == 1.0
@@ -166,7 +172,7 @@ defmodule Mnemosyne.ConfigTest do
 
       assert config.value_function.params[:semantic].threshold == 0.5
       assert config.value_function.params[:semantic].top_k == 20
-      assert config.value_function.params[:semantic].lambda == 0.01
+      assert config.value_function.params[:semantic].lambda == @default_recency_lambda
     end
 
     test "custom module can be specified" do
@@ -211,7 +217,7 @@ defmodule Mnemosyne.ConfigTest do
       params = Config.resolve_value_function(config, :semantic)
       assert params.threshold == 0.0
       assert params.top_k == 20
-      assert params.lambda == 0.01
+      assert params.lambda == @default_recency_lambda
       assert params.k == 5
       assert params.base_floor == 0.3
       assert params.beta == 1.0
@@ -228,7 +234,7 @@ defmodule Mnemosyne.ConfigTest do
       params = Config.resolve_value_function(config, :procedural)
       assert params.threshold == 0.12
       assert params.top_k == 10
-      assert params.lambda == 0.01
+      assert params.lambda == @default_recency_lambda
       assert params.k == 5
       assert params.base_floor == 0.3
       assert params.beta == 1.0
@@ -240,7 +246,7 @@ defmodule Mnemosyne.ConfigTest do
       params = Config.resolve_value_function(config, :unknown_type)
       assert params.threshold == 0.0
       assert params.top_k == 20
-      assert params.lambda == 0.01
+      assert params.lambda == @default_recency_lambda
       assert params.k == 5
       assert params.base_floor == 0.3
       assert params.beta == 1.0

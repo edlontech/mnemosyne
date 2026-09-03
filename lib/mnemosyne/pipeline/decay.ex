@@ -12,6 +12,7 @@ defmodule Mnemosyne.Pipeline.Decay do
   alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Graph.Node.Helpers, as: NodeHelpers
   alias Mnemosyne.NodeMetadata
+  alias Mnemosyne.ValueFunction
 
   @default_threshold 0.1
   @default_types [:semantic, :procedural]
@@ -88,7 +89,7 @@ defmodule Mnemosyne.Pipeline.Decay do
   end
 
   defp recency_factor(%NodeMetadata{} = meta, params) do
-    lambda = Map.get(params, :lambda, 0.01)
+    lambda = Map.get(params, :lambda, ValueFunction.default_recency_lambda())
     reference_time = meta.last_accessed_at || meta.created_at
     hours_since = DateTime.diff(DateTime.utc_now(), reference_time, :second) / 3600.0
     :math.exp(-lambda * hours_since)

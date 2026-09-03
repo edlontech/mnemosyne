@@ -13,6 +13,26 @@ defmodule Mnemosyne.ValueFunction.DefaultTest do
   end
 
   describe "score/4 with metadata" do
+    test "default recency has a 90-day half-life" do
+      now = DateTime.utc_now()
+      ninety_days_ago = DateTime.add(now, -90 * 24 * 60 * 60, :second)
+
+      recent_meta =
+        NodeMetadata.new(created_at: now, last_accessed_at: now, access_count: 5)
+
+      old_meta =
+        NodeMetadata.new(
+          created_at: ninety_days_ago,
+          last_accessed_at: ninety_days_ago,
+          access_count: 5
+        )
+
+      recent_score = Default.score(1.0, %{}, recent_meta, %{})
+      old_score = Default.score(1.0, %{}, old_meta, %{})
+
+      assert_in_delta old_score, recent_score / 2, 0.0001
+    end
+
     test "recently accessed scores higher than stale" do
       recent_meta =
         NodeMetadata.new(

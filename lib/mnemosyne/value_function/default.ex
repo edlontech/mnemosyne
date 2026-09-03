@@ -15,6 +15,7 @@ defmodule Mnemosyne.ValueFunction.Default do
   @behaviour Mnemosyne.ValueFunction
 
   alias Mnemosyne.NodeMetadata
+  alias Mnemosyne.ValueFunction
 
   @impl true
   def score(relevance, _node, nil, _params), do: relevance
@@ -28,7 +29,7 @@ defmodule Mnemosyne.ValueFunction.Default do
   end
 
   defp recency_factor(%NodeMetadata{} = meta, params) do
-    lambda = Map.get(params, :lambda, 0.01)
+    lambda = Map.get(params, :lambda, ValueFunction.default_recency_lambda())
     reference_time = meta.last_accessed_at || meta.created_at
     hours_since = DateTime.diff(DateTime.utc_now(), reference_time, :second) / 3600.0
     :math.exp(-lambda * hours_since)

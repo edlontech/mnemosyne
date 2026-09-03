@@ -2,6 +2,7 @@ defmodule Mnemosyne.Config do
   use ZoiDefstruct
 
   alias Mnemosyne.Errors.Invalid.ConfigError
+  alias Mnemosyne.ValueFunction
 
   @llm_schema Zoi.object(
                 %{
@@ -45,26 +46,36 @@ defmodule Mnemosyne.Config do
                     description: "Graph backend configuration"
                   )
 
+  @default_recency_lambda ValueFunction.default_recency_lambda()
+  @vf_base_default %{
+    threshold: 0.0,
+    top_k: 20,
+    lambda: @default_recency_lambda,
+    k: 5,
+    base_floor: 0.3,
+    beta: 1.0
+  }
+
   @vf_entry_schema Zoi.object(%{
                      threshold: Zoi.default(Zoi.float(), 0.0),
                      top_k: Zoi.default(Zoi.integer(), 20),
-                     lambda: Zoi.default(Zoi.float(), 0.01),
+                     lambda: Zoi.default(Zoi.float(), @default_recency_lambda),
                      k: Zoi.default(Zoi.integer(), 5),
                      base_floor: Zoi.default(Zoi.float(), 0.3),
                      beta: Zoi.default(Zoi.float(), 1.0)
                    })
 
   @vf_param_defaults %{
-    semantic: %{threshold: 0.0, top_k: 20, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    procedural: %{threshold: 0.12, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    episodic: %{threshold: 0.0, top_k: 30, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    subgoal: %{threshold: 0.225, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    tag: %{threshold: 0.135, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    source: %{threshold: 0.0, top_k: 50, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-    intent: %{threshold: 0.105, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+    semantic: @vf_base_default,
+    procedural: %{@vf_base_default | threshold: 0.12, top_k: 10},
+    episodic: %{@vf_base_default | top_k: 30},
+    subgoal: %{@vf_base_default | threshold: 0.225, top_k: 10},
+    tag: %{@vf_base_default | threshold: 0.135, top_k: 10},
+    source: %{@vf_base_default | top_k: 50},
+    intent: %{@vf_base_default | threshold: 0.105, top_k: 10}
   }
 
-  @vf_safe_default %{threshold: 0.0, top_k: 20, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+  @vf_safe_default @vf_base_default
 
   @vf_params_schema Zoi.default(
                       Zoi.map(Zoi.atom(), @vf_entry_schema,

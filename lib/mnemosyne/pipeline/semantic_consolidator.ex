@@ -25,6 +25,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
   alias Mnemosyne.LLM
   alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Prompts.MergeSemantic
+  alias Mnemosyne.ValueFunction
 
   @default_threshold 0.7
 
@@ -94,7 +95,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
 
   defp semantic_params(config) do
     get_in(config.value_function, [:params, :semantic]) ||
-      %{lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+      %{lambda: ValueFunction.default_recency_lambda(), k: 5, base_floor: 0.3, beta: 1.0}
   end
 
   # Tag-induced projection: for each semantic node, the merge candidates
@@ -325,7 +326,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
   end
 
   defp recency_factor(%NodeMetadata{} = meta, params) do
-    lambda = Map.get(params, :lambda, 0.01)
+    lambda = Map.get(params, :lambda, ValueFunction.default_recency_lambda())
     reference_time = meta.last_accessed_at || meta.created_at
     hours_since = DateTime.diff(DateTime.utc_now(), reference_time, :second) / 3600.0
     :math.exp(-lambda * hours_since)
