@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.1](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.3.0...mnemosyne-v0.3.1) (2026-09-03)
+
+
+### Features
+
+* **adapters:** preserve model usage costs ([6290ed9](https://github.com/edlontech/mnemosyne/commit/6290ed9e2015ad5d7411fa9f28f34f2a57dd9fda))
+* **ingestion:** attribute model call costs ([c1c26d6](https://github.com/edlontech/mnemosyne/commit/c1c26d60fd8ee8515274fcdf8789fceac27a3e1d))
+* **maintenance:** attribute model call costs ([4d3769a](https://github.com/edlontech/mnemosyne/commit/4d3769adcb4b72e469af268dc799a86c3fad65c2))
+* **recall:** attribute model call costs ([680916a](https://github.com/edlontech/mnemosyne/commit/680916ace11437dfd26a01016193208653674a2b))
+* **repos:** add telemetry labels and model context ([a894509](https://github.com/edlontech/mnemosyne/commit/a8945092f2439fb6ad475123da0082c1815e37a4))
+* **telemetry:** add model call gateway ([960eb6a](https://github.com/edlontech/mnemosyne/commit/960eb6a83b6443f3b9000a0eb74666b9c07c498e))
+* **telemetry:** log model call costs ([e390f91](https://github.com/edlontech/mnemosyne/commit/e390f917bd11a8f622db71fcfd46d11aaf0f2123))
+
+
+### Bug Fixes
+
+* assign node timestamps at runtime ([e77185b](https://github.com/edlontech/mnemosyne/commit/e77185b14b2c71e1e523564f1dc653678a1b1dfb))
+* Reduced default budget and recall hops, batching embeding ([af70040](https://github.com/edlontech/mnemosyne/commit/af7004005be908a54a2948afe9e44ea4913f7435))
+* soften memory recency decay ([dbd3e8d](https://github.com/edlontech/mnemosyne/commit/dbd3e8d2d4d25c8247325ecbc086c692e37d8688))
+
 ## [0.3.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.2.0...mnemosyne-v0.3.0) (2026-08-26)
 
 
