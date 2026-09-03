@@ -32,7 +32,20 @@ defmodule Mnemosyne.Adapters.SycophantLLMTelemetryTest do
 
   describe "chat/2 telemetry" do
     test "emits start and stop events with token measurements" do
-      usage = %Sycophant.Usage{input_tokens: 50, output_tokens: 20}
+      usage = %Sycophant.Usage{
+        input_tokens: 50,
+        output_tokens: 20,
+        cache_creation_input_tokens: 3,
+        cache_read_input_tokens: 4,
+        reasoning_tokens: 5,
+        input_cost: 0.01,
+        output_cost: 0.02,
+        cache_read_cost: 0.003,
+        cache_write_cost: 0.004,
+        reasoning_cost: 0.005,
+        total_cost: 0.042,
+        pricing: %Sycophant.Pricing{currency: "USD"}
+      }
 
       expect(Sycophant, :generate_text, fn _model, _msgs, _opts ->
         {:ok,
@@ -44,7 +57,23 @@ defmodule Mnemosyne.Adapters.SycophantLLMTelemetryTest do
          }}
       end)
 
-      assert {:ok, _} = SycophantLLM.chat([%{role: :user, content: "hi"}], model: "test-model")
+      assert {:ok, %{usage: translated_usage}} =
+               SycophantLLM.chat([%{role: :user, content: "hi"}], model: "test-model")
+
+      assert translated_usage == %{
+               input_tokens: 50,
+               output_tokens: 20,
+               cache_creation_input_tokens: 3,
+               cache_read_input_tokens: 4,
+               reasoning_tokens: 5,
+               input_cost: 0.01,
+               output_cost: 0.02,
+               cache_read_cost: 0.003,
+               cache_write_cost: 0.004,
+               reasoning_cost: 0.005,
+               total_cost: 0.042,
+               currency: "USD"
+             }
 
       assert_receive {:telemetry, [:mnemosyne, :llm, :chat, :start], _, %{model: "test-model"}}
 
@@ -54,6 +83,25 @@ defmodule Mnemosyne.Adapters.SycophantLLMTelemetryTest do
       assert measurements.tokens_input == 50
       assert measurements.tokens_output == 20
       assert is_integer(measurements.duration)
+    end
+
+    test "omits unavailable usage fields while preserving zero values" do
+      usage = %Sycophant.Usage{input_tokens: 0, total_cost: 0.0}
+
+      expect(Sycophant, :generate_text, fn _model, _msgs, _opts ->
+        {:ok,
+         %Sycophant.Response{
+           text: "hello",
+           model: "gpt-4o-mini",
+           usage: usage,
+           context: @context
+         }}
+      end)
+
+      assert {:ok, %{usage: translated_usage}} =
+               SycophantLLM.chat([%{role: :user, content: "hi"}], model: "test-model")
+
+      assert translated_usage == %{input_tokens: 0, total_cost: 0.0}
     end
 
     test "emits stop event with empty measurements on error" do

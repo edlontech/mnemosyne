@@ -30,16 +30,47 @@ defmodule Mnemosyne.Adapters.SycophantEmbeddingTelemetryTest do
 
   describe "embed/2 telemetry" do
     test "emits start and stop events with text_length metadata" do
+      usage = %Sycophant.Usage{
+        input_tokens: 5,
+        output_tokens: 0,
+        cache_creation_input_tokens: 1,
+        cache_read_input_tokens: 2,
+        reasoning_tokens: 0,
+        input_cost: 0.001,
+        output_cost: 0.0,
+        cache_read_cost: 0.0002,
+        cache_write_cost: 0.0003,
+        reasoning_cost: 0.0,
+        total_cost: 0.0015,
+        pricing: %Sycophant.Pricing{currency: "USD"}
+      }
+
       expect(Sycophant, :embed, fn _request, _opts ->
         {:ok,
          %Sycophant.EmbeddingResponse{
            embeddings: %{float: [[0.1, 0.2, 0.3]]},
            model: "text-embedding-3-small",
-           usage: %Sycophant.Usage{input_tokens: 5}
+           usage: usage
          }}
       end)
 
-      assert {:ok, _} = SycophantEmbedding.embed("hello", model: "test-model")
+      assert {:ok, %{usage: translated_usage}} =
+               SycophantEmbedding.embed("hello", model: "test-model")
+
+      assert translated_usage == %{
+               input_tokens: 5,
+               output_tokens: 0,
+               cache_creation_input_tokens: 1,
+               cache_read_input_tokens: 2,
+               reasoning_tokens: 0,
+               input_cost: 0.001,
+               output_cost: 0.0,
+               cache_read_cost: 0.0002,
+               cache_write_cost: 0.0003,
+               reasoning_cost: 0.0,
+               total_cost: 0.0015,
+               currency: "USD"
+             }
 
       assert_receive {:telemetry, [:mnemosyne, :embedding, :embed, :start], _,
                       %{model: "test-model", text_length: 5}}

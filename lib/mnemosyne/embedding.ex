@@ -8,13 +8,24 @@ defmodule Mnemosyne.Embedding do
   defmodule Response do
     @moduledoc "Struct returned by embedding generation calls."
 
+    @typedoc """
+    Optional provider-reported usage data.
+
+    Recognized keys are `:input_tokens`, `:output_tokens`,
+    `:cache_creation_input_tokens`, `:cache_read_input_tokens`,
+    `:reasoning_tokens`, `:input_cost`, `:output_cost`, `:cache_read_cost`,
+    `:cache_write_cost`, `:reasoning_cost`, `:total_cost`, and `:currency`.
+    All keys are optional; adapters may include additional keys.
+    """
+    @type usage :: map()
+
     @enforce_keys [:vectors]
     defstruct [:vectors, :model, usage: %{}]
 
     @type t :: %__MODULE__{
             vectors: [[float()]],
             model: String.t(),
-            usage: map()
+            usage: usage()
           }
   end
 

@@ -11,6 +11,20 @@ if Code.ensure_loaded?(Sycophant) do
     alias Mnemosyne.Embedding.Response
     alias Sycophant.EmbeddingRequest
 
+    @sycophant_usage_keys [
+      :input_tokens,
+      :output_tokens,
+      :cache_creation_input_tokens,
+      :cache_read_input_tokens,
+      :reasoning_tokens,
+      :input_cost,
+      :output_cost,
+      :cache_read_cost,
+      :cache_write_cost,
+      :reasoning_cost,
+      :total_cost
+    ]
+
     @impl true
     def embed(text, opts) do
       {model, _rest} = Keyword.pop!(opts, :model)
@@ -70,6 +84,13 @@ if Code.ensure_loaded?(Sycophant) do
     end
 
     defp extract_usage(nil), do: %{}
-    defp extract_usage(usage), do: %{input_tokens: usage.input_tokens}
+
+    defp extract_usage(usage) do
+      usage
+      |> Map.from_struct()
+      |> Map.take(@sycophant_usage_keys)
+      |> Map.put(:currency, get_in(usage, [Access.key(:pricing), Access.key(:currency)]))
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+    end
   end
 end

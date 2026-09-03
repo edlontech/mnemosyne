@@ -11,6 +11,20 @@ if Code.ensure_loaded?(Sycophant) do
     alias Mnemosyne.LLM.Response
     alias Sycophant.Message
 
+    @sycophant_usage_keys [
+      :input_tokens,
+      :output_tokens,
+      :cache_creation_input_tokens,
+      :cache_read_input_tokens,
+      :reasoning_tokens,
+      :input_cost,
+      :output_cost,
+      :cache_read_cost,
+      :cache_write_cost,
+      :reasoning_cost,
+      :total_cost
+    ]
+
     @impl true
     def chat(messages, opts) do
       {model, sycophant_opts} = Keyword.pop!(opts, :model)
@@ -84,7 +98,11 @@ if Code.ensure_loaded?(Sycophant) do
     defp extract_usage(nil), do: %{}
 
     defp extract_usage(usage) do
-      %{input_tokens: usage.input_tokens, output_tokens: usage.output_tokens}
+      usage
+      |> Map.from_struct()
+      |> Map.take(@sycophant_usage_keys)
+      |> Map.put(:currency, get_in(usage, [Access.key(:pricing), Access.key(:currency)]))
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
     end
   end
 end
