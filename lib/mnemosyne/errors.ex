@@ -14,7 +14,8 @@ defmodule Mnemosyne.Errors do
     unknown_error: Mnemosyne.Errors.Unknown.Unknown
 
   @type error ::
-          Mnemosyne.Errors.Invalid.ConfigError.t()
+          Mnemosyne.Errors.Invalid.AccessError.t()
+          | Mnemosyne.Errors.Invalid.ConfigError.t()
           | Mnemosyne.Errors.Invalid.EpisodeError.t()
           | Mnemosyne.Errors.Invalid.IngestionError.t()
           | Mnemosyne.Errors.Invalid.PromptError.t()

@@ -9,6 +9,7 @@ defmodule Mnemosyne.GraphBackends.InMemory do
   @behaviour Mnemosyne.GraphBackend
 
   alias Mnemosyne.Errors.Framework.StorageError
+  alias Mnemosyne.Errors.Invalid.AccessError
   alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Node, as: NodeProtocol
@@ -59,20 +60,7 @@ defmodule Mnemosyne.GraphBackends.InMemory do
   def commit_ingestion(record, changeset, state) do
     case Map.get(state.ingestions, record.source_id) do
       nil ->
-        updated_state = %{
-          state
-          | graph: Graph.apply_changeset(state.graph, changeset),
-            metadata: Map.merge(state.metadata, changeset.metadata),
-            ingestions: Map.put(state.ingestions, record.source_id, record)
-        }
-
-        case maybe_persist_ingestion(record, changeset, state.persistence) do
-          :ok ->
-            {:ok, :inserted, record.receipt, updated_state}
-
-          {:error, reason} ->
-            {:error, StorageError.exception(operation: :commit_ingestion, reason: reason)}
-        end
+        insert_ingestion(record, changeset, state)
 
       %{fingerprint_version: version, payload_digest: digest, receipt: receipt}
       when version == record.fingerprint_version and digest == record.payload_digest ->
@@ -80,6 +68,25 @@ defmodule Mnemosyne.GraphBackends.InMemory do
 
       _different ->
         {:error, IngestionError.exception(source_id: record.source_id, reason: :source_conflict)}
+    end
+  end
+
+  defp insert_ingestion(record, changeset, state) do
+    with :ok <- preserve_audiences(changeset.metadata, state.metadata) do
+      updated_state = %{
+        state
+        | graph: Graph.apply_changeset(state.graph, changeset),
+          metadata: Map.merge(state.metadata, changeset.metadata),
+          ingestions: Map.put(state.ingestions, record.source_id, record)
+      }
+
+      case maybe_persist_ingestion(record, changeset, state.persistence) do
+        :ok ->
+          {:ok, :inserted, record.receipt, updated_state}
+
+        {:error, reason} ->
+          {:error, StorageError.exception(operation: :commit_ingestion, reason: reason)}
+      end
     end
   end
 
@@ -161,9 +168,24 @@ defmodule Mnemosyne.GraphBackends.InMemory do
 
   @impl true
   def update_metadata(entries, state) do
-    updated = Map.merge(state.metadata, entries)
-    :ok = maybe_persist_metadata(entries, state.persistence)
-    {:ok, %{state | metadata: updated}}
+    with :ok <- preserve_audiences(entries, state.metadata),
+         :ok <- maybe_persist_metadata(entries, state.persistence) do
+      {:ok, %{state | metadata: Map.merge(state.metadata, entries)}}
+    end
+  end
+
+  defp preserve_audiences(entries, current) do
+    unchanged? =
+      Enum.all?(entries, fn {id, metadata} ->
+        existing = current |> Map.get(id, %{}) |> Map.get(:audience)
+        is_nil(existing) or existing == Map.get(metadata, :audience)
+      end)
+
+    if unchanged? do
+      :ok
+    else
+      {:error, AccessError.exception(reason: :immutable_audience)}
+    end
   end
 
   @impl true

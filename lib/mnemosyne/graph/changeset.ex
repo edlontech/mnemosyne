@@ -43,6 +43,20 @@ defmodule Mnemosyne.Graph.Changeset do
     %{cs | metadata: Map.put(cs.metadata, node_id, meta)}
   end
 
+  @doc "Stamps a trajectory audience onto all additions and metadata updates."
+  @spec with_audience(t(), :repo | [{String.t(), String.t()}] | nil) :: t()
+  def with_audience(%__MODULE__{} = cs, nil), do: cs
+
+  def with_audience(%__MODULE__{} = cs, audience) do
+    metadata =
+      Enum.reduce(cs.additions, cs.metadata, fn node, acc ->
+        Map.put_new_lazy(acc, Mnemosyne.Graph.Node.id(node), &NodeMetadata.new/0)
+      end)
+      |> Map.new(fn {id, meta} -> {id, Map.put(meta, :audience, audience)} end)
+
+    %{cs | metadata: metadata}
+  end
+
   @doc "Merges two changesets by concatenating their additions, links, and metadata maps."
   @spec merge(t(), t()) :: t()
   def merge(%__MODULE__{} = a, %__MODULE__{} = b) do

@@ -21,6 +21,11 @@ defmodule Mnemosyne.GraphBackend do
   return state
   for interface uniformity but must not rely on state mutation — callers may
   discard the returned state in read-only contexts.
+
+  Backends used with access control must persist `NodeMetadata.audience`, preserve
+  it during usage updates and consolidation, and reject changes to an assigned
+  audience. An absent audience is legacy, unclassified data. Protected reads
+  enumerate built-in node types to create an authorized snapshot before scoring.
   """
 
   alias Mnemosyne.Graph.Changeset
@@ -29,6 +34,7 @@ defmodule Mnemosyne.GraphBackend do
   @type state :: term()
   @type scored_node :: {struct(), float()}
   @type ingestion_record :: %{
+          optional(:audience) => Mnemosyne.AccessControl.audience() | nil,
           source_id: String.t(),
           payload_digest: binary(),
           fingerprint_version: pos_integer(),
@@ -71,7 +77,7 @@ defmodule Mnemosyne.GraphBackend do
               {:ok, %{String.t() => struct()}, state()}
 
   @callback update_metadata(%{String.t() => struct()}, state()) ::
-              {:ok, state()}
+              {:ok, state()} | {:error, Mnemosyne.Errors.error()}
 
   @callback delete_metadata([String.t()], state()) ::
               {:ok, state()}

@@ -90,6 +90,10 @@ defmodule Mnemosyne do
     * `:backend` - Required. A `{module, opts}` tuple for the graph backend.
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
     * `:config` - A `Mnemosyne.Config` struct overriding shared defaults.
+    * `:access_control` - Opt-in Cedar configuration: `[policy: :membership_and_audience]`
+      or `[policy: cedar_source]`. Omitted or false preserves unrestricted access.
+    * `:legacy_audience` - Operator-only first assignment for all unlabeled nodes.
+      Requires access control and never changes an assigned audience.
     * `:llm` - LLM adapter module overriding shared defaults.
     * `:embedding` - Embedding adapter module overriding shared defaults.
     * `:telemetry_labels` - Flat map of string or atom keys to string, atom,
@@ -119,6 +123,8 @@ defmodule Mnemosyne do
     store_opts = [
       name: via,
       repo_id: repo_id,
+      access_control: Keyword.get(opts, :access_control),
+      legacy_audience: Keyword.get(opts, :legacy_audience),
       telemetry_labels: telemetry_labels,
       backend: Keyword.get(opts, :backend, defaults.backend),
       config: Keyword.get(opts, :config, defaults.config),
@@ -206,6 +212,8 @@ defmodule Mnemosyne do
 
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
     * `:config` - A `Mnemosyne.Config` struct overriding the repo default for this ingestion.
+    * `:authorization` - Trusted principal, repo memberships, and organization-qualified
+      groups. Required along with an explicit trajectory audience in protected repos.
     * `:llm` - LLM adapter module overriding the repo default for this ingestion.
     * `:embedding` - Embedding adapter module overriding the repo default for this ingestion.
 
@@ -248,6 +256,8 @@ defmodule Mnemosyne do
 
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
       This option is used only to locate the repository.
+    * `:authorization` - Trusted principal and membership data for a protected repo.
+      Inaccessible nodes are removed before scoring, graph traversal, or model calls.
     * `:context` - Transient active-task context shaped as
       `%{goal: goal, recent_steps: [%{observation: observation, action: action}]}`.
       The goal and last three recent steps augment the query without being persisted.
@@ -282,45 +292,47 @@ defmodule Mnemosyne do
 
   The graph contains all committed nodes and their links. Useful for
   inspection, debugging, or building custom retrieval strategies.
+  Disabled for access-controlled repos, including authenticated callers.
   """
-  @spec get_graph(String.t(), keyword()) :: Mnemosyne.Graph.t() | {:error, NotFoundError.t()}
+  @spec get_graph(String.t(), keyword()) ::
+          Mnemosyne.Graph.t() | {:error, Mnemosyne.Errors.error()}
   def get_graph(repo_id, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.get_graph(pid)
     end
   end
 
-  @doc "Fetches a single node by ID from the repo's graph."
+  @doc "Fetches a node by ID; protected repos require `:authorization` and hide inaccessible IDs."
   @spec get_node(String.t(), String.t(), keyword()) :: {:ok, struct() | nil} | {:error, term()}
   def get_node(repo_id, node_id, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
-      MemoryStore.get_node(pid, node_id)
+      MemoryStore.get_node(pid, node_id, Keyword.delete(opts, :supervisor))
     end
   end
 
-  @doc "Fetches all nodes of the given types from the repo's graph."
+  @doc "Fetches nodes of the given types, filtered by `:authorization` in protected repos."
   @spec get_nodes_by_type(String.t(), [atom()], keyword()) :: {:ok, [struct()]} | {:error, term()}
   def get_nodes_by_type(repo_id, types, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
-      MemoryStore.get_nodes_by_type(pid, types)
+      MemoryStore.get_nodes_by_type(pid, types, Keyword.delete(opts, :supervisor))
     end
   end
 
-  @doc "Fetches metadata for the given node IDs."
+  @doc "Fetches metadata for node IDs, filtered by `:authorization` in protected repos."
   @spec get_metadata(String.t(), [String.t()], keyword()) ::
           {:ok, %{String.t() => Mnemosyne.NodeMetadata.t()}} | {:error, term()}
   def get_metadata(repo_id, node_ids, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
-      MemoryStore.get_metadata(pid, node_ids)
+      MemoryStore.get_metadata(pid, node_ids, Keyword.delete(opts, :supervisor))
     end
   end
 
-  @doc "Fetches nodes linked to the given node IDs."
+  @doc "Fetches nodes by their IDs, filtered by `:authorization` in protected repos."
   @spec get_linked_nodes(String.t(), [String.t()], keyword()) ::
           {:ok, [struct()]} | {:error, term()}
   def get_linked_nodes(repo_id, node_ids, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
-      MemoryStore.get_linked_nodes(pid, node_ids)
+      MemoryStore.get_linked_nodes(pid, node_ids, Keyword.delete(opts, :supervisor))
     end
   end
 
@@ -333,6 +345,7 @@ defmodule Mnemosyne do
   ## Options
 
     * `:types` - Node types to fetch. Defaults to `[:semantic, :procedural]`.
+    * `:authorization` - Required trusted identity and membership for protected repos.
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
 
   ## Examples
@@ -354,9 +367,10 @@ defmodule Mnemosyne do
   Enqueues the changeset for application via the MemoryStore write lane.
   Returns immediately; the actual mutation happens in the background.
   Subscribe to Notifier events (`:changeset_applied`) to observe completion.
+  Raw changesets are disabled in access-controlled repos; use ingestion instead.
   """
   @spec apply_changeset(String.t(), Mnemosyne.Graph.Changeset.t(), keyword()) ::
-          :ok | {:error, NotFoundError.t()}
+          :ok | {:error, Mnemosyne.Errors.error()}
   def apply_changeset(repo_id, changeset, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.apply_changeset(pid, changeset)
@@ -368,10 +382,11 @@ defmodule Mnemosyne do
 
   Enqueues the deletion via the MemoryStore write lane. Returns immediately;
   the actual removal happens in the background. Subscribe to Notifier events
-  (`:nodes_deleted`) to observe completion.
+  (`:nodes_deleted`) to observe completion. Raw deletion is disabled in
+  access-controlled repos; operator maintenance can still prune obsolete nodes.
   """
   @spec delete_nodes(String.t(), [String.t()], keyword()) ::
-          :ok | {:error, NotFoundError.t()}
+          :ok | {:error, Mnemosyne.Errors.error()}
   def delete_nodes(repo_id, node_ids, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.delete_nodes(pid, node_ids)
@@ -386,14 +401,15 @@ defmodule Mnemosyne do
   survives with the merged proposition while the other's links and metadata
   transfer to it. Weakly related pairs are kept separate. Returns immediately;
   the consolidation runs in the background. Subscribe to Notifier events
-  (`:consolidation_completed`) to observe results.
+  (`:consolidation_completed`) to observe results. Protected repos require
+  trusted repo membership via `:authorization` and an idle write lane.
 
   ## Options
 
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
   """
   @spec consolidate_semantics(String.t(), keyword()) ::
-          :ok | {:error, NotFoundError.t()}
+          :ok | {:error, Mnemosyne.Errors.error()}
   def consolidate_semantics(repo_id, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.consolidate_semantics(pid, opts)
@@ -406,14 +422,15 @@ defmodule Mnemosyne do
   Scores nodes on recency, frequency, and reward signals and removes those
   below the threshold. Cleans up orphaned Tags/Intents after deletion. Returns
   immediately; pruning runs in the background. Subscribe to Notifier events
-  (`:decay_completed`) to observe results.
+  (`:decay_completed`) to observe results. Protected repos require trusted
+  repo membership via `:authorization` and an idle write lane.
 
   ## Options
 
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
   """
   @spec decay_nodes(String.t(), keyword()) ::
-          :ok | {:error, NotFoundError.t()}
+          :ok | {:error, Mnemosyne.Errors.error()}
   def decay_nodes(repo_id, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.decay_nodes(pid, opts)
@@ -428,13 +445,15 @@ defmodule Mnemosyne do
   back-references behind on delete, or any time the graph is suspected to
   carry stale link IDs. Returns immediately; repair runs in the background.
   Subscribe to Notifier events (`:repair_completed`) to observe results.
+  Protected repos require `:authorization` with trusted repo membership
+  and an idle write lane.
 
   ## Options
 
     * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
   """
   @spec repair_graph(String.t(), keyword()) ::
-          :ok | {:error, NotFoundError.t()}
+          :ok | {:error, Mnemosyne.Errors.error()}
   def repair_graph(repo_id, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.repair_graph(pid, opts)
@@ -447,9 +466,11 @@ defmodule Mnemosyne do
   Walks provenance chains from semantic/procedural nodes to source nodes
   and penalizes nodes whose source embeddings diverge from the abstract
   node's embedding. Returns immediately; validation runs in the background.
+  Protected repos require `:authorization` with trusted repo membership
+  and an idle write lane.
   """
   @spec validate_episodic(String.t(), keyword()) ::
-          :ok | {:error, NotFoundError.t()}
+          :ok | {:error, Mnemosyne.Errors.error()}
   def validate_episodic(repo_id, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
       MemoryStore.validate_episodic(pid, opts)

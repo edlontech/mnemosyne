@@ -52,6 +52,7 @@ defmodule Mnemosyne.MixProject do
       {:excoveralls, "~> 0.18", only: [:dev, :test]},
       {:exla, "~> 0.10", only: [:dev, :test]},
       {:emlx, "~> 0.2", only: [:dev, :test], runtime: false},
+      {:ex_cedar, "~> 0.1", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:assert_eventually, "~> 1.0", only: :test},
       {:mimic, "~> 2.0", only: :test},
@@ -85,6 +86,7 @@ defmodule Mnemosyne.MixProject do
         {"guides/trajectory-ingestion.md", title: "Trajectory Ingestion"},
         {"guides/extraction-profiles.md", title: "Extraction Profiles"},
         {"guides/retrieval-and-recall.md", title: "Retrieval and Recall"},
+        {"guides/access-control.md", title: "Access Control"},
         {"guides/graph-maintenance.md", title: "Graph Maintenance"},
         {"guides/custom-backends.md", title: "Custom Backends"},
         {"guides/custom-adapters.md", title: "Custom Adapters"},
@@ -99,6 +101,7 @@ defmodule Mnemosyne.MixProject do
           "guides/trajectory-ingestion.md",
           "guides/extraction-profiles.md",
           "guides/retrieval-and-recall.md",
+          "guides/access-control.md",
           "guides/graph-maintenance.md",
           "guides/custom-backends.md",
           "guides/custom-adapters.md",
@@ -115,6 +118,7 @@ defmodule Mnemosyne.MixProject do
           Mnemosyne.Config,
           Mnemosyne.ExtractionProfile,
           Mnemosyne.Trajectory,
+          Mnemosyne.AccessControl,
           Mnemosyne.IngestionReceipt
         ],
         "Graph & Nodes": [

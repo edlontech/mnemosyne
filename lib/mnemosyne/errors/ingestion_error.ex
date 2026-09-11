@@ -21,6 +21,10 @@ defmodule Mnemosyne.Errors.Invalid.IngestionError do
   defp format_reason(:invalid_steps), do: "steps must be a non-empty list"
   defp format_reason(:invalid_step), do: "steps must contain binary observation and action values"
   defp format_reason(:invalid_metadata), do: "metadata must contain deterministic plain terms"
+
+  defp format_reason(:invalid_audience),
+    do: "audience must be :repo or organization-qualified groups"
+
   defp format_reason(:source_conflict), do: "source ID conflicts with an existing ingestion"
   defp format_reason(reason), do: inspect(reason)
 end

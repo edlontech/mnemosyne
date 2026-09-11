@@ -16,7 +16,10 @@ defmodule Mnemosyne.MemoryStore do
 
   require Logger
 
+  alias Mnemosyne.AccessControl
+  alias Mnemosyne.AccessControl.View
   alias Mnemosyne.Errors.Framework.PipelineError
+  alias Mnemosyne.Errors.Invalid.AccessError
   alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph
   alias Mnemosyne.IngestionReceipt
@@ -53,9 +56,10 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   @doc "Applies a changeset to the graph via the backend."
-  @spec apply_changeset(GenServer.server(), Graph.Changeset.t()) :: :ok
+  @spec apply_changeset(GenServer.server(), Graph.Changeset.t()) ::
+          :ok | {:error, AccessError.t()}
   def apply_changeset(server, changeset) do
-    GenServer.cast(server, {:apply_changeset, changeset})
+    GenServer.call(server, {:apply_changeset, changeset})
   end
 
   @doc """
@@ -64,7 +68,7 @@ defmodule Mnemosyne.MemoryStore do
   Only works with backends that expose a `:graph` field in their state
   (e.g. `InMemory`). Returns an empty graph for other backends.
   """
-  @spec get_graph(GenServer.server()) :: Graph.t()
+  @spec get_graph(GenServer.server()) :: Graph.t() | {:error, AccessError.t()}
   def get_graph(server) do
     GenServer.call(server, :get_graph)
   end
@@ -83,58 +87,61 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   @doc "Removes nodes from the graph via the backend."
-  @spec delete_nodes(GenServer.server(), [String.t()]) :: :ok
+  @spec delete_nodes(GenServer.server(), [String.t()]) :: :ok | {:error, AccessError.t()}
   def delete_nodes(server, node_ids) do
-    GenServer.cast(server, {:delete_nodes, node_ids})
+    GenServer.call(server, {:delete_nodes, node_ids})
   end
 
   @doc "Consolidates near-duplicate semantic nodes."
-  @spec consolidate_semantics(GenServer.server(), keyword()) :: :ok
+  @spec consolidate_semantics(GenServer.server(), keyword()) :: :ok | {:error, AccessError.t()}
   def consolidate_semantics(server, opts \\ []) do
-    GenServer.cast(server, {:consolidate_semantics, opts})
+    GenServer.call(server, {:maintenance, :consolidate_semantics, opts})
   end
 
   @doc "Prunes low-utility nodes via decay scoring."
-  @spec decay_nodes(GenServer.server(), keyword()) :: :ok
+  @spec decay_nodes(GenServer.server(), keyword()) :: :ok | {:error, AccessError.t()}
   def decay_nodes(server, opts \\ []) do
-    GenServer.cast(server, {:decay_nodes, opts})
+    GenServer.call(server, {:maintenance, :decay_nodes, opts})
   end
 
   @doc "Validates episodic grounding and penalizes weakly grounded nodes."
-  @spec validate_episodic(GenServer.server(), keyword()) :: :ok
+  @spec validate_episodic(GenServer.server(), keyword()) :: :ok | {:error, AccessError.t()}
   def validate_episodic(server, opts \\ []) do
-    GenServer.cast(server, {:validate_episodic, opts})
+    GenServer.call(server, {:maintenance, :validate_episodic, opts})
   end
 
   @doc "Strips dangling link references and deletes orphaned routing nodes."
-  @spec repair_graph(GenServer.server(), keyword()) :: :ok
+  @spec repair_graph(GenServer.server(), keyword()) :: :ok | {:error, AccessError.t()}
   def repair_graph(server, opts \\ []) do
-    GenServer.cast(server, {:repair_graph, opts})
+    GenServer.call(server, {:maintenance, :repair_graph, opts})
   end
 
   @doc "Fetches a single node by ID from the backend."
-  @spec get_node(GenServer.server(), String.t()) :: {:ok, struct() | nil} | {:error, term()}
-  def get_node(server, node_id) do
-    GenServer.call(server, {:get_node, node_id})
+  @spec get_node(GenServer.server(), String.t(), keyword()) ::
+          {:ok, struct() | nil} | {:error, term()}
+  def get_node(server, node_id, opts \\ []) do
+    GenServer.call(server, {:authorized_read, {:get_node, node_id}, opts})
   end
 
   @doc "Fetches all nodes of the given types from the backend."
-  @spec get_nodes_by_type(GenServer.server(), [atom()]) :: {:ok, [struct()]} | {:error, term()}
-  def get_nodes_by_type(server, types) do
-    GenServer.call(server, {:get_nodes_by_type, types})
+  @spec get_nodes_by_type(GenServer.server(), [atom()], keyword()) ::
+          {:ok, [struct()]} | {:error, term()}
+  def get_nodes_by_type(server, types, opts \\ []) do
+    GenServer.call(server, {:authorized_read, {:get_nodes_by_type, types}, opts})
   end
 
   @doc "Fetches metadata for the given node IDs."
-  @spec get_metadata(GenServer.server(), [String.t()]) ::
+  @spec get_metadata(GenServer.server(), [String.t()], keyword()) ::
           {:ok, %{String.t() => Mnemosyne.NodeMetadata.t()}} | {:error, term()}
-  def get_metadata(server, node_ids) do
-    GenServer.call(server, {:get_metadata, node_ids})
+  def get_metadata(server, node_ids, opts \\ []) do
+    GenServer.call(server, {:authorized_read, {:get_metadata, node_ids}, opts})
   end
 
   @doc "Fetches nodes by their IDs from the backend."
-  @spec get_linked_nodes(GenServer.server(), [String.t()]) :: {:ok, [struct()]} | {:error, term()}
-  def get_linked_nodes(server, node_ids) do
-    GenServer.call(server, {:get_linked_nodes, node_ids})
+  @spec get_linked_nodes(GenServer.server(), [String.t()], keyword()) ::
+          {:ok, [struct()]} | {:error, term()}
+  def get_linked_nodes(server, node_ids, opts \\ []) do
+    GenServer.call(server, {:authorized_read, {:get_linked_nodes, node_ids}, opts})
   end
 
   @doc """
@@ -157,175 +164,131 @@ defmodule Mnemosyne.MemoryStore do
     repo_id = Keyword.get(opts, :repo_id)
     backend_opts = Keyword.put_new(backend_opts, :repo_id, repo_id)
 
-    case backend_mod.init(backend_opts) do
-      {:ok, backend_state} ->
-        state = %{
-          repo_id: Keyword.get(opts, :repo_id),
-          telemetry_labels: Keyword.get(opts, :telemetry_labels, %{}),
-          backend: {backend_mod, backend_state},
-          config: Keyword.fetch!(opts, :config),
-          llm: Keyword.fetch!(opts, :llm),
-          embedding: Keyword.fetch!(opts, :embedding),
-          notifier: Keyword.get(opts, :notifier, Mnemosyne.Notifier.Noop),
-          task_supervisor: Keyword.fetch!(opts, :task_supervisor),
-          pending_ingestions: %{},
-          ingestion_tasks: %{},
-          pending_recalls: %{},
-          write_queue: :queue.new(),
-          write_active: nil,
-          maintenance_active: nil
-        }
+    with {:ok, access_control} <- AccessControl.new(Keyword.get(opts, :access_control)),
+         {:ok, backend_state} <- backend_mod.init(backend_opts),
+         :ok <- validate_access_mode({backend_mod, backend_state}, access_control),
+         {:ok, backend_state} <-
+           classify_legacy(
+             {backend_mod, backend_state},
+             access_control,
+             Keyword.get(opts, :legacy_audience)
+           ) do
+      state = %{
+        repo_id: Keyword.get(opts, :repo_id),
+        access_control: access_control,
+        telemetry_labels: Keyword.get(opts, :telemetry_labels, %{}),
+        backend: {backend_mod, backend_state},
+        config: Keyword.fetch!(opts, :config),
+        llm: Keyword.fetch!(opts, :llm),
+        embedding: Keyword.fetch!(opts, :embedding),
+        notifier: Keyword.get(opts, :notifier, Mnemosyne.Notifier.Noop),
+        task_supervisor: Keyword.fetch!(opts, :task_supervisor),
+        pending_ingestions: %{},
+        ingestion_tasks: %{},
+        pending_recalls: %{},
+        write_queue: :queue.new(),
+        write_active: nil,
+        maintenance_active: nil
+      }
 
-        {:ok, state}
-
-      {:error, reason} ->
-        {:stop, reason}
+      {:ok, state}
+    else
+      {:error, reason} -> {:stop, reason}
     end
   end
 
   @impl true
+  def handle_cast({:apply_changeset, _changeset}, %{access_control: control} = state)
+      when not is_nil(control), do: {:noreply, state}
+
   def handle_cast({:apply_changeset, changeset}, state) do
     {:noreply, enqueue_or_dispatch_write({:apply_changeset, changeset, nil}, state)}
   end
 
   @impl true
+  def handle_cast({:delete_nodes, _node_ids}, %{access_control: control} = state)
+      when not is_nil(control), do: {:noreply, state}
+
   def handle_cast({:delete_nodes, node_ids}, state) do
     {:noreply, enqueue_or_dispatch_write({:delete_nodes, node_ids, nil}, state)}
   end
 
   @impl true
-  def handle_cast({:consolidate_semantics, opts}, state) do
-    if state.maintenance_active == nil do
-      {ref, operation} = spawn_maintenance_task({:consolidate_semantics, opts, nil}, state)
-      new_state = %{state | maintenance_active: {ref, operation}}
-      emit_queue_telemetry(new_state, :maintenance_start)
-      {:noreply, new_state}
+  def handle_cast({operation, opts}, state)
+      when operation in [:consolidate_semantics, :decay_nodes, :validate_episodic, :repair_graph] do
+    case admit_maintenance(operation, opts, state) do
+      {:ok, state} -> {:noreply, state}
+      {:error, _} -> {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:maintenance, operation, opts}, _from, state)
+      when operation in [:consolidate_semantics, :decay_nodes, :validate_episodic, :repair_graph] do
+    case admit_maintenance(operation, opts, state) do
+      {:ok, state} -> {:reply, :ok, state}
+      {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
+  def handle_call({:delete_nodes, _ids}, _from, %{access_control: control} = state)
+      when not is_nil(control) do
+    {:reply, {:error, AccessError.exception(reason: :raw_deletion_disabled)}, state}
+  end
+
+  def handle_call({:delete_nodes, ids}, _from, state) do
+    {:reply, :ok, enqueue_or_dispatch_write({:delete_nodes, ids, nil}, state)}
+  end
+
+  @impl true
+  def handle_call({:apply_changeset, _changeset}, _from, %{access_control: control} = state)
+      when not is_nil(control) do
+    {:reply, {:error, AccessError.exception(reason: :raw_changeset_disabled)}, state}
+  end
+
+  def handle_call({:apply_changeset, changeset}, _from, state) do
+    {:reply, :ok, enqueue_or_dispatch_write({:apply_changeset, changeset, nil}, state)}
+  end
+
+  @impl true
+  def handle_call({:ingest, trajectory, _digest, opts}, from, state) do
+    with {:ok, trajectory} <- authorize_ingestion(trajectory, opts, state),
+         {:ok, digest} <- Ingestion.prepare(trajectory) do
+      admit_or_join_ingestion(trajectory, digest, opts, from, state)
     else
-      Logger.debug("maintenance already active, dropping consolidate request")
-      {:noreply, state}
+      {:error, _} = error -> {:reply, error, state}
     end
   end
 
   @impl true
-  def handle_cast({:decay_nodes, opts}, state) do
-    if state.maintenance_active == nil do
-      {ref, operation} = spawn_maintenance_task({:decay_nodes, opts, nil}, state)
-      new_state = %{state | maintenance_active: {ref, operation}}
-      emit_queue_telemetry(new_state, :maintenance_start)
-      {:noreply, new_state}
-    else
-      Logger.debug("maintenance already active, dropping decay request")
-      {:noreply, state}
-    end
+  def handle_call(:get_graph, _from, %{access_control: control} = state)
+      when not is_nil(control) do
+    {:reply, {:error, AccessError.exception(reason: :raw_graph_disabled)}, state}
   end
 
-  @impl true
-  def handle_cast({:validate_episodic, opts}, state) do
-    if state.maintenance_active == nil do
-      {ref, operation} = spawn_maintenance_task({:validate_episodic, opts, nil}, state)
-      new_state = %{state | maintenance_active: {ref, operation}}
-      emit_queue_telemetry(new_state, :maintenance_start)
-      {:noreply, new_state}
-    else
-      Logger.debug("maintenance already active, dropping validation request")
-      {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_cast({:repair_graph, opts}, state) do
-    if state.maintenance_active == nil do
-      {ref, operation} = spawn_maintenance_task({:repair_graph, opts, nil}, state)
-      new_state = %{state | maintenance_active: {ref, operation}}
-      emit_queue_telemetry(new_state, :maintenance_start)
-      {:noreply, new_state}
-    else
-      Logger.debug("maintenance already active, dropping repair request")
-      {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:ingest, trajectory, digest, opts}, from, state) do
-    source_id = trajectory.source_id
-
-    case Map.get(state.pending_ingestions, source_id) do
-      %{digest: ^digest} = pending ->
-        pending = %{pending | waiters: [from | pending.waiters]}
-        {:noreply, put_in(state.pending_ingestions[source_id], pending)}
-
-      %{digest: _other_digest} ->
-        error = source_conflict(source_id)
-        notify_ingestion_failure(source_id, error, state)
-        {:reply, error, state}
-
-      nil ->
-        admit_ingestion(trajectory, digest, opts, from, state)
-    end
-  end
-
-  @impl true
   def handle_call(:get_graph, _from, state) do
     {_backend_mod, backend_state} = state.backend
     {:reply, Map.get(backend_state, :graph, Graph.new()), state}
   end
 
   @impl true
-  def handle_call({:get_node, node_id}, _from, state) do
-    {backend_mod, backend_state} = state.backend
+  def handle_call({:authorized_read, request, opts}, _from, state) do
+    result =
+      with {:ok, backend} <- read_backend(state, opts) do
+        read_request(request, backend)
+      end
 
-    case backend_mod.get_node(node_id, backend_state) do
-      {:ok, node, _bs} -> {:reply, {:ok, node}, state}
-      {:error, _} = error -> {:reply, error, state}
-    end
+    {:reply, result, state}
+  end
+
+  def handle_call({operation, _argument} = request, from, state)
+      when operation in [:get_node, :get_nodes_by_type, :get_metadata, :get_linked_nodes] do
+    handle_call({:authorized_read, request, []}, from, state)
   end
 
   @impl true
-  def handle_call({:get_nodes_by_type, types}, _from, state) do
-    {backend_mod, backend_state} = state.backend
-
-    case backend_mod.get_nodes_by_type(types, backend_state) do
-      {:ok, nodes, _bs} -> {:reply, {:ok, nodes}, state}
-      {:error, _} = error -> {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_metadata, node_ids}, _from, state) do
-    {backend_mod, backend_state} = state.backend
-
-    case backend_mod.get_metadata(node_ids, backend_state) do
-      {:ok, metadata, _bs} -> {:reply, {:ok, metadata}, state}
-      {:error, _} = error -> {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_linked_nodes, node_ids}, _from, state) do
-    {backend_mod, backend_state} = state.backend
-
-    case backend_mod.get_linked_nodes(node_ids, nil, backend_state) do
-      {:ok, nodes, _bs} -> {:reply, {:ok, nodes}, state}
-      {:error, _} = error -> {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:latest, top_k, opts}, _from, state) do
-    types = Keyword.get(opts, :types, [:semantic, :procedural])
-
-    case fetch_nodes_with_metadata(types, state.backend) do
-      {:ok, pairs} ->
-        result =
-          pairs
-          |> Enum.sort_by(fn {_node, meta} -> meta.created_at end, {:desc, DateTime})
-          |> Enum.take(top_k)
-
-        {:reply, {:ok, result}, state}
-
-      {:error, _} = error ->
-        {:reply, error, state}
-    end
+  def handle_call({:latest, _top_k, opts} = request, from, state) do
+    handle_call({:authorized_read, request, opts}, from, state)
   end
 
   @impl true
@@ -389,6 +352,44 @@ defmodule Mnemosyne.MemoryStore do
 
   # -- Private: Ingestion --
 
+  defp authorize_ingestion(%{audience: nil} = trajectory, _opts, %{access_control: nil}),
+    do: {:ok, trajectory}
+
+  defp authorize_ingestion(_trajectory, _opts, %{access_control: nil}),
+    do: {:error, AccessError.exception(reason: :access_control_required)}
+
+  defp authorize_ingestion(trajectory, opts, state) do
+    with {:ok, audience} <- AccessControl.normalize_audience(trajectory.audience),
+         :ok <-
+           AccessControl.authorize(
+             state.access_control,
+             Keyword.get(opts, :authorization),
+             state.repo_id,
+             :ingest,
+             %{id: trajectory.source_id, audience: audience, node_type: :trajectory}
+           ) do
+      {:ok, %{trajectory | audience: audience}}
+    end
+  end
+
+  defp admit_or_join_ingestion(trajectory, digest, opts, from, state) do
+    source_id = trajectory.source_id
+
+    case Map.get(state.pending_ingestions, source_id) do
+      %{digest: ^digest} = pending ->
+        pending = %{pending | waiters: [from | pending.waiters]}
+        {:noreply, put_in(state.pending_ingestions[source_id], pending)}
+
+      %{digest: _other_digest} ->
+        error = source_conflict(source_id)
+        notify_ingestion_failure(source_id, error, state)
+        {:reply, error, state}
+
+      nil ->
+        admit_ingestion(trajectory, digest, opts, from, state)
+    end
+  end
+
   defp admit_ingestion(trajectory, digest, opts, from, state) do
     {backend_mod, backend_state} = state.backend
     fingerprint_version = Ingestion.fingerprint_version()
@@ -424,6 +425,8 @@ defmodule Mnemosyne.MemoryStore do
       |> Keyword.put_new(:llm, state.llm)
       |> Keyword.put_new(:embedding, state.embedding)
       |> Keyword.put(:repo_id, state.repo_id)
+      |> Keyword.put(:audience, trajectory.audience)
+      |> Keyword.put(:access_control, state.access_control)
       |> Keyword.put(:model_context, model_context(state, :ingest, trajectory.source_id))
 
     task =
@@ -448,7 +451,8 @@ defmodule Mnemosyne.MemoryStore do
   defp handle_ingestion_complete(ref, {:ok, changeset}, state) do
     Process.demonitor(ref, [:flush])
     source_id = Map.fetch!(state.ingestion_tasks, ref)
-    %{digest: digest} = Map.fetch!(state.pending_ingestions, source_id)
+    %{digest: digest, execution_opts: opts} = Map.fetch!(state.pending_ingestions, source_id)
+    changeset = Graph.Changeset.with_audience(changeset, Keyword.get(opts, :audience))
     operation = {:commit_ingestion, source_id, digest, changeset}
     {:noreply, enqueue_or_dispatch_write(operation, state)}
   end
@@ -494,7 +498,7 @@ defmodule Mnemosyne.MemoryStore do
 
   defp enqueue_or_dispatch_write(operation, state) do
     new_state =
-      if state.write_active do
+      if state.write_active || (state.access_control && state.maintenance_active) do
         queue = :queue.in(operation, state.write_queue)
         %{state | write_queue: queue}
       else
@@ -553,6 +557,12 @@ defmodule Mnemosyne.MemoryStore do
     task =
       Task.Supervisor.async_nolink(state.task_supervisor, fn ->
         with {:ok, merged_cs} <- merge_changeset(changeset, backend, pending.execution_opts) do
+          merged_cs =
+            Graph.Changeset.with_audience(
+              merged_cs,
+              Keyword.get(pending.execution_opts, :audience)
+            )
+
           {:ok, {:commit_ingestion, source_id, digest, merged_cs}}
         end
       end)
@@ -572,14 +582,22 @@ defmodule Mnemosyne.MemoryStore do
   defp merge_changeset(changeset, backend, execution_opts) do
     config = Keyword.fetch!(execution_opts, :config)
 
-    merge_opts =
-      execution_opts
-      |> Keyword.put(:backend, backend)
-      |> Keyword.put(:value_function, config.value_function)
+    scoped_backend =
+      if Keyword.get(execution_opts, :access_control) do
+        View.scope(backend, Keyword.fetch!(execution_opts, :audience))
+      else
+        {:ok, backend}
+      end
 
-    case TagDeduplicator.deduplicate(changeset, merge_opts) do
-      {:ok, deduped_cs} -> IntentMerger.merge(deduped_cs, merge_opts)
-      {:error, _reason} = error -> error
+    with {:ok, backend} <- scoped_backend do
+      merge_opts =
+        execution_opts
+        |> Keyword.put(:backend, backend)
+        |> Keyword.put(:value_function, config.value_function)
+
+      with {:ok, deduped_cs} <- TagDeduplicator.deduplicate(changeset, merge_opts) do
+        IntentMerger.merge(deduped_cs, merge_opts)
+      end
     end
   end
 
@@ -621,6 +639,7 @@ defmodule Mnemosyne.MemoryStore do
       source_id: source_id,
       payload_digest: digest,
       fingerprint_version: Ingestion.fingerprint_version(),
+      audience: Keyword.get(state.pending_ingestions[source_id].execution_opts, :audience),
       receipt: receipt
     }
 
@@ -743,6 +762,35 @@ defmodule Mnemosyne.MemoryStore do
 
   # -- Private: Maintenance Lane --
 
+  defp admit_maintenance(operation, opts, state) do
+    with :ok <-
+           AccessControl.member(
+             state.access_control,
+             Keyword.get(opts, :authorization),
+             state.repo_id
+           ) do
+      protected_write =
+        state.access_control && (state.write_active || map_size(state.pending_ingestions) > 0)
+
+      busy = state.maintenance_active || protected_write
+
+      cond do
+        busy && state.access_control ->
+          {:error, AccessError.exception(reason: :maintenance_busy)}
+
+        busy ->
+          Logger.debug("maintenance already active, dropping #{operation} request")
+          {:ok, state}
+
+        true ->
+          {ref, operation} = spawn_maintenance_task({operation, opts, nil}, state)
+          state = %{state | maintenance_active: {ref, operation}}
+          emit_queue_telemetry(state, :maintenance_start)
+          {:ok, state}
+      end
+    end
+  end
+
   defp spawn_maintenance_task({:consolidate_semantics, opts, from}, state) do
     backend = state.backend
     config = state.config
@@ -750,12 +798,14 @@ defmodule Mnemosyne.MemoryStore do
     llm = state.llm
     embedding = state.embedding
     context = model_context(state, :consolidate_semantics)
+    access_control = state.access_control
 
     task =
       Task.Supervisor.async_nolink(state.task_supervisor, fn ->
         consolidation_opts =
           opts
           |> Keyword.merge(backend: backend, config: config, llm: llm, embedding: embedding)
+          |> Keyword.put(:access_control, access_control)
           |> Keyword.put(:model_context, context)
 
         Telemetry.span([:consolidator, :consolidate], %{repo_id: repo_id}, fn ->
@@ -869,6 +919,7 @@ defmodule Mnemosyne.MemoryStore do
           %{state | maintenance_active: nil}
       end
 
+    new_state = if state.access_control, do: dispatch_write(new_state), else: new_state
     emit_queue_telemetry(new_state, :maintenance_complete)
     {:noreply, new_state}
   end
@@ -884,6 +935,7 @@ defmodule Mnemosyne.MemoryStore do
     end
 
     new_state = %{state | maintenance_active: nil}
+    new_state = if state.access_control, do: dispatch_write(new_state), else: new_state
     emit_queue_telemetry(new_state, :maintenance_complete)
     {:noreply, new_state}
   end
@@ -986,42 +1038,35 @@ defmodule Mnemosyne.MemoryStore do
     value_fn = config.value_function
     max_hops = Keyword.get(opts, :max_hops, 2)
     source_id = Keyword.get(opts, :source_id)
-    backend = state.backend
+    read_state = Map.take(state, [:backend, :access_control, :repo_id])
     repo_id = state.repo_id
     verbosity = config.trace_verbosity
     context = model_context(state, :recall, source_id)
 
+    retrieval_opts = [
+      repo_id: repo_id,
+      source_id: source_id,
+      llm: llm,
+      embedding: embedding,
+      value_function: value_fn,
+      config: config,
+      max_hops: max_hops,
+      model_context: context
+    ]
+
+    reasoning_opts = [
+      repo_id: repo_id,
+      source_id: source_id,
+      llm: llm,
+      query: query,
+      config: config,
+      model_context: context
+    ]
+
     Task.Supervisor.async_nolink(state.task_supervisor, fn ->
-      retrieval_opts =
-        Keyword.put(
-          [
-            repo_id: repo_id,
-            source_id: source_id,
-            llm: llm,
-            embedding: embedding,
-            backend: backend,
-            value_function: value_fn,
-            config: config,
-            max_hops: max_hops
-          ],
-          :model_context,
-          context
-        )
-
-      reasoning_opts =
-        Keyword.put(
-          [
-            repo_id: repo_id,
-            source_id: source_id,
-            llm: llm,
-            query: query,
-            config: config
-          ],
-          :model_context,
-          context
-        )
-
-      with {:ok, result, trace} <- Retrieval.retrieve(query, retrieval_opts),
+      with {:ok, backend} <- read_backend(read_state, opts),
+           {:ok, result, trace} <-
+             Retrieval.retrieve(query, Keyword.put(retrieval_opts, :backend, backend)),
            {:ok, reasoned} <- Reasoning.reason(result, reasoning_opts) do
         touched_nodes =
           result.candidates
@@ -1033,6 +1078,83 @@ defmodule Mnemosyne.MemoryStore do
         {:ok, %RecallResult{reasoned: reasoned, touched_nodes: touched_nodes, trace: trace}}
       end
     end)
+  end
+
+  defp validate_access_mode(backend, nil) do
+    with {:ok, _nodes, metadata} <- View.load(backend) do
+      labeled? = Enum.any?(metadata, fn {_id, meta} -> not is_nil(Map.get(meta, :audience)) end)
+
+      if labeled? do
+        {:error, AccessError.exception(reason: :access_control_required)}
+      else
+        :ok
+      end
+    end
+  end
+
+  defp validate_access_mode(_backend, _control), do: :ok
+
+  defp classify_legacy({_module, backend_state}, _control, nil), do: {:ok, backend_state}
+
+  defp classify_legacy(_backend, nil, _audience),
+    do: {:error, AccessError.exception(reason: :access_control_required)}
+
+  defp classify_legacy({module, backend_state} = backend, _control, audience) do
+    with {:ok, audience} <- AccessControl.normalize_audience(audience),
+         {:ok, nodes, metadata} <- View.load(backend) do
+      updates =
+        nodes
+        |> Enum.map(fn node ->
+          id = Mnemosyne.Graph.Node.id(node)
+          {id, Map.get(metadata, id, NodeMetadata.new())}
+        end)
+        |> Enum.filter(fn {_id, meta} -> is_nil(Map.get(meta, :audience)) end)
+        |> Map.new(fn {id, meta} -> {id, Map.put(meta, :audience, audience)} end)
+
+      maybe_update_metadata(module, updates, backend_state)
+    end
+  end
+
+  defp read_backend(%{access_control: nil, backend: backend}, _opts), do: {:ok, backend}
+
+  defp read_backend(state, opts) do
+    authorization = Keyword.get(opts, :authorization)
+
+    with :ok <- AccessControl.member(state.access_control, authorization, state.repo_id) do
+      View.build(state.backend, fn node, metadata ->
+        AccessControl.allowed?(state.access_control, authorization, state.repo_id, :read, %{
+          id: Mnemosyne.Graph.Node.id(node),
+          audience: Map.get(metadata || %{}, :audience),
+          node_type: Mnemosyne.Graph.Node.node_type(node)
+        })
+      end)
+    end
+  end
+
+  defp read_request({:latest, top_k, opts}, backend) do
+    types = Keyword.get(opts, :types, [:semantic, :procedural])
+
+    with {:ok, pairs} <- fetch_nodes_with_metadata(types, backend) do
+      {:ok,
+       pairs
+       |> Enum.sort_by(fn {_node, meta} -> meta.created_at end, {:desc, DateTime})
+       |> Enum.take(top_k)}
+    end
+  end
+
+  defp read_request({operation, argument}, {module, backend_state}) do
+    result =
+      case operation do
+        :get_node -> module.get_node(argument, backend_state)
+        :get_nodes_by_type -> module.get_nodes_by_type(argument, backend_state)
+        :get_metadata -> module.get_metadata(argument, backend_state)
+        :get_linked_nodes -> module.get_linked_nodes(argument, nil, backend_state)
+      end
+
+    case result do
+      {:ok, value, _backend_state} -> {:ok, value}
+      {:error, _} = error -> error
+    end
   end
 
   defp fetch_nodes_with_metadata(types, {backend_mod, backend_state}) do

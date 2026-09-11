@@ -4,11 +4,14 @@ defmodule Mnemosyne.NodeMetadata do
 
   Captures access patterns, temporal information, and accumulated
   rewards to enable recency, frequency, and reward-based scoring.
+  The immutable audience is inherited from the ingested trajectory; nil marks
+  legacy, unclassified nodes, which are hidden in access-controlled repos.
   """
 
   @enforce_keys [:created_at]
   defstruct [
     :created_at,
+    audience: nil,
     access_count: 0,
     last_accessed_at: nil,
     cumulative_reward: 0.0,
@@ -16,6 +19,7 @@ defmodule Mnemosyne.NodeMetadata do
   ]
 
   @type t :: %__MODULE__{
+          audience: :repo | [{String.t(), String.t()}] | nil,
           access_count: non_neg_integer(),
           last_accessed_at: DateTime.t() | nil,
           created_at: DateTime.t(),
@@ -27,6 +31,7 @@ defmodule Mnemosyne.NodeMetadata do
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
     %__MODULE__{
+      audience: Keyword.get(opts, :audience),
       access_count: Keyword.get(opts, :access_count, 0),
       last_accessed_at: Keyword.get(opts, :last_accessed_at),
       created_at: Keyword.get(opts, :created_at, DateTime.utc_now()),

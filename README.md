@@ -105,6 +105,12 @@ For an active task, pass caller-owned context explicitly. Context affects the qu
 
 During ingestion, Mnemosyne creates an internal episode, annotates each ordered step, detects coherent extraction boundaries, and produces one graph changeset. The repository's `MemoryStore` serializes the final write while extraction for different source IDs can run concurrently.
 
+## Sensitive Memories
+
+Repos can opt into Cedar authorization with `access_control: [policy: :membership_and_audience]` when opened. Protected trajectories require an explicit, immutable audience; the application supplies trusted identity and membership through `authorization:` on ingestion and reads. Custom Cedar audience policies are supported without bypassing repo membership.
+
+See [Access Control](guides/access-control.md) for setup, legacy classification, protected API boundaries, and custom-backend limitations.
+
 ## Ingestion Guarantees
 
 Source IDs are stable and repo-scoped: the same string can identify independent payloads in different repositories. Equal concurrent calls for a pending source coalesce into one extraction and receive the same receipt. The first admitted call supplies the execution configuration for that shared work.
@@ -145,6 +151,7 @@ Each repository has its own `MemoryStore` and backend. The built-in `InMemory` b
 - [Trajectory Ingestion](guides/trajectory-ingestion.md)
 - [Extraction Profiles](guides/extraction-profiles.md)
 - [Retrieval and Recall](guides/retrieval-and-recall.md)
+- [Access Control](guides/access-control.md)
 - [Custom Backends](guides/custom-backends.md)
 - [Custom Adapters](guides/custom-adapters.md)
 - [Multi-Repository Isolation](guides/multi-repo.md)

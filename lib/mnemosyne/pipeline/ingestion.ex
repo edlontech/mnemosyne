@@ -20,10 +20,10 @@ defmodule Mnemosyne.Pipeline.Ingestion do
   """
   @spec prepare(Trajectory.t()) :: {:ok, binary()} | {:error, IngestionError.t()}
   def prepare(%Trajectory{} = trajectory) do
-    case validate(trajectory) do
-      :ok ->
-        {:ok, fingerprint(trajectory)}
-
+    with :ok <- validate(trajectory),
+         {:ok, audience} <- normalize_audience(trajectory.audience) do
+      {:ok, fingerprint(%{trajectory | audience: audience})}
+    else
       {:error, reason} ->
         {:error, IngestionError.exception(source_id: trajectory.source_id, reason: reason)}
     end
@@ -44,6 +44,15 @@ defmodule Mnemosyne.Pipeline.Ingestion do
          {:ok, episode} <- Episode.score_pending_reward(episode, opts),
          {:ok, episode} <- Episode.close(episode) do
       Structuring.extract(episode, opts)
+    end
+  end
+
+  defp normalize_audience(nil), do: {:ok, nil}
+
+  defp normalize_audience(audience) do
+    case Mnemosyne.AccessControl.normalize_audience(audience) do
+      {:ok, audience} -> {:ok, audience}
+      {:error, _} -> {:error, :invalid_audience}
     end
   end
 
@@ -70,6 +79,12 @@ defmodule Mnemosyne.Pipeline.Ingestion do
     identity =
       {:mnemosyne_trajectory, @fingerprint_version, trajectory.goal,
        Enum.map(trajectory.steps, &{&1.observation, &1.action}), trajectory.metadata}
+
+    identity =
+      case trajectory.audience do
+        nil -> identity
+        audience -> {:mnemosyne_audience, @fingerprint_version, audience, identity}
+      end
 
     :crypto.hash(
       :sha256,

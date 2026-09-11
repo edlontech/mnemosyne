@@ -70,8 +70,17 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
          sem_ids = Enum.map(sem_nodes, &NodeProtocol.id/1),
          {:ok, all_meta, bs} <- backend_mod.get_metadata(sem_ids, bs) do
       params = semantic_params(config)
+      protected = not is_nil(Keyword.get(opts, :access_control))
 
-      candidate_pairs = find_candidate_pairs(sem_nodes, threshold)
+      candidate_pairs =
+        sem_nodes
+        |> Enum.group_by(fn node ->
+          all_meta |> Map.get(NodeProtocol.id(node), %{}) |> Map.get(:audience)
+        end)
+        |> Enum.flat_map(fn
+          {nil, _nodes} when protected -> []
+          {_audience, nodes} -> find_candidate_pairs(nodes, threshold)
+        end)
 
       {merge_cs, meta_updates, loser_ids, merged_count} =
         decide_merges(
