@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.3.1...mnemosyne-v0.3.2) (2026-09-11)
+
+
+### Features
+
+* Added support to ReqLLM provider ([7cd95c6](https://github.com/edlontech/mnemosyne/commit/7cd95c661859dbc9f6cad2723f155e4deda300ae))
+
 ## [0.3.1](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.3.0...mnemosyne-v0.3.1) (2026-09-03)
 
 
