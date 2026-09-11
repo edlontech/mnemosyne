@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.4.0...mnemosyne-v0.4.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **tag-deduplication:** Batch duplicates resolve links regardless of id order ([a19594e](https://github.com/edlontech/mnemosyne/commit/a19594e4faaf0452e7139e664c61975eff349856))
+
 ## [0.4.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.3.2...mnemosyne-v0.4.0) (2026-09-11)
 
 
