@@ -112,6 +112,51 @@ defmodule Mnemosyne.Pipeline.TagDeduplicatorTest do
       assert {"tag_existing", "sem_1", :membership} in result.links
     end
 
+    test "batch duplicates resolve links and metadata to the graph tag regardless of ID order" do
+      existing = make_tag("tag_existing", "postgres")
+      semantic = make_semantic("sem_1")
+      semantic_metadata = NodeMetadata.new()
+
+      {:ok, backend} = InMemory.init([])
+      {:ok, backend} = InMemory.apply_changeset(%Changeset{additions: [existing]}, backend)
+
+      for {first_id, second_id} <- [{"tag_a", "tag_z"}, {"tag_z", "tag_a"}] do
+        changeset = %Changeset{
+          additions: [
+            make_tag(first_id, "Postgres"),
+            make_tag(second_id, " postgres "),
+            semantic
+          ],
+          links: [
+            {first_id, semantic.id, :membership},
+            {second_id, semantic.id, :membership},
+            {semantic.id, first_id, :membership},
+            {semantic.id, second_id, :membership}
+          ],
+          metadata: %{
+            first_id => NodeMetadata.new(cumulative_reward: 0.25, reward_count: 1),
+            second_id => NodeMetadata.new(cumulative_reward: 0.75, reward_count: 1),
+            semantic.id => semantic_metadata
+          }
+        }
+
+        assert {:ok, result} =
+                 TagDeduplicator.deduplicate(changeset, backend: {InMemory, backend})
+
+        assert result.additions == [semantic]
+        assert Enum.sort(Map.keys(result.metadata)) == ["sem_1", "tag_existing"]
+        assert result.metadata[semantic.id] == semantic_metadata
+
+        assert %NodeMetadata{cumulative_reward: 1.0, reward_count: 2} =
+                 result.metadata[existing.id]
+
+        assert Enum.sort(result.links) == [
+                 {"sem_1", "tag_existing", :membership},
+                 {"tag_existing", "sem_1", :membership}
+               ]
+      end
+    end
+
     test "keeps tag when no graph match exists" do
       new_tag = make_tag("tag_new", "elixir")
       sem = make_semantic("sem_1")

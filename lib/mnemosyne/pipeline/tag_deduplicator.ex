@@ -38,6 +38,11 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
 
     case maybe_deduplicate_against_graph(kept_tags, rewrites, opts) do
       {:ok, rewrites} ->
+        rewrites =
+          Map.new(rewrites, fn {source_id, target_id} ->
+            {source_id, Map.get(rewrites, target_id, target_id)}
+          end)
+
         {surviving_tags, rewrites} = remove_replaced_tags(kept_tags, rewrites)
         rewritten_links = rewrite_links(changeset.links, rewrites)
         deduped_links = Enum.uniq(rewritten_links)
