@@ -182,7 +182,39 @@ Return `{:error, %Mnemosyne.Errors.Framework.AdapterError{}}` for expected provi
 ## Built-in Adapters
 
 - `Mnemosyne.Adapters.SycophantLLM` and `Mnemosyne.Adapters.SycophantEmbedding` wrap the optional Sycophant dependency.
+- `Mnemosyne.Adapters.ReqLLM` and `Mnemosyne.Adapters.ReqLLMEmbedding` wrap the optional `req_llm` dependency.
 - `Mnemosyne.Adapters.BumblebeeEmbedding` runs local Bumblebee embedding models.
+
+### Using ReqLLM
+
+Add `{:req_llm, "~> 1.22"}` to your application's dependencies, then select the adapters:
+
+```elixir
+{Mnemosyne.Supervisor,
+  config: config,
+  llm: Mnemosyne.Adapters.ReqLLM,
+  embedding: Mnemosyne.Adapters.ReqLLMEmbedding}
+```
+
+Use ReqLLM model identifiers such as `"openai:gpt-4o-mini"` in `config.llm.model`
+and `"openai:text-embedding-3-small"` in `config.embedding.model`, including per-step
+model overrides. Either adapter can also be used independently. Configure provider
+credentials through ReqLLM (for example, `OPENAI_API_KEY`), or pass `api_key` in the
+model's `opts`. LLM options are forwarded unchanged, except `:step`, which is reserved
+for adapter telemetry.
+
+Both text and structured calls return `Mnemosyne.LLM.Response`. Structured output
+is parsed with the supplied Zoi schema, restoring nested atom keys without enabling
+scalar coercion that the schema did not request. Provider and validation failures
+return `AdapterError` with the original reason. Usage and costs are preserved;
+`cached_tokens` and `cache_creation_tokens` also populate Mnemosyne's
+`cache_read_input_tokens` and `cache_creation_input_tokens` telemetry fields.
+
+The embedding adapter supports single texts and batches, returning a list of vectors
+in input order. It forwards options such as `dimensions` and always requests float
+encoding and usage data. Its response uses the requested model identifier because
+ReqLLM's embedding result does not include one. Embedding calls retain the existing
+single-text length and successful batch-size telemetry, and wrap failures in `AdapterError`.
 
 ## Next Steps
 
