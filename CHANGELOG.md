@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.3.2...mnemosyne-v0.4.0) (2026-09-11)
+
+
+### Features
+
+* **access-control:** Added support for Access controlled memories ([8e8d675](https://github.com/edlontech/mnemosyne/commit/8e8d675a5071e0c53374fe120481b86a1378e7b9))
+* **memory:** Allows ingestion without procedural instructions ([793a420](https://github.com/edlontech/mnemosyne/commit/793a42083567635d3b9e20645c33f41c60a48879))
+
 ## [0.3.2](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.3.1...mnemosyne-v0.3.2) (2026-09-11)
 
 
