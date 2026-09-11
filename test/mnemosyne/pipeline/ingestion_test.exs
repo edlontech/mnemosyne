@@ -10,6 +10,9 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
   alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph.Changeset
   alias Mnemosyne.Graph.Node.Episodic
+  alias Mnemosyne.Graph.Node.Intent
+  alias Mnemosyne.Graph.Node.Procedural
+  alias Mnemosyne.Graph.Node.Semantic
   alias Mnemosyne.Graph.Node.Source
   alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.LLM
@@ -115,6 +118,72 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
     assert Enum.map(episodic_nodes, & &1.reward) == [0.9, 0.9]
     assert Enum.uniq_by(episodic_nodes, & &1.trajectory_id) |> length() == 2
     assert Enum.all?(source_nodes, &(&1.episode_id == input.source_id))
+  end
+
+  test "ingests facts without procedures and skips procedural embedding and return scoring" do
+    stub_successful_pipeline()
+
+    Mnemosyne.MockLLM
+    |> stub(:chat_structured, fn messages, _schema, _opts ->
+      content = system_content(messages)
+
+      response =
+        cond do
+          content =~ "infer the subgoal" ->
+            %{reasoning: "analysis", subgoal: "Record the upstream timeout"}
+
+          content =~ "factual knowledge" ->
+            %{
+              facts: [
+                %{
+                  proposition: "The upstream request timed out",
+                  concepts: ["upstream timeout"],
+                  confidence: 0.9,
+                  source_steps: [1]
+                }
+              ]
+            }
+
+          content =~ "actionable instructions" ->
+            %{instructions: []}
+
+          true ->
+            flunk("Unexpected structured LLM call: #{content}")
+        end
+
+      {:ok, %LLM.Response{content: response, model: "mock:test", usage: %{}}}
+    end)
+
+    Mnemosyne.MockEmbedding
+    |> stub(:embed_batch, fn texts, _opts ->
+      assert texts in [
+               ["The upstream request timed out"],
+               ["upstream timeout"],
+               ["Timeout from upstream"]
+             ]
+
+      vectors = Enum.map(texts, fn _ -> [0.1, 0.1] end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
+    end)
+
+    assert {:ok, %Changeset{} = changeset} =
+             Ingestion.run(trajectory(),
+               llm: Mnemosyne.MockLLM,
+               embedding: Mnemosyne.MockEmbedding
+             )
+
+    assert [
+             %Episodic{observation: "Timeout from upstream", action: "Inspect request logs"} =
+               episodic
+           ] =
+             Enum.filter(changeset.additions, &is_struct(&1, Episodic))
+
+    assert [%Semantic{proposition: "The upstream request timed out"} = semantic] =
+             Enum.filter(changeset.additions, &is_struct(&1, Semantic))
+
+    assert {semantic.id, episodic.id, :provenance} in changeset.links
+    refute Enum.any?(changeset.additions, &is_struct(&1, Procedural))
+    refute Enum.any?(changeset.additions, &is_struct(&1, Intent))
   end
 
   test "returns a structuring error without producing a changeset" do

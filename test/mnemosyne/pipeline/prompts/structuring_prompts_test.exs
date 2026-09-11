@@ -353,9 +353,15 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
              } = second
     end
 
-    test "parse_response rejects empty instructions list" do
-      assert {:error, %PromptError{reason: :no_instructions_extracted}} =
-               GetProcedural.parse_response(%{instructions: []})
+    test "parse_response accepts empty instructions list" do
+      assert {:ok, []} = GetProcedural.parse_response(%{instructions: []})
+    end
+
+    test "parse_response rejects non-list instructions" do
+      for instructions <- [nil, "", %{}, 42] do
+        assert {:error, %PromptError{reason: :no_instructions_extracted}} =
+                 GetProcedural.parse_response(%{instructions: instructions})
+      end
     end
 
     test "parse_response rejects non-matching input" do

@@ -77,6 +77,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetProcedural do
   end
 
   @impl true
+  def parse_response(%{instructions: []}), do: {:ok, []}
+
   def parse_response(%{instructions: [_ | _] = instructions}) do
     {:ok,
      Enum.map(instructions, fn instr ->

@@ -487,7 +487,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
              ProceduralPrompt.schema(),
              Config.llm_opts(config, :get_procedural, llm_opts)
            ),
-         {:ok, instructions} <- ProceduralPrompt.parse_response(content),
+         {:ok, [_ | _] = instructions} <- ProceduralPrompt.parse_response(content),
          {:ok, %Embedding.Response{vectors: proc_embeddings}} <-
            ModelCall.embed_batch(
              model_context,
@@ -522,6 +522,9 @@ defmodule Mnemosyne.Pipeline.Structuring do
         end)
 
       {:ok, cs, instructions}
+    else
+      {:ok, []} -> {:ok, Changeset.new(), []}
+      {:error, _} = err -> err
     end
   end
 
