@@ -29,6 +29,26 @@ trajectory = %Mnemosyne.Trajectory{
 
 The pipeline creates an internal episode identified by `source_id`, annotates each step in order, scores the final step, closes the episode, and extracts a graph changeset. Source provenance therefore carries the caller's source ID.
 
+## Custom Node Metadata
+
+The trajectory's `metadata` map is copied into `Mnemosyne.NodeMetadata.custom` for every extracted node. It defaults to `%{}` and is stored separately from node content and internal scoring fields. Mnemosyne does not use this map for recall filtering, ranking, embeddings, authorization, or LLM prompts.
+
+Read it through the existing metadata API:
+
+```elixir
+{:ok, metadata_by_id} = Mnemosyne.get_metadata("support", receipt.node_ids)
+
+Enum.each(metadata_by_id, fn {node_id, metadata} ->
+  IO.inspect({node_id, metadata.custom})
+end)
+```
+
+For recalled memories, pass `Enum.map(memories.touched_nodes, & &1.id)` to the same API. Protected repositories require the usual `authorization:` option.
+
+Custom metadata survives persistence, access-count updates, and node merges. Tag deduplication, intent merging, and semantic consolidation combine maps shallowly: the surviving node's value wins for duplicate keys, including nested maps. Existing DETS records without this field load with `%{}`; past trajectory metadata is not backfilled.
+
+Metadata remains part of ingestion payload identity. Changing it while reusing a stored `source_id` returns a source-conflict error rather than updating the existing memory.
+
 ## Blocking Stored-or-Error Boundary
 
 `ingest/3` blocks across validation, LLM and embedding work, final graph serialization, and backend commit. `{:ok, receipt}` means the ingestion record is stored and the receipt's `node_ids` are immediately query-visible. There is no accepted-but-pending success state.

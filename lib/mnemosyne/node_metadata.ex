@@ -1,17 +1,21 @@
 defmodule Mnemosyne.NodeMetadata do
   @moduledoc """
-  Metadata tracked per node for value function scoring.
+  Per-node scoring metadata and caller-owned information.
 
   Captures access patterns, temporal information, and accumulated
   rewards to enable recency, frequency, and reward-based scoring.
   The immutable audience is inherited from the ingested trajectory; nil marks
   legacy, unclassified nodes, which are hidden in access-controlled repos.
+
+  `custom` is an open map inherited from `Trajectory.metadata`. Mnemosyne stores
+  it without using it for filtering, scoring, embeddings, or LLM prompts.
   """
 
   @enforce_keys [:created_at]
   defstruct [
     :created_at,
     audience: nil,
+    custom: %{},
     access_count: 0,
     last_accessed_at: nil,
     cumulative_reward: 0.0,
@@ -20,6 +24,7 @@ defmodule Mnemosyne.NodeMetadata do
 
   @type t :: %__MODULE__{
           audience: :repo | [{String.t(), String.t()}] | nil,
+          custom: map(),
           access_count: non_neg_integer(),
           last_accessed_at: DateTime.t() | nil,
           created_at: DateTime.t(),
@@ -32,12 +37,20 @@ defmodule Mnemosyne.NodeMetadata do
   def new(opts \\ []) do
     %__MODULE__{
       audience: Keyword.get(opts, :audience),
+      custom: Keyword.get(opts, :custom, %{}),
       access_count: Keyword.get(opts, :access_count, 0),
       last_accessed_at: Keyword.get(opts, :last_accessed_at),
       created_at: Keyword.get(opts, :created_at, DateTime.utc_now()),
       cumulative_reward: Keyword.get(opts, :cumulative_reward, 0.0),
       reward_count: Keyword.get(opts, :reward_count, 0)
     }
+  end
+
+  @doc "Combines caller maps, keeping the surviving node's values for duplicate keys."
+  @spec merge_custom(t(), t()) :: t()
+  def merge_custom(%__MODULE__{} = survivor, %__MODULE__{} = removed) do
+    custom = Map.merge(Map.get(removed, :custom, %{}), Map.get(survivor, :custom, %{}))
+    Map.put(survivor, :custom, custom)
   end
 
   @doc "Increments access count and updates last accessed timestamp."

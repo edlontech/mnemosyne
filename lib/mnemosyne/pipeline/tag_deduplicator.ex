@@ -36,31 +36,28 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
   defp do_deduplicate(tags, other_nodes, %Changeset{} = changeset, opts) do
     {kept_tags, rewrites} = deduplicate_batch(tags)
 
-    case maybe_deduplicate_against_graph(kept_tags, rewrites, opts) do
-      {:ok, rewrites} ->
-        rewrites =
-          Map.new(rewrites, fn {source_id, target_id} ->
-            {source_id, Map.get(rewrites, target_id, target_id)}
-          end)
+    with {:ok, rewrites} <- maybe_deduplicate_against_graph(kept_tags, rewrites, opts),
+         rewrites =
+           Map.new(rewrites, fn {source_id, target_id} ->
+             {source_id, Map.get(rewrites, target_id, target_id)}
+           end),
+         {:ok, cleaned_metadata} <- clean_metadata(changeset.metadata, rewrites, opts) do
+      {surviving_tags, rewrites} = remove_replaced_tags(kept_tags, rewrites)
+      rewritten_links = rewrite_links(changeset.links, rewrites)
+      deduped_links = Enum.uniq(rewritten_links)
 
-        {surviving_tags, rewrites} = remove_replaced_tags(kept_tags, rewrites)
-        rewritten_links = rewrite_links(changeset.links, rewrites)
-        deduped_links = Enum.uniq(rewritten_links)
-        cleaned_metadata = clean_metadata(changeset.metadata, rewrites)
+      result =
+        {:ok,
+         %Changeset{
+           changeset
+           | additions: other_nodes ++ surviving_tags,
+             links: deduped_links,
+             metadata: cleaned_metadata
+         }}
 
-        result =
-          {:ok,
-           %Changeset{
-             changeset
-             | additions: other_nodes ++ surviving_tags,
-               links: deduped_links,
-               metadata: cleaned_metadata
-           }}
-
-        {result, map_size(rewrites)}
-
-      {:error, _reason} = error ->
-        {error, 0}
+      {result, map_size(rewrites)}
+    else
+      {:error, _reason} = error -> {error, 0}
     end
   end
 
@@ -128,17 +125,34 @@ defmodule Mnemosyne.Pipeline.TagDeduplicator do
     end)
   end
 
-  defp clean_metadata(metadata, rewrites) do
-    Enum.reduce(rewrites, metadata, fn {source_id, target_id}, acc ->
-      propagate_reward(acc, source_id, target_id)
-    end)
+  defp clean_metadata(metadata, rewrites, _opts) when map_size(rewrites) == 0,
+    do: {:ok, metadata}
+
+  defp clean_metadata(metadata, rewrites, opts) do
+    {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
+
+    target_ids =
+      rewrites |> Map.values() |> Enum.uniq() |> Enum.reject(&Map.has_key?(metadata, &1))
+
+    with {:ok, stored_metadata, _state} <- backend_mod.get_metadata(target_ids, backend_state) do
+      metadata = Map.merge(stored_metadata, metadata)
+
+      {:ok,
+       Enum.reduce(rewrites, metadata, fn {source_id, target_id}, acc ->
+         propagate_reward(acc, source_id, target_id)
+       end)}
+    end
   end
 
   defp propagate_reward(metadata, source_id, target_id) do
     case Map.get(metadata, source_id) do
-      %NodeMetadata{cumulative_reward: reward} ->
+      %NodeMetadata{cumulative_reward: reward} = source_meta ->
         target_meta = Map.get(metadata, target_id, NodeMetadata.new())
-        updated_target = NodeMetadata.update_reward(target_meta, reward)
+
+        updated_target =
+          target_meta
+          |> NodeMetadata.update_reward(reward)
+          |> NodeMetadata.merge_custom(source_meta)
 
         metadata
         |> Map.delete(source_id)

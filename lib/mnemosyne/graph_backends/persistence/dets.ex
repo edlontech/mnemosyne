@@ -36,7 +36,7 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
       :dets.foldl(
         fn
           {{:meta, id}, meta}, {g, m, i} ->
-            {g, Map.put(m, id, meta), i}
+            {g, Map.put(m, id, Map.put_new(meta, :custom, %{})), i}
 
           {{:ingestion, source_id}, record}, {g, m, i} ->
             {g, m, Map.put(i, source_id, record)}

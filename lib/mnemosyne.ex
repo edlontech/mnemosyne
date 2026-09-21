@@ -318,7 +318,11 @@ defmodule Mnemosyne do
     end
   end
 
-  @doc "Fetches metadata for node IDs, filtered by `:authorization` in protected repos."
+  @doc """
+  Fetches metadata for node IDs, including caller data in `NodeMetadata.custom`.
+
+  Protected repos require `:authorization` and omit inaccessible IDs.
+  """
   @spec get_metadata(String.t(), [String.t()], keyword()) ::
           {:ok, %{String.t() => Mnemosyne.NodeMetadata.t()}} | {:error, term()}
   def get_metadata(repo_id, node_ids, opts \\ []) do

@@ -42,8 +42,14 @@ defmodule Mnemosyne.Pipeline.Ingestion do
 
     with {:ok, episode} <- append_steps(episode, trajectory.steps, opts),
          {:ok, episode} <- Episode.score_pending_reward(episode, opts),
-         {:ok, episode} <- Episode.close(episode) do
-      Structuring.extract(episode, opts)
+         {:ok, episode} <- Episode.close(episode),
+         {:ok, changeset} <- Structuring.extract(episode, opts) do
+      metadata =
+        Map.new(changeset.metadata, fn {id, meta} ->
+          {id, %{meta | custom: trajectory.metadata}}
+        end)
+
+      {:ok, %{changeset | metadata: metadata}}
     end
   end
 

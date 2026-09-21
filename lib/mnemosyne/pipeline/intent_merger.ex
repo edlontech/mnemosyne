@@ -97,23 +97,22 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     Enum.reduce_while(intents, {:ok, {[], %{}, %{}, metadata}}, fn intent, {:ok, acc} ->
       {acc_intents, acc_rewrites, seen, acc_meta} = acc
 
-      case find_graph_match(intent, backend_mod, backend_state, value_function) do
-        {:ok, graph_match} ->
-          batch_match = find_batch_match(intent, seen)
-          best = pick_best_match(graph_match, batch_match)
+      with {:ok, graph_match} <-
+             find_graph_match(intent, backend_mod, backend_state, value_function),
+           batch_match = find_batch_match(intent, seen),
+           strategy = classify_match(pick_best_match(graph_match, batch_match), config),
+           {:ok, acc_meta} <- load_match_metadata(strategy, acc_meta, backend_mod, backend_state) do
+        result =
+          apply_strategy(
+            strategy,
+            intent,
+            {acc_intents, acc_rewrites, seen, acc_meta},
+            opts
+          )
 
-          result =
-            apply_strategy(
-              classify_match(best, config),
-              intent,
-              {acc_intents, acc_rewrites, seen, acc_meta},
-              opts
-            )
-
-          {:cont, {:ok, result}}
-
-        {:error, _reason} = error ->
-          {:halt, error}
+        {:cont, {:ok, result}}
+      else
+        {:error, _reason} = error -> {:halt, error}
       end
     end)
     |> case do
@@ -164,11 +163,27 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     end
   end
 
+  defp load_match_metadata(:no_match, metadata, _mod, _state), do: {:ok, metadata}
+
+  defp load_match_metadata({_strategy, existing}, metadata, mod, state) do
+    if Map.has_key?(metadata, existing.id) do
+      {:ok, metadata}
+    else
+      with {:ok, stored_metadata, _state} <- mod.get_metadata([existing.id], state) do
+        {:ok, Map.merge(stored_metadata, metadata)}
+      end
+    end
+  end
+
   defp propagate_reward(metadata, source_id, target_id) do
     case Map.get(metadata, source_id) do
-      %NodeMetadata{cumulative_reward: reward, reward_count: rc} when rc > 0 ->
+      %NodeMetadata{cumulative_reward: reward, reward_count: rc} = source_meta ->
         target_meta = Map.get(metadata, target_id, NodeMetadata.new())
-        updated_target = NodeMetadata.update_reward(target_meta, reward)
+
+        target_meta =
+          if rc > 0, do: NodeMetadata.update_reward(target_meta, reward), else: target_meta
+
+        updated_target = NodeMetadata.merge_custom(target_meta, source_meta)
 
         metadata
         |> Map.delete(source_id)

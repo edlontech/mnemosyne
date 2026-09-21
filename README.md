@@ -70,6 +70,8 @@ trajectory = %Mnemosyne.Trajectory{
 
 `ingest/3` returns only after storage succeeds and the receipt's nodes are query-visible. A retry with the same repo, `source_id`, and payload returns the exact original receipt, including `node_ids` and `stored_at`. Reusing that source ID for a different goal, ordered steps, metadata, or fingerprint version returns a source-conflict error.
 
+Trajectory metadata is also stored on each extracted node as `Mnemosyne.NodeMetadata.custom`. Retrieve it with `Mnemosyne.get_metadata("my-project", receipt.node_ids)`. It does not affect recall filtering or scoring and is not sent to LLMs. See [Custom Node Metadata](guides/trajectory-ingestion.md#custom-node-metadata) for merge behavior.
+
 Recall stored knowledge later:
 
 ```elixir

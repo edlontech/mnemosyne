@@ -345,6 +345,7 @@ defmodule Mnemosyne.Pipeline.SemanticConsolidator do
         last_accessed_at: latest(winner.last_accessed_at, loser.last_accessed_at),
         created_at: earliest(winner.created_at, loser.created_at)
     }
+    |> NodeMetadata.merge_custom(loser)
   end
 
   defp latest(nil, b), do: b
