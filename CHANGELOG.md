@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.4.0...mnemosyne-v0.5.0) (2026-09-21)
+
+
+### Features
+
+* preserve custom trajectory metadata on nodes ([b1c13e3](https://github.com/edlontech/mnemosyne/commit/b1c13e3027b480e65565395e6be8092d2a0b34d2))
+
+
+### Bug Fixes
+
+* **tag-deduplication:** Batch duplicates resolve links regardless of id order ([a19594e](https://github.com/edlontech/mnemosyne/commit/a19594e4faaf0452e7139e664c61975eff349856))
+
 ## [0.4.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.3.2...mnemosyne-v0.4.0) (2026-09-11)
 
 
