@@ -3,6 +3,7 @@ defmodule Mnemosyne.Config do
 
   alias Mnemosyne.Errors.Invalid.ConfigError
   alias Mnemosyne.ValueFunction
+  alias Zoi.Types.Union
 
   @llm_schema Zoi.object(
                 %{
@@ -146,7 +147,7 @@ defmodule Mnemosyne.Config do
                      ),
                    trace_verbosity:
                      Zoi.default(
-                       Zoi.Types.Union.new([Zoi.literal(:summary), Zoi.literal(:detailed)], []),
+                       Union.new([Zoi.literal(:summary), Zoi.literal(:detailed)], []),
                        :summary,
                        description:
                          "Verbosity level for pipeline trace data in notifications (:summary or :detailed)"
@@ -186,7 +187,7 @@ defmodule Mnemosyne.Config do
       ),
     trace_verbosity:
       Zoi.default(
-        Zoi.Types.Union.new([Zoi.literal(:summary), Zoi.literal(:detailed)], []),
+        Union.new([Zoi.literal(:summary), Zoi.literal(:detailed)], []),
         :summary,
         description:
           "Verbosity level for pipeline trace data in notifications (:summary or :detailed)"
