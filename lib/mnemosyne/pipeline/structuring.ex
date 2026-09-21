@@ -396,7 +396,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
              SemanticPrompt.schema(),
              Config.llm_opts(config, :get_semantic, llm_opts)
            ),
-         {:ok, facts} <- SemanticPrompt.parse_response(content),
+         {:ok, [_ | _] = facts} <- SemanticPrompt.parse_response(content),
          {:ok, %Embedding.Response{vectors: prop_embeddings}} <-
            ModelCall.embed_batch(
              model_context,
@@ -434,6 +434,9 @@ defmodule Mnemosyne.Pipeline.Structuring do
         end)
 
       {:ok, cs}
+    else
+      {:ok, []} -> {:ok, Changeset.new()}
+      {:error, _} = err -> err
     end
   end
 

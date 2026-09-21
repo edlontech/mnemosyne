@@ -113,6 +113,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
   end
 
   @impl true
+  def parse_response(%{facts: []}), do: {:ok, []}
+
   def parse_response(%{facts: [_ | _] = facts}) do
     {:ok,
      Enum.map(facts, fn fact ->

@@ -250,9 +250,8 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
              } = second
     end
 
-    test "parse_response rejects empty facts list" do
-      assert {:error, %PromptError{reason: :no_facts_extracted}} =
-               GetSemantic.parse_response(%{facts: []})
+    test "parse_response accepts an empty facts list" do
+      assert {:ok, []} = GetSemantic.parse_response(%{facts: []})
     end
 
     test "parse_response rejects non-matching input" do

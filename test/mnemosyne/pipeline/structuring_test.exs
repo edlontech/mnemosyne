@@ -178,7 +178,59 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
     stub_default_embedding()
   end
 
+  defp stub_empty_semantic_extraction(instructions) do
+    stub_extraction_llm()
+
+    Mnemosyne.MockLLM
+    |> stub(:chat_structured, fn [%{content: system} | _], _schema, _opts ->
+      content =
+        cond do
+          system =~ "factual knowledge" -> %{facts: []}
+          system =~ "actionable instructions" -> %{instructions: instructions}
+          system =~ "prescription quality" -> %{scores: [%{index: 0, return_score: 8}]}
+        end
+
+      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    end)
+
+    Mnemosyne.MockEmbedding
+    |> stub(:embed_batch, fn texts, _opts ->
+      assert [_ | _] = texts
+      vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
+    end)
+  end
+
   describe "extract/2" do
+    test "preserves episodic memory when semantic and procedural extraction are empty" do
+      episode = build_closed_episode_with_rewards([0.1])
+      stub_empty_semantic_extraction([])
+
+      assert {:ok, %Changeset{} = cs} = Structuring.extract(episode, @default_opts)
+      assert Enum.sort(Enum.map(cs.additions, &struct_type/1)) == [:episodic, :source, :subgoal]
+    end
+
+    test "preserves procedural knowledge when semantic extraction is empty" do
+      episode = build_closed_episode_with_rewards([0.8])
+
+      stub_empty_semantic_extraction([
+        %{
+          intent: "Investigate missing invoices",
+          condition: "When an invoice is missing",
+          instruction: "Check the billing portal",
+          expected_outcome: "Determine the invoice status"
+        }
+      ])
+
+      assert {:ok, %Changeset{} = cs} = Structuring.extract(episode, @default_opts)
+
+      assert Enum.sort(Enum.map(cs.additions, &struct_type/1)) ==
+               [:episodic, :intent, :procedural, :source, :subgoal]
+
+      assert [%{instruction: "Check the billing portal", return_score: 0.7778}] =
+               Enum.filter(cs.additions, &(struct_type(&1) == :procedural))
+    end
+
     test "rejects open episodes" do
       episode = Episode.new("test")
 
