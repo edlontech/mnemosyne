@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.5.0...mnemosyne-v0.5.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* allow empty semantic extraction results ([340c343](https://github.com/edlontech/mnemosyne/commit/340c34339edffef82373cb8ef1f1c83cc3b0a2ea))
+
 ## [0.5.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.4.0...mnemosyne-v0.5.0) (2026-09-21)
 
 
