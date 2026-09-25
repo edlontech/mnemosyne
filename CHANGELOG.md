@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.5.1...mnemosyne-v0.6.0) (2026-09-25)
+
+
+### Features
+
+* Implemented 'forget' to allow selective pruning by source nodes ([e8092bb](https://github.com/edlontech/mnemosyne/commit/e8092bb12eb8a5d1fb30dff7f60ba9706b464b7a))
+
 ## [0.5.1](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.5.0...mnemosyne-v0.5.1) (2026-09-21)
 
 
