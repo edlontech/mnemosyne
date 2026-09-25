@@ -59,9 +59,7 @@ defmodule Mnemosyne.Pipeline.Decay do
 
       with {:ok, bs} <- backend_mod.delete_nodes(to_delete, bs),
            {:ok, bs} <- backend_mod.delete_metadata(to_delete, bs),
-           {:ok, orphan_ids, bs} <- find_orphaned_routing_nodes(backend_mod, bs),
-           {:ok, bs} <- backend_mod.delete_nodes(orphan_ids, bs),
-           {:ok, bs} <- backend_mod.delete_metadata(orphan_ids, bs) do
+           {:ok, orphan_ids, bs} <- prune_orphaned_routing_nodes(backend_mod, bs) do
         all_deleted = to_delete ++ orphan_ids
 
         {:ok, %{deleted: length(all_deleted), checked: length(nodes), deleted_ids: all_deleted},
@@ -70,13 +68,17 @@ defmodule Mnemosyne.Pipeline.Decay do
     end
   end
 
-  defp find_orphaned_routing_nodes(backend_mod, bs) do
-    with {:ok, routing_nodes, bs} <- backend_mod.get_nodes_by_type([:tag, :intent], bs) do
-      orphans =
-        routing_nodes
-        |> Enum.filter(&(NodeHelpers.all_linked_ids(&1) |> MapSet.size() == 0))
-        |> Enum.map(&NodeProtocol.id/1)
-
+  @doc "Deletes Tags and Intents that have no remaining links, returning their IDs."
+  @spec prune_orphaned_routing_nodes(module(), term()) ::
+          {:ok, [String.t()], term()} | {:error, term()}
+  def prune_orphaned_routing_nodes(backend_mod, bs) do
+    with {:ok, routing_nodes, bs} <- backend_mod.get_nodes_by_type([:tag, :intent], bs),
+         orphans =
+           routing_nodes
+           |> Enum.filter(&(NodeHelpers.all_linked_ids(&1) |> MapSet.size() == 0))
+           |> Enum.map(&NodeProtocol.id/1),
+         {:ok, bs} <- backend_mod.delete_nodes(orphans, bs),
+         {:ok, bs} <- backend_mod.delete_metadata(orphans, bs) do
       {:ok, orphans, bs}
     end
   end

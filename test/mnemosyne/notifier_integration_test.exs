@@ -638,6 +638,21 @@ defmodule Mnemosyne.NotifierIngestionIntegrationTest do
            ] = ingestion_events(repo_id)
   end
 
+  test "notifies a forgotten ingestion with the deleted node ids", %{tmp_dir: tmp_dir} do
+    repo_id = "forget-notifier-repo"
+    store = start_store(tmp_dir, repo_id: repo_id)
+    stub(Ingestion, :run, fn _input, _opts -> {:ok, changeset("forgotten")} end)
+    {:ok, _receipt} = MemoryStore.ingest(store, trajectory())
+
+    assert {:ok, result} = MemoryStore.forget(store, "source-1")
+
+    assert {:ingestion_forgotten, ^result, metadata} =
+             Enum.find(ingestion_events(repo_id), &match?({:ingestion_forgotten, _, _}, &1))
+
+    assert result == %{source_id: "source-1", deleted_ids: ["forgotten"]}
+    assert metadata == ingestion_metadata(repo_id, "source-1")
+  end
+
   test "does not notify invalid input rejected before admission", %{tmp_dir: tmp_dir} do
     repo_id = "invalid-notifier-repo"
     store = start_store(tmp_dir, repo_id: repo_id)

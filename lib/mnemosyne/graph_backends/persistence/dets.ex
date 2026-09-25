@@ -104,6 +104,12 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETS do
     end
   end
 
+  @doc "Removes the `{:ingestion, source_id}` record from DETS."
+  @spec delete_ingestion(String.t(), map()) :: :ok | {:error, term()}
+  def delete_ingestion(source_id, %{ref: ref}) do
+    with :ok <- :dets.delete(ref, {:ingestion, source_id}), do: :dets.sync(ref)
+  end
+
   @doc "Persists metadata entries as `{{:meta, id}, metadata}` records."
   @spec save_metadata(%{String.t() => struct()}, map()) :: :ok | {:error, term()}
   def save_metadata(entries, %{ref: ref}) do

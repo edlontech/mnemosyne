@@ -58,6 +58,7 @@ defmodule Mnemosyne do
       graph = Mnemosyne.get_graph("my-repo")
       :ok = Mnemosyne.apply_changeset("my-repo", changeset)
       :ok = Mnemosyne.delete_nodes("my-repo", ["node-1", "node-2"])
+      {:ok, %{deleted_ids: ids}} = Mnemosyne.forget("my-repo", "source-1")
 
   ## Supervision
 
@@ -243,6 +244,32 @@ defmodule Mnemosyne do
     do: %{node_count: length(node_ids)}
 
   defp ingestion_measurements({:error, _}), do: %{}
+
+  @doc """
+  Forgets an ingestion: deletes the nodes it produced and frees its source ID.
+
+  Removes the receipt's nodes and their metadata, prunes Tags and Intents left
+  without links, and deletes the ingestion record so the same `source_id` can
+  be ingested again. Nodes already consolidated or decayed are skipped, and
+  routing nodes still linked from other ingestions survive.
+
+  Returns `{:error, NotFoundError}` (`resource: :ingestion`) for an unknown
+  source and an `IngestionError` (`:ingestion_in_progress`) while that source is
+  being ingested. In protected repos, `:authorization` must be allowed to
+  `:ingest` for the recorded audience.
+
+  ## Options
+
+    * `:supervisor` - Name of the Mnemosyne supervisor. Defaults to `Mnemosyne.Supervisor`.
+    * `:authorization` - Trusted principal, memberships, and groups for protected repos.
+  """
+  @spec forget(String.t(), String.t(), keyword()) ::
+          {:ok, Mnemosyne.Pipeline.Forget.result()} | {:error, Mnemosyne.Errors.error()}
+  def forget(repo_id, source_id, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.forget(pid, source_id, Keyword.delete(opts, :supervisor))
+    end
+  end
 
   @doc """
   Retrieves relevant memories from the knowledge graph for the given query.

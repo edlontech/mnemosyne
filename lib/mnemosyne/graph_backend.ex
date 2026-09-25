@@ -12,6 +12,7 @@ defmodule Mnemosyne.GraphBackend do
   - `apply_changeset/2` - Persist a batch of node additions and links.
   - `get_ingestion/2` - Fetch a durable ingestion record by source ID.
   - `commit_ingestion/3` - Compare-and-set graph changes and an ingestion record, reporting whether it inserted or found an equal record.
+  - `delete_ingestion/2` - Remove a durable ingestion record by source ID so the source can be ingested again.
   - `delete_nodes/2` - Remove nodes by their IDs.
   - `find_candidates/6` - Query for nodes matching type/embedding/tag criteria.
   - `get_node/2` - Fetch a single node by ID.
@@ -53,6 +54,9 @@ defmodule Mnemosyne.GraphBackend do
   @callback commit_ingestion(ingestion_record(), Changeset.t(), state()) ::
               {:ok, :inserted | :existing, Mnemosyne.IngestionReceipt.t(), state()}
               | {:error, Mnemosyne.Errors.error()}
+
+  @callback delete_ingestion(String.t(), state()) ::
+              {:ok, state()} | {:error, Mnemosyne.Errors.error()}
 
   @callback delete_nodes([String.t()], state()) ::
               {:ok, state()} | {:error, Mnemosyne.Errors.error()}

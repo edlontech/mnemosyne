@@ -20,6 +20,7 @@ defmodule Mnemosyne.Notifier do
           | {:trajectory_ingestion_failed, source_id :: String.t(), reason :: term(), metadata()}
           | {:changeset_applied, Mnemosyne.Graph.Changeset.t(), metadata()}
           | {:nodes_deleted, [String.t()], metadata()}
+          | {:ingestion_forgotten, Mnemosyne.Pipeline.Forget.result(), metadata()}
           | {:decay_completed,
              %{
                checked: non_neg_integer(),

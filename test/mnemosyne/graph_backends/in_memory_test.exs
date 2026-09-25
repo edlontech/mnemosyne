@@ -128,6 +128,28 @@ defmodule Mnemosyne.GraphBackends.InMemoryTest do
       assert {:ok, %{}, ^state} = InMemory.get_metadata(["s2"], state)
     end
 
+    test "delete_ingestion removes the record so the source can be committed again" do
+      {:ok, state} = InMemory.init([])
+      record = ingestion_record()
+
+      {:ok, :inserted, _receipt, state} =
+        InMemory.commit_ingestion(record, Changeset.new(), state)
+
+      assert {:ok, state} = InMemory.delete_ingestion("source-1", state)
+      assert {:ok, nil, ^state} = InMemory.get_ingestion("source-1", state)
+
+      fresh_record = ingestion_record(payload_digest: <<9, 9, 9>>)
+
+      assert {:ok, :inserted, _receipt, _state} =
+               InMemory.commit_ingestion(fresh_record, Changeset.new(), state)
+    end
+
+    test "delete_ingestion of a missing source is a no-op" do
+      {:ok, state} = InMemory.init([])
+
+      assert {:ok, ^state} = InMemory.delete_ingestion("missing", state)
+    end
+
     test "a different digest returns a source conflict without mutation" do
       {:ok, state} = InMemory.init([])
       record = ingestion_record()

@@ -18,6 +18,7 @@ defmodule Mnemosyne.MemoryStore do
 
   alias Mnemosyne.AccessControl
   alias Mnemosyne.AccessControl.View
+  alias Mnemosyne.Errors.Framework.NotFoundError
   alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Errors.Invalid.AccessError
   alias Mnemosyne.Errors.Invalid.IngestionError
@@ -28,6 +29,7 @@ defmodule Mnemosyne.MemoryStore do
   alias Mnemosyne.Notifier
   alias Mnemosyne.Pipeline.Decay
   alias Mnemosyne.Pipeline.EpisodicValidation
+  alias Mnemosyne.Pipeline.Forget
   alias Mnemosyne.Pipeline.GraphRepair
   alias Mnemosyne.Pipeline.Ingestion
   alias Mnemosyne.Pipeline.IntentMerger
@@ -90,6 +92,13 @@ defmodule Mnemosyne.MemoryStore do
   @spec delete_nodes(GenServer.server(), [String.t()]) :: :ok | {:error, AccessError.t()}
   def delete_nodes(server, node_ids) do
     GenServer.call(server, {:delete_nodes, node_ids})
+  end
+
+  @doc "Removes everything an ingestion produced and frees its source ID."
+  @spec forget(GenServer.server(), String.t(), keyword()) ::
+          {:ok, Forget.result()} | {:error, Mnemosyne.Errors.error()}
+  def forget(server, source_id, opts \\ []) do
+    GenServer.call(server, {:forget, source_id, opts}, :infinity)
   end
 
   @doc "Consolidates near-duplicate semantic nodes."
@@ -240,6 +249,19 @@ defmodule Mnemosyne.MemoryStore do
     {:reply, :ok, enqueue_or_dispatch_write({:delete_nodes, ids, nil}, state)}
   end
 
+  def handle_call({:forget, source_id, _opts}, _from, state)
+      when is_map_key(state.pending_ingestions, source_id) do
+    error = IngestionError.exception(source_id: source_id, reason: :ingestion_in_progress)
+    {:reply, {:error, error}, state}
+  end
+
+  def handle_call({:forget, source_id, opts}, from, state) do
+    case authorize_forget(source_id, opts, state) do
+      :ok -> {:noreply, enqueue_or_dispatch_write({:forget, source_id, from}, state)}
+      {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
   @impl true
   def handle_call({:apply_changeset, _changeset}, _from, %{access_control: control} = state)
       when not is_nil(control) do
@@ -351,6 +373,33 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   # -- Private: Ingestion --
+
+  defp authorize_forget(_source_id, _opts, %{access_control: nil}), do: :ok
+
+  defp authorize_forget(source_id, opts, state) do
+    {backend_mod, backend_state} = state.backend
+
+    case backend_mod.get_ingestion(source_id, backend_state) do
+      {:ok, nil, _} ->
+        AccessControl.member(
+          state.access_control,
+          Keyword.get(opts, :authorization),
+          state.repo_id
+        )
+
+      {:ok, record, _} ->
+        AccessControl.authorize(
+          state.access_control,
+          Keyword.get(opts, :authorization),
+          state.repo_id,
+          :ingest,
+          %{id: source_id, audience: Map.get(record, :audience), node_type: :trajectory}
+        )
+
+      {:error, _} = error ->
+        error
+    end
+  end
 
   defp authorize_ingestion(%{audience: nil} = trajectory, _opts, %{access_control: nil}),
     do: {:ok, trajectory}
@@ -579,6 +628,15 @@ defmodule Mnemosyne.MemoryStore do
     {task.ref, {:delete_nodes, from}}
   end
 
+  defp spawn_write_task({:forget, source_id, from}, state) do
+    task =
+      Task.Supervisor.async_nolink(state.task_supervisor, fn ->
+        {:ok, {:forget, source_id}}
+      end)
+
+    {task.ref, {:forget, from}}
+  end
+
   defp merge_changeset(changeset, backend, execution_opts) do
     config = Keyword.fetch!(execution_opts, :config)
 
@@ -614,6 +672,9 @@ defmodule Mnemosyne.MemoryStore do
 
       {{:ok, {:delete_nodes, node_ids}}, {:delete_nodes, from}} ->
         delete_nodes_from_backend(node_ids, from, state)
+
+      {{:ok, {:forget, source_id}}, {:forget, from}} ->
+        forget_from_backend(source_id, from, state)
 
       {{:error, reason} = error, {:commit_ingestion, source_id}} ->
         Logger.error("Write task failed (commit_ingestion): #{inspect(reason)}")
@@ -687,6 +748,38 @@ defmodule Mnemosyne.MemoryStore do
       {:error, reason} = error ->
         Logger.error("Backend delete_nodes failed: #{inspect(reason)}")
         notify_write_failure(:delete_nodes, reason, state)
+        reply_and_dispatch(from, error, state)
+    end
+  end
+
+  defp forget_from_backend(source_id, from, state) do
+    metadata = ingestion_metadata(state, source_id)
+
+    result =
+      Telemetry.span([:ingestion, :forget], metadata, fn ->
+        case Forget.forget(source_id, backend: state.backend) do
+          {:ok, result, _backend} = ok -> {ok, %{deleted: length(result.deleted_ids)}}
+          {:error, _} = error -> {error, %{}}
+        end
+      end)
+
+    case result do
+      {:ok, result, backend} ->
+        Notifier.safe_notify(
+          state.notifier,
+          state.repo_id,
+          {:ingestion_forgotten, result, metadata}
+        )
+
+        GenServer.reply(from, {:ok, result})
+        {:noreply, dispatch_write(%{state | backend: backend})}
+
+      {:error, %NotFoundError{}} = error ->
+        reply_and_dispatch(from, error, state)
+
+      {:error, reason} = error ->
+        Logger.error("Backend forget failed: #{inspect(reason)}")
+        notify_write_failure(:forget, reason, state)
         reply_and_dispatch(from, error, state)
     end
   end

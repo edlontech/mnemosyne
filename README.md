@@ -142,7 +142,7 @@ Each repository has its own `MemoryStore` and backend. The built-in `InMemory` b
 
 ## Maintenance and Events
 
-`Mnemosyne.consolidate_semantics/2` merges near-duplicate semantic knowledge, and `Mnemosyne.decay_nodes/2` removes low-utility graph nodes. Ingestion identity records remain after graph deletion or decay, so retrying a deleted source returns its original receipt rather than recreating memory.
+`Mnemosyne.consolidate_semantics/2` merges near-duplicate semantic knowledge, and `Mnemosyne.decay_nodes/2` removes low-utility graph nodes. Ingestion identity records remain after graph deletion or decay, so retrying a deleted source returns its original receipt rather than recreating memory. `Mnemosyne.forget/3` is the explicit undo: it deletes the nodes an ingestion produced, prunes orphaned tags and intents, and removes the identity record so the source ID can be ingested again.
 
 `Mnemosyne.Notifier` emits authoritative ingestion, recall, graph-write, and maintenance outcomes. Notifier failures are isolated from memory operations.
 

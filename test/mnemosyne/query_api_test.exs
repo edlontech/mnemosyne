@@ -136,4 +136,14 @@ defmodule Mnemosyne.QueryApiTest do
                Mnemosyne.get_node("ghost-repo", "s1", supervisor: sup)
     end
   end
+
+  describe "forget/3" do
+    test "returns NotFoundError for an unknown source or repo", %{repo_id: repo_id, sup: sup} do
+      assert {:error, %NotFoundError{resource: :ingestion, id: "nope"}} =
+               Mnemosyne.forget(repo_id, "nope", supervisor: sup)
+
+      assert {:error, %NotFoundError{resource: :repo}} =
+               Mnemosyne.forget("ghost-repo", "nope", supervisor: sup)
+    end
+  end
 end

@@ -8,6 +8,7 @@ defmodule Mnemosyne.SensitiveMemoryTest.Backend do
   defdelegate apply_changeset(changeset, state), to: InMemory
   defdelegate get_ingestion(source, state), to: InMemory
   defdelegate commit_ingestion(record, changeset, state), to: InMemory
+  defdelegate delete_ingestion(source, state), to: InMemory
   defdelegate delete_nodes(ids, state), to: InMemory
   defdelegate find_candidates(types, query, tags, config, opts, state), to: InMemory
   defdelegate get_node(id, state), to: InMemory
@@ -24,6 +25,7 @@ defmodule Mnemosyne.SensitiveMemoryTest do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding.Response, as: EmbeddingResponse
+  alias Mnemosyne.Errors.Invalid.AccessError
   alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Changeset
@@ -286,6 +288,44 @@ defmodule Mnemosyne.SensitiveMemoryTest do
 
     assert {:ok, nil} =
              Mnemosyne.get_node(ctx.repo, "ingested", supervisor: ctx.sup, authorization: auth())
+  end
+
+  test "forget requires ingest rights for the recorded audience", ctx do
+    assert {:ok, store} = open(ctx)
+
+    stub(Ingestion, :run, fn _trajectory, _opts ->
+      cs =
+        Changeset.add_node(Changeset.new(), %Semantic{
+          id: "ingested",
+          proposition: "Restricted result",
+          confidence: 0.9
+        })
+
+      {:ok, cs}
+    end)
+
+    allow(Ingestion, self(), store)
+
+    trajectory = %Trajectory{
+      source_id: "new",
+      goal: "Investigate",
+      audience: [{"org", "security"}],
+      steps: [%{observation: "Issue", action: "Inspect"}]
+    }
+
+    writer = [supervisor: ctx.sup, authorization: auth([{"org", "security"}])]
+    assert {:ok, _receipt} = Mnemosyne.ingest(ctx.repo, trajectory, writer)
+
+    assert {:error, %AccessError{}} = Mnemosyne.forget(ctx.repo, "new", supervisor: ctx.sup)
+    assert {:error, %AccessError{}} = Mnemosyne.forget(ctx.repo, "nope", supervisor: ctx.sup)
+
+    assert {:error, %AccessError{}} =
+             Mnemosyne.forget(ctx.repo, "new", supervisor: ctx.sup, authorization: auth())
+
+    assert {:ok, %Semantic{id: "ingested"}} = Mnemosyne.get_node(ctx.repo, "ingested", writer)
+
+    assert {:ok, %{deleted_ids: ["ingested"]}} = Mnemosyne.forget(ctx.repo, "new", writer)
+    assert {:ok, nil} = Mnemosyne.get_node(ctx.repo, "ingested", writer)
   end
 
   test "tag and intent deduplication never crosses audiences", ctx do

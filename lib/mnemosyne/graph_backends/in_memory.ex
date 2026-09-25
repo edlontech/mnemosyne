@@ -91,6 +91,17 @@ defmodule Mnemosyne.GraphBackends.InMemory do
   end
 
   @impl true
+  def delete_ingestion(source_id, state) do
+    case maybe_delete_ingestion(source_id, state.persistence) do
+      :ok ->
+        {:ok, %{state | ingestions: Map.delete(state.ingestions, source_id)}}
+
+      {:error, reason} ->
+        {:error, StorageError.exception(operation: :delete_ingestion, reason: reason)}
+    end
+  end
+
+  @impl true
   def delete_nodes(node_ids, state) do
     updated_graph = Enum.reduce(node_ids, state.graph, &Graph.delete_node(&2, &1))
     :ok = maybe_delete(node_ids, state.persistence)
@@ -218,4 +229,7 @@ defmodule Mnemosyne.GraphBackends.InMemory do
   defp maybe_persist_ingestion(record, changeset, {mod, ps}) do
     mod.commit_ingestion(record, changeset, ps)
   end
+
+  defp maybe_delete_ingestion(_source_id, nil), do: :ok
+  defp maybe_delete_ingestion(source_id, {mod, ps}), do: mod.delete_ingestion(source_id, ps)
 end

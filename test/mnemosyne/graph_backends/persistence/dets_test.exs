@@ -284,6 +284,23 @@ defmodule Mnemosyne.GraphBackends.Persistence.DETSTest do
       :dets.close(reopened_after_delete.persistence |> elem(1) |> Map.fetch!(:ref))
     end
 
+    test "delete_ingestion drops the record across close and re-init", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "forget_ingestion.dets")
+      persistence = {PersistenceDETS, [path: path]}
+
+      {:ok, state} = InMemory.init(persistence: persistence)
+
+      {:ok, :inserted, _, state} =
+        InMemory.commit_ingestion(ingestion_record(), Changeset.new(), state)
+
+      {:ok, state} = InMemory.delete_ingestion("source-1", state)
+      assert :ok = :dets.close(state.persistence |> elem(1) |> Map.fetch!(:ref))
+
+      {:ok, reopened} = InMemory.init(persistence: persistence)
+      assert {:ok, nil, ^reopened} = InMemory.get_ingestion("source-1", reopened)
+      :dets.close(reopened.persistence |> elem(1) |> Map.fetch!(:ref))
+    end
+
     test "returns a storage error without mutating caller state when DETS is closed", %{
       tmp_dir: tmp_dir
     } do

@@ -11,6 +11,7 @@ defmodule Mnemosyne.MemoryStoreTest do
 
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
+  alias Mnemosyne.Errors.Framework.NotFoundError
   alias Mnemosyne.Errors.Framework.PipelineError
   alias Mnemosyne.Errors.Framework.StorageError
   alias Mnemosyne.Errors.Invalid.IngestionError
@@ -792,6 +793,45 @@ defmodule Mnemosyne.MemoryStoreTest do
       assert :ok = MemoryStore.delete_nodes(pid, ["del-1"])
 
       assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "del-1") == nil)
+    end
+  end
+
+  describe "forget/3" do
+    test "removes an ingestion and lets the source be ingested again", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir, repo_id: "forget-repo")
+      first = Changeset.add_node(Changeset.new(), make_semantic("fact-1", "First fact"))
+      second = Changeset.add_node(Changeset.new(), make_semantic("fact-2", "Second fact"))
+
+      stub(Ingestion, :run, fn _trajectory, _opts -> {:ok, first} end)
+
+      assert {:ok, %IngestionReceipt{node_ids: ["fact-1"]}} =
+               MemoryStore.ingest(pid, trajectory())
+
+      assert {:ok, %{source_id: "source-1", deleted_ids: ["fact-1"]}} =
+               MemoryStore.forget(pid, "source-1")
+
+      assert Graph.get_node(MemoryStore.get_graph(pid), "fact-1") == nil
+
+      assert {:error, %NotFoundError{resource: :ingestion, id: "source-1"}} =
+               MemoryStore.forget(pid, "source-1")
+
+      stub(Ingestion, :run, fn _trajectory, _opts -> {:ok, second} end)
+
+      assert {:ok, %IngestionReceipt{node_ids: ["fact-2"]}} =
+               MemoryStore.ingest(pid, trajectory())
+    end
+
+    test "rejects forgetting a source whose ingestion is in flight", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+      extraction_gate(self())
+      task = start_ingest(pid, trajectory())
+      assert_receive {:extraction_started, "source-1", extraction_pid, _opts}
+
+      assert {:error, %IngestionError{source_id: "source-1", reason: :ingestion_in_progress}} =
+               MemoryStore.forget(pid, "source-1")
+
+      send(extraction_pid, {:finish_extraction, {:ok, Changeset.new()}})
+      assert {:ok, %IngestionReceipt{}} = Task.await(task)
     end
   end
 
