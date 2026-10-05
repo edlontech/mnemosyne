@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.6.0...mnemosyne-v0.6.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **access-control:** Memories without audience are treated as public ([6a0350a](https://github.com/edlontech/mnemosyne/commit/6a0350a1a23bb690f04727c62fbc0368a01c4b5b))
+* **memory:** Hibernate the memory store if not active ([a4a3873](https://github.com/edlontech/mnemosyne/commit/a4a38738e1f820d0e7728eb861bbdc9f197d3c6d))
+
 ## [0.6.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.5.1...mnemosyne-v0.6.0) (2026-09-25)
 
 
