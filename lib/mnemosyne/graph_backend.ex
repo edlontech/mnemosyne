@@ -25,7 +25,7 @@ defmodule Mnemosyne.GraphBackend do
 
   Backends used with access control must persist `NodeMetadata.audience`, preserve
   it during usage updates and consolidation, and reject changes to an assigned
-  audience. An absent audience is legacy, unclassified data. Protected reads
+  audience. An absent audience is public, equivalent to `:repo`. Protected reads
   enumerate built-in node types to create an authorized snapshot before scoring.
   """
 

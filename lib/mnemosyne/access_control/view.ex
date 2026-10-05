@@ -14,11 +14,11 @@ defmodule Mnemosyne.AccessControl.View do
 
   @node_types [:episodic, :semantic, :procedural, :subgoal, :source, :tag, :intent]
 
-  @doc "Builds a view containing only nodes with the exact audience."
+  @doc "Builds a view containing only nodes with the exact audience; unlabeled nodes count as `:repo`."
   @spec scope({module(), term()}, term()) :: {:ok, {module(), term()}} | {:error, term()}
   def scope(backend, audience) do
     build(backend, fn _node, metadata ->
-      {:ok, Map.get(metadata || %{}, :audience) == audience}
+      {:ok, (Map.get(metadata || %{}, :audience) || :repo) == audience}
     end)
   end
 

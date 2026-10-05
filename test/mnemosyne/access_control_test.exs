@@ -198,7 +198,23 @@ defmodule Mnemosyne.AccessControlTest do
     assert {:ok, true} = AccessControl.allowed?(config, auth(), "repo-1", :read, second)
   end
 
-  test "custom permit cannot bypass membership or unlabeled-memory checks" do
+  test "unlabeled memories are public to repo members" do
+    assert {:ok, config} = AccessControl.new(policy: :membership_and_audience)
+
+    assert {:ok, true} = AccessControl.allowed?(config, auth(), "repo-1", :read, resource(nil))
+    assert {:ok, true} = AccessControl.allowed?(config, auth(), "repo-1", :ingest, resource(nil))
+
+    assert {:error, %AccessError{reason: :not_repo_member}} =
+             AccessControl.allowed?(
+               config,
+               auth(repos: ["repo-2"]),
+               "repo-1",
+               :read,
+               resource(nil)
+             )
+  end
+
+  test "custom permit cannot bypass membership or malformed-audience checks" do
     assert {:ok, config} = AccessControl.new(policy: @permit_all)
 
     assert {:error, %AccessError{reason: :not_repo_member}} =
@@ -209,9 +225,6 @@ defmodule Mnemosyne.AccessControlTest do
                :read,
                resource(:repo)
              )
-
-    assert {:ok, false} =
-             AccessControl.allowed?(config, auth(), "repo-1", :read, resource(nil))
 
     assert {:ok, false} =
              AccessControl.allowed?(

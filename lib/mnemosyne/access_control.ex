@@ -8,6 +8,9 @@ defmodule Mnemosyne.AccessControl do
   `["groups", encoded_group_id, ...]`, where each group ID is itself the JSON
   encoding of `[organization, group]`. Consequently, same-type memories in
   the same repository and audience always evaluate identically.
+
+  Memories without an audience are public: they evaluate exactly like the
+  `:repo` audience, so any repository member can read them.
   """
 
   alias Mnemosyne.Errors.Invalid.AccessError
@@ -198,7 +201,7 @@ defmodule Mnemosyne.AccessControl do
 
   defp validate_resource(_resource), do: error(:invalid_resource)
 
-  defp resource_attributes(id, node_type, :repo) do
+  defp resource_attributes(id, node_type, audience) when audience in [:repo, nil] do
     {:ok, %{id: id, shared: true, audience: [], node_type: Atom.to_string(node_type)}}
   end
 

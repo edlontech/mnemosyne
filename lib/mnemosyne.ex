@@ -93,8 +93,6 @@ defmodule Mnemosyne do
     * `:config` - A `Mnemosyne.Config` struct overriding shared defaults.
     * `:access_control` - Opt-in Cedar configuration: `[policy: :membership_and_audience]`
       or `[policy: cedar_source]`. Omitted or false preserves unrestricted access.
-    * `:legacy_audience` - Operator-only first assignment for all unlabeled nodes.
-      Requires access control and never changes an assigned audience.
     * `:llm` - LLM adapter module overriding shared defaults.
     * `:embedding` - Embedding adapter module overriding shared defaults.
     * `:telemetry_labels` - Flat map of string or atom keys to string, atom,
@@ -125,7 +123,6 @@ defmodule Mnemosyne do
       name: via,
       repo_id: repo_id,
       access_control: Keyword.get(opts, :access_control),
-      legacy_audience: Keyword.get(opts, :legacy_audience),
       telemetry_labels: telemetry_labels,
       backend: Keyword.get(opts, :backend, defaults.backend),
       config: Keyword.get(opts, :config, defaults.config),

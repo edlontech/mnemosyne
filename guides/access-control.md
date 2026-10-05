@@ -28,7 +28,7 @@ Open the repo with the built-in policy:
   )
 ```
 
-Omitting `access_control` or setting it to `false` preserves the existing behavior for unlabeled repos. A repo containing labeled memories refuses to open without access control, preventing accidental exposure when that option is omitted. Supplying an audience to ingestion without enabling access control is rejected, rather than appearing to store a protected memory in an unrestricted repo.
+Omitting `access_control` or setting it to `false` opens the repo as open access: every stored node is readable regardless of any audience it carries, and opening performs no scan of the stored graph. Supplying an audience to ingestion without enabling access control is rejected, rather than appearing to store a protected memory in an unrestricted repo.
 
 ## Audiences and trusted membership
 
@@ -120,31 +120,18 @@ Group IDs in Cedar are JSON encodings of `[organization_id, group_id]`; default 
 
 Cedar memory entity IDs identify `{repo, audience, node_type}`, **not actual graph node IDs**. Same-type memories with the same audience must authorize identically, allowing consolidation without changing their readership. Custom policies cannot implement individual-node exceptions through a graph node ID. See `Mnemosyne.AccessControl` for the exact scope-ID encoding.
 
-Policies are compiled and schema-validated at repo startup. Invalid policies prevent opening the repo. Missing or malformed node audiences are denied even by a custom permit-all policy. Evaluation diagnostics and adapter failures fail closed, including when another Cedar policy otherwise permits the request.
+Policies are compiled and schema-validated at repo startup. Invalid policies prevent opening the repo. A missing node audience is evaluated as `:repo`; malformed audiences are denied even by a custom permit-all policy. Evaluation diagnostics and adapter failures fail closed, including when another Cedar policy otherwise permits the request.
 
-## Legacy memories
+## Unlabeled memories
 
-Enabling access control hides existing nodes without an audience. To make a reviewed legacy corpus available, a trusted operator may explicitly classify **all currently unlabeled nodes** when opening the repo:
-
-```elixir
-{:ok, _pid} =
-  Mnemosyne.open_repo("legacy-project",
-    backend:
-      {Mnemosyne.GraphBackends.InMemory,
-       persistence: {Mnemosyne.GraphBackends.Persistence.DETS, path: "legacy.dets"}},
-    access_control: [policy: :membership_and_audience],
-    legacy_audience: [{"acme", "security"}]
-  )
-```
-
-This is a first assignment, not relabeling. Already assigned audiences are untouched. Review the entire unclassified corpus before choosing an audience, since historical extraction may have combined information from multiple sources. Remove the migration option after the intended startup. It does not rewrite historical ingestion fingerprints or receipts.
+Nodes without an audience (ingested before access control was enabled) are public: in a protected repo they behave exactly like `:repo` memories, readable by any repo member and never relabeled. Forgetting their sources requires `:ingest` rights for `:repo`. To restrict such memories, forget the affected sources and re-ingest them with an explicit audience.
 
 ## Maintenance and backends
 
-Protected maintenance calls require trusted repo membership via `authorization:`. They are repo-wide operator operations; keep them behind an application administration boundary. Tag/intent deduplication uses the exact ingestion audience, and semantic consolidation selects pairs only within identical audiences. Unclassified semantic nodes are not merged in protected repos.
+Protected maintenance calls require trusted repo membership via `authorization:`. They are repo-wide operator operations; keep them behind an application administration boundary. Tag/intent deduplication uses the exact ingestion audience, and semantic consolidation selects pairs only within identical audiences; unlabeled nodes belong to the `:repo` audience for both.
 
 Protected maintenance and graph commits do not overlap. A maintenance request returns `AccessError` with reason `:maintenance_busy` when another maintenance task, write, or ingestion is active. An ingestion started during maintenance can extract concurrently, but its commit waits until maintenance finishes. Unrestricted repos retain their existing lane behavior.
 
-Audiences persist with node metadata, including through DETS restarts. Custom backends must preserve `NodeMetadata.audience` during usage updates and merges, reject changes to an assigned audience, and persist ingestion metadata and receipts according to the existing commit contract. Legacy metadata without the field is treated as unclassified.
+Audiences persist with node metadata, including through DETS restarts. Custom backends must preserve `NodeMetadata.audience` during usage updates and merges, reject changes to an assigned audience, and persist ingestion metadata and receipts according to the existing commit contract. Metadata without the field is treated as public (`:repo`).
 
 The initial implementation enumerates built-in node types through `get_nodes_by_type/2` and materializes a read-only `InMemory` snapshot, using the configured value function for ranking. It does not use a custom backend's native candidate search for protected reads. This costs O(nodes + edges) graph work per view, plus Cedar evaluations, and intentionally avoids a new backend callback protocol. Large or remote backends will need equivalent authorization-aware query support before using this path at scale.

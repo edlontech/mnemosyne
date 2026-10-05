@@ -104,29 +104,38 @@ defmodule Mnemosyne.SensitiveMemoryTest do
     %{principal: "alice", repos: ["shared-repo"], groups: groups}
   end
 
-  test "public reads hide restricted and unclassified nodes and strip hidden link IDs", ctx do
+  test "public reads hide restricted nodes, treat unclassified nodes as public, and strip hidden link IDs",
+       ctx do
     assert {:ok, _} = open(ctx)
     opts = [supervisor: ctx.sup, authorization: auth()]
 
     assert {:ok, nil} = Mnemosyne.get_node(ctx.repo, "secret", opts)
-    assert {:ok, nil} = Mnemosyne.get_node(ctx.repo, "legacy", opts)
+    assert {:ok, %Semantic{id: "legacy"}} = Mnemosyne.get_node(ctx.repo, "legacy", opts)
 
     assert {:ok, %Semantic{id: "shared", links: links}} =
              Mnemosyne.get_node(ctx.repo, "shared", opts)
 
     assert MapSet.size(links.sibling) == 0
 
-    assert {:ok, [%Semantic{id: "shared"}]} =
-             Mnemosyne.get_nodes_by_type(ctx.repo, [:semantic], opts)
+    assert {:ok, nodes} = Mnemosyne.get_nodes_by_type(ctx.repo, [:semantic], opts)
+    assert Enum.map(nodes, & &1.id) |> Enum.sort() == ["legacy", "shared"]
 
-    assert {:ok, [%Semantic{id: "shared"}]} =
+    assert {:ok, linked} =
              Mnemosyne.get_linked_nodes(ctx.repo, ["shared", "secret", "legacy"], opts)
+
+    assert Enum.map(linked, & &1.id) |> Enum.sort() == ["legacy", "shared"]
 
     assert {:ok, metadata} =
              Mnemosyne.get_metadata(ctx.repo, ["shared", "secret", "legacy"], opts)
 
-    assert Map.keys(metadata) == ["shared"]
-    assert {:ok, [{%Semantic{id: "shared"}, _}]} = Mnemosyne.latest(ctx.repo, 10, opts)
+    assert Map.keys(metadata) |> Enum.sort() == ["legacy", "shared"]
+
+    assert {:ok, latest} = Mnemosyne.latest(ctx.repo, 10, opts)
+
+    assert Enum.map(latest, fn {node, _meta} -> node.id end) |> Enum.sort() == [
+             "legacy",
+             "shared"
+           ]
 
     assert {:ok, %Semantic{id: "secret"}} =
              Mnemosyne.get_node(ctx.repo, "secret",
@@ -140,7 +149,7 @@ defmodule Mnemosyne.SensitiveMemoryTest do
 
   test "recall never sends hidden knowledge to models or returns it in traces", ctx do
     config = ctx.config
-    config = put_in(config.value_function.params.semantic.top_k, 1)
+    config = put_in(config.value_function.params.semantic.top_k, 2)
     assert {:ok, store} = open(ctx, config: config)
     parent = self()
 
@@ -189,12 +198,11 @@ defmodule Mnemosyne.SensitiveMemoryTest do
                max_hops: 2
              )
 
-    assert Enum.map(result.touched_nodes, & &1.id) == ["shared"]
-    assert Map.keys(result.trace.scores) == ["shared"]
+    assert Enum.map(result.touched_nodes, & &1.id) |> Enum.sort() == ["legacy", "shared"]
+    assert Map.keys(result.trace.scores) |> Enum.sort() == ["legacy", "shared"]
 
     for {_kind, text} <- drain_model_messages([]) do
       refute text =~ "Security knowledge"
-      refute text =~ "Unclassified knowledge"
       refute text =~ "secret"
     end
 
@@ -402,22 +410,6 @@ defmodule Mnemosyne.SensitiveMemoryTest do
              Mnemosyne.get_node(ctx.repo, "secret", supervisor: ctx.sup, authorization: auth())
   end
 
-  test "explicit startup classification assigns only previously unlabeled memories", ctx do
-    assert {:ok, _} = open(ctx, legacy_audience: [{"org", "security"}])
-    restricted = [supervisor: ctx.sup, authorization: auth([{"org", "security"}])]
-    assert {:ok, %Semantic{id: "legacy"}} = Mnemosyne.get_node(ctx.repo, "legacy", restricted)
-
-    assert {:ok, nil} =
-             Mnemosyne.get_node(ctx.repo, "legacy", supervisor: ctx.sup, authorization: auth())
-
-    assert {:ok, %Semantic{id: "shared"}} =
-             Mnemosyne.get_node(ctx.repo, "shared", supervisor: ctx.sup, authorization: auth())
-
-    assert {:ok, metadata} = Mnemosyne.get_metadata(ctx.repo, ["legacy", "shared"], restricted)
-    assert metadata["legacy"].audience == [{"org", "security"}]
-    assert metadata["shared"].audience == :repo
-  end
-
   test "deletion and maintenance require trusted repository membership", ctx do
     assert {:ok, _} = open(ctx)
     opts = [supervisor: ctx.sup]
@@ -504,7 +496,7 @@ defmodule Mnemosyne.SensitiveMemoryTest do
     opts = [supervisor: ctx.sup, authorization: auth([{"org", "security"}])]
     assert {:ok, receipt} = Mnemosyne.ingest(ctx.repo, trajectory, opts)
     assert :ok = Mnemosyne.close_repo(ctx.repo, supervisor: ctx.sup)
-    assert {:ok, _} = open(ctx, backend: backend, legacy_audience: :repo)
+    assert {:ok, _} = open(ctx, backend: backend)
     assert {:ok, ^receipt} = Mnemosyne.ingest(ctx.repo, trajectory, opts)
     assert {:ok, %Semantic{id: "durable"}} = Mnemosyne.get_node(ctx.repo, "durable", opts)
 
@@ -605,8 +597,13 @@ defmodule Mnemosyne.SensitiveMemoryTest do
              )
   end
 
-  test "opening labeled memories without access control fails closed", ctx do
-    assert {:error, _} = open(ctx, access_control: false)
+  test "opening labeled memories without access control is open access", ctx do
+    assert {:ok, _} = open(ctx, access_control: false)
+
+    assert {:ok, nodes} =
+             Mnemosyne.get_nodes_by_type(ctx.repo, [:semantic], supervisor: ctx.sup)
+
+    assert Enum.map(nodes, & &1.id) |> Enum.sort() == ["legacy", "secret", "shared"]
   end
 
   test "raw graph export is unavailable for access-controlled repos", ctx do

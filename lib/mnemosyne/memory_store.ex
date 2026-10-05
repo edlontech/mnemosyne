@@ -174,14 +174,7 @@ defmodule Mnemosyne.MemoryStore do
     backend_opts = Keyword.put_new(backend_opts, :repo_id, repo_id)
 
     with {:ok, access_control} <- AccessControl.new(Keyword.get(opts, :access_control)),
-         {:ok, backend_state} <- backend_mod.init(backend_opts),
-         :ok <- validate_access_mode({backend_mod, backend_state}, access_control),
-         {:ok, backend_state} <-
-           classify_legacy(
-             {backend_mod, backend_state},
-             access_control,
-             Keyword.get(opts, :legacy_audience)
-           ) do
+         {:ok, backend_state} <- backend_mod.init(backend_opts) do
       state = %{
         repo_id: Keyword.get(opts, :repo_id),
         access_control: access_control,
@@ -1171,41 +1164,6 @@ defmodule Mnemosyne.MemoryStore do
         {:ok, %RecallResult{reasoned: reasoned, touched_nodes: touched_nodes, trace: trace}}
       end
     end)
-  end
-
-  defp validate_access_mode(backend, nil) do
-    with {:ok, _nodes, metadata} <- View.load(backend) do
-      labeled? = Enum.any?(metadata, fn {_id, meta} -> not is_nil(Map.get(meta, :audience)) end)
-
-      if labeled? do
-        {:error, AccessError.exception(reason: :access_control_required)}
-      else
-        :ok
-      end
-    end
-  end
-
-  defp validate_access_mode(_backend, _control), do: :ok
-
-  defp classify_legacy({_module, backend_state}, _control, nil), do: {:ok, backend_state}
-
-  defp classify_legacy(_backend, nil, _audience),
-    do: {:error, AccessError.exception(reason: :access_control_required)}
-
-  defp classify_legacy({module, backend_state} = backend, _control, audience) do
-    with {:ok, audience} <- AccessControl.normalize_audience(audience),
-         {:ok, nodes, metadata} <- View.load(backend) do
-      updates =
-        nodes
-        |> Enum.map(fn node ->
-          id = Mnemosyne.Graph.Node.id(node)
-          {id, Map.get(metadata, id, NodeMetadata.new())}
-        end)
-        |> Enum.filter(fn {_id, meta} -> is_nil(Map.get(meta, :audience)) end)
-        |> Map.new(fn {id, meta} -> {id, Map.put(meta, :audience, audience)} end)
-
-      maybe_update_metadata(module, updates, backend_state)
-    end
   end
 
   defp read_backend(%{access_control: nil, backend: backend}, _opts), do: {:ok, backend}

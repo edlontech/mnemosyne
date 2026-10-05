@@ -5,7 +5,7 @@ defmodule Mnemosyne.NodeMetadata do
   Captures access patterns, temporal information, and accumulated
   rewards to enable recency, frequency, and reward-based scoring.
   The immutable audience is inherited from the ingested trajectory; nil marks
-  legacy, unclassified nodes, which are hidden in access-controlled repos.
+  unlabeled nodes, which access-controlled repos treat as public (`:repo`).
 
   `custom` is an open map inherited from `Trajectory.metadata`. Mnemosyne stores
   it without using it for filtering, scoring, embeddings, or LLM prompts.

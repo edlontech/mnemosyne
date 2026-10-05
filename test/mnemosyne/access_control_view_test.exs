@@ -54,5 +54,10 @@ defmodule Mnemosyne.AccessControl.ViewTest do
     assert Map.keys(scoped.metadata) == ["visible"]
     assert scoped.persistence == nil
     assert scoped.ingestions == %{}
+
+    assert {:ok, {InMemory, public}} = View.scope({InMemory, state}, :repo)
+
+    assert Graph.nodes_by_type(public.graph, :semantic) |> Enum.map(& &1.id) |> Enum.sort() ==
+             ["hidden", "legacy"]
   end
 end

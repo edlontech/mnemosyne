@@ -111,7 +111,7 @@ During ingestion, Mnemosyne creates an internal episode, annotates each ordered 
 
 Repos can opt into Cedar authorization with `access_control: [policy: :membership_and_audience]` when opened. Protected trajectories require an explicit, immutable audience; the application supplies trusted identity and membership through `authorization:` on ingestion and reads. Custom Cedar audience policies are supported without bypassing repo membership.
 
-See [Access Control](guides/access-control.md) for setup, legacy classification, protected API boundaries, and custom-backend limitations.
+See [Access Control](guides/access-control.md) for setup, protected API boundaries, and custom-backend limitations.
 
 ## Ingestion Guarantees
 
