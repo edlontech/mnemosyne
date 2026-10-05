@@ -98,6 +98,9 @@ defmodule Mnemosyne do
     * `:telemetry_labels` - Flat map of string or atom keys to string, atom,
       number, or boolean values. Defaults to `%{}` and applies only while the
       repository is open.
+    * `:hibernate_after` - Milliseconds of mailbox idleness after which the
+      store process hibernates, compacting its heap. Defaults to 60 seconds;
+      `:infinity` disables it.
   """
   @spec open_repo(String.t(), keyword()) :: {:ok, pid()} | {:error, Mnemosyne.Errors.error()}
   def open_repo(repo_id, opts \\ []) do
@@ -131,6 +134,12 @@ defmodule Mnemosyne do
       notifier: Keyword.get(opts, :notifier, defaults.notifier),
       task_supervisor: task_sup
     ]
+
+    store_opts =
+      case Keyword.fetch(opts, :hibernate_after) do
+        {:ok, value} -> Keyword.put(store_opts, :hibernate_after, value)
+        :error -> store_opts
+      end
 
     Mnemosyne.Telemetry.span([:repo, :open], %{repo_id: repo_id}, fn ->
       case DynamicSupervisor.start_child(repo_sup, {MemoryStore, store_opts}) do

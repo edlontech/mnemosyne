@@ -43,9 +43,17 @@ defmodule Mnemosyne.MemoryStore do
 
   # -- Client API --
 
+  @default_hibernate_after :timer.seconds(60)
+
+  @doc """
+  Starts the store. `:hibernate_after` (milliseconds, default 60s) hibernates the
+  process once its mailbox has been idle that long, releasing heap left behind by
+  task results and replies. Pass `:infinity` to disable.
+  """
   def start_link(opts) do
     name = Keyword.fetch!(opts, :name)
-    GenServer.start_link(__MODULE__, opts, name: name)
+    hibernate_after = Keyword.get(opts, :hibernate_after, @default_hibernate_after)
+    GenServer.start_link(__MODULE__, opts, name: name, hibernate_after: hibernate_after)
   end
 
   @doc "Stores a complete trajectory or returns an error without exposing partial memory."

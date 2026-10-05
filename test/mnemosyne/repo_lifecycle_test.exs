@@ -32,6 +32,27 @@ defmodule Mnemosyne.RepoLifecycleTest do
     name
   end
 
+  # OTP 29 hibernates inside gen_server itself; earlier releases call :erlang.hibernate/3.
+  defp hibernated?(pid) do
+    case Process.info(pid, :current_function) do
+      {:current_function, {:gen_server, :loop_hibernate, _}} -> true
+      {:current_function, {:erlang, :hibernate, 3}} -> true
+      _ -> false
+    end
+  end
+
+  defp eventually_hibernated?(pid, attempts \\ 50)
+  defp eventually_hibernated?(_pid, 0), do: false
+
+  defp eventually_hibernated?(pid, attempts) do
+    if hibernated?(pid) do
+      true
+    else
+      Process.sleep(10)
+      eventually_hibernated?(pid, attempts - 1)
+    end
+  end
+
   describe "open_repo/2" do
     test "starts a repo and returns {:ok, pid}", %{tmp_dir: tmp_dir} do
       sup = start_sup(tmp_dir)
@@ -44,6 +65,36 @@ defmodule Mnemosyne.RepoLifecycleTest do
 
       assert is_pid(pid)
       assert :sys.get_state(pid).telemetry_labels == %{}
+    end
+
+    test "hibernates an idle store after the configured delay and keeps serving", %{
+      tmp_dir: tmp_dir
+    } do
+      sup = start_sup(tmp_dir)
+
+      assert {:ok, pid} =
+               Mnemosyne.open_repo("idle",
+                 backend: {InMemory, []},
+                 supervisor: sup,
+                 hibernate_after: 10
+               )
+
+      assert eventually_hibernated?(pid)
+      assert {:ok, nil} = Mnemosyne.get_node("idle", "missing", supervisor: sup)
+    end
+
+    test "hibernate_after: :infinity never hibernates", %{tmp_dir: tmp_dir} do
+      sup = start_sup(tmp_dir)
+
+      assert {:ok, pid} =
+               Mnemosyne.open_repo("awake",
+                 backend: {InMemory, []},
+                 supervisor: sup,
+                 hibernate_after: :infinity
+               )
+
+      Process.sleep(50)
+      refute hibernated?(pid)
     end
 
     test "retains valid telemetry labels for the open repository", %{tmp_dir: tmp_dir} do
