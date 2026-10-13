@@ -696,13 +696,6 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       end)
     end
 
-    defp candidate_ids(result) do
-      result.candidates
-      |> Map.values()
-      |> List.flatten()
-      |> Enum.map(fn %TaggedCandidate{node: node} -> node.id end)
-    end
-
     test "hop 0 plan tags activate propositions through unrelated tag nodes" do
       graph = build_bridge_graph()
       stub_retrieval_llm("semantic", "bridge")

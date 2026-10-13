@@ -29,6 +29,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
   alias Mnemosyne.Pipeline.Prompts.GetSemantic, as: SemanticPrompt
 
   @trajectory_timeout :timer.minutes(5)
+  @empty_provenance_stats %{fallbacks: 0, invalid: 0}
 
   @doc "Extracts knowledge nodes from a closed episode into a changeset."
   @spec extract(Episode.t(), keyword()) ::
@@ -110,7 +111,12 @@ defmodule Mnemosyne.Pipeline.Structuring do
              ) do
           {:ok, cs, trace} ->
             {{:ok, cs, trace},
-             %{nodes_created: length(cs.additions), links_created: length(cs.links)}}
+             %{
+               nodes_created: length(cs.additions),
+               links_created: length(cs.links),
+               provenance_fallbacks: trace.provenance_fallbacks,
+               invalid_source_steps: trace.invalid_source_steps
+             }}
 
           {:error, _} = err ->
             {err, %{}}
@@ -169,7 +175,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
           reraise e, __STACKTRACE__
       end
 
-    with {:ok, semantic_cs} <- tag_result(semantic_result, :semantic),
+    with {:ok, semantic_cs, provenance_stats} <- tag_result(semantic_result, :semantic),
          {:ok, procedural_cs, instructions} <- tag_procedural_result(procedural_result),
          {:ok, scores} <-
            compute_return(
@@ -202,6 +208,13 @@ defmodule Mnemosyne.Pipeline.Structuring do
       duration_us = System.monotonic_time(:microsecond) - start_time
       verbosity = if config, do: config.trace_verbosity, else: :summary
 
+      if provenance_stats.fallbacks > 0 do
+        Logger.warning(
+          "#{provenance_stats.fallbacks} fact(s) in trajectory #{trajectory.id} fell back to whole-segment provenance " <>
+            "(#{provenance_stats.invalid} invalid source step(s) dropped)"
+        )
+      end
+
       trace = %StructuringTrace{
         verbosity: verbosity,
         trajectory_id: trajectory.id,
@@ -209,6 +222,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
         procedural_count: count_nodes_of_type(cs, Procedural),
         tag_count: count_nodes_of_type(cs, Tag),
         intent_count: count_nodes_of_type(cs, Intent),
+        provenance_fallbacks: provenance_stats.fallbacks,
+        invalid_source_steps: provenance_stats.invalid,
         duration_us: duration_us
       }
 
@@ -340,12 +355,11 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
       reward_meta = reward_meta(avg_reward)
 
-      {cs, fact_provenance} =
+      {cs, fact_provenance, stats} =
         facts
         |> Enum.zip(prop_embeddings)
-        |> Enum.reduce({Changeset.new(), []}, fn {fact, _emb} = fact_emb, {acc_cs, acc} ->
-          {node, updated_cs} = add_semantic_node(fact_emb, acc_cs, concept_map, reward_meta)
-          {updated_cs, [{node.id, resolve_source_steps(fact, episodic_ids)} | acc]}
+        |> Enum.reduce({Changeset.new(), [], @empty_provenance_stats}, fn fact_emb, acc ->
+          add_fact(fact_emb, acc, concept_map, reward_meta, episodic_ids)
         end)
 
       cs =
@@ -363,11 +377,22 @@ defmodule Mnemosyne.Pipeline.Structuring do
           |> Changeset.put_metadata(tag.id, reward_meta(tag_reward))
         end)
 
-      {:ok, cs}
+      {:ok, cs, stats}
     else
-      {:ok, []} -> {:ok, Changeset.new()}
+      {:ok, []} -> {:ok, Changeset.new(), @empty_provenance_stats}
       {:error, _} = err -> err
     end
+  end
+
+  defp add_fact({fact, _emb} = fact_emb, {cs, provenance, stats}, concept_map, meta, episodic_ids) do
+    {node, cs} = add_semantic_node(fact_emb, cs, concept_map, meta)
+    {ep_ids, fact_stats} = resolve_source_steps(fact, episodic_ids)
+
+    {cs, [{node.id, ep_ids} | provenance],
+     %{
+       fallbacks: stats.fallbacks + fact_stats.fallbacks,
+       invalid: stats.invalid + fact_stats.invalid
+     }}
   end
 
   defp add_semantic_node({fact, emb}, cs, concept_map, reward_meta) do
@@ -586,7 +611,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
     end
   end
 
-  defp tag_result({:ok, _} = ok, _step), do: ok
+  defp tag_result({:ok, _, _} = ok, _step), do: ok
 
   defp tag_result({:error, reason} = err, step) do
     Logger.error("#{step} extraction failed: #{inspect(reason)}")
@@ -645,21 +670,22 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
   # Maps the 1-based step numbers reported by the LLM to the episodic node
   # ids at those positions. Facts with no valid steps fall back to the whole
-  # trajectory so they never lose grounding.
+  # trajectory so they never lose grounding; the returned stats count those
+  # fallbacks and the out-of-range step numbers that were dropped.
   defp resolve_source_steps(%{source_steps: steps}, episodic_ids) when is_list(steps) do
-    resolved =
-      steps
-      |> Enum.filter(&(is_integer(&1) and &1 >= 1 and &1 <= length(episodic_ids)))
-      |> Enum.map(&Enum.at(episodic_ids, &1 - 1))
-      |> Enum.uniq()
+    {valid, invalid} =
+      Enum.split_with(steps, &(is_integer(&1) and &1 >= 1 and &1 <= length(episodic_ids)))
 
-    case resolved do
-      [] -> episodic_ids
-      ids -> ids
+    stats = %{fallbacks: 0, invalid: length(invalid)}
+
+    case Enum.uniq(valid) do
+      [] -> {episodic_ids, %{stats | fallbacks: 1}}
+      steps -> {Enum.map(steps, &Enum.at(episodic_ids, &1 - 1)), stats}
     end
   end
 
-  defp resolve_source_steps(_fact, episodic_ids), do: episodic_ids
+  defp resolve_source_steps(_fact, episodic_ids),
+    do: {episodic_ids, %{fallbacks: 1, invalid: 0}}
 
   defp add_fact_provenance_links(cs, fact_provenance) do
     for {sem_id, ep_ids} <- fact_provenance, e_id <- ep_ids, reduce: cs do

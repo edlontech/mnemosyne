@@ -998,6 +998,60 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       assert Enum.all?(source_nodes, &(&1.episode_id == "custom_ep_id"))
     end
 
+    test "reports provenance fallbacks and invalid source steps in the trace" do
+      episode = build_closed_episode()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn messages, _schema, _opts ->
+        system_content =
+          messages
+          |> Enum.find(%{content: ""}, &(&1.role == :system))
+          |> Map.get(:content)
+
+        content =
+          cond do
+            system_content =~ "factual knowledge" ->
+              %{
+                facts: [
+                  %{proposition: "Grounded", concepts: ["c1"], source_steps: [1]},
+                  %{proposition: "Unreported", concepts: ["c2"], source_steps: []},
+                  %{proposition: "Out of range", concepts: ["c3"], source_steps: [7, 9]}
+                ]
+              }
+
+            system_content =~ "actionable instructions" ->
+              %{instructions: []}
+
+            true ->
+              %{}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      stub_default_embedding()
+
+      trajectory = hd(episode.trajectories)
+
+      assert {:ok, %Changeset{} = cs, trace} =
+               Structuring.extract_trajectory(trajectory, episode.goal, @default_opts)
+
+      assert trace.provenance_fallbacks == 2
+      assert trace.invalid_source_steps == 2
+
+      episodic_count = Enum.count(cs.additions, &match?(%Mnemosyne.Graph.Node.Episodic{}, &1))
+
+      sem_id =
+        cs.additions
+        |> Enum.find(&match?(%Mnemosyne.Graph.Node.Semantic{proposition: "Out of range"}, &1))
+        |> Map.fetch!(:id)
+
+      provenance_count =
+        Enum.count(cs.links, fn {from, _to, type} -> from == sem_id and type == :provenance end)
+
+      assert provenance_count == episodic_count
+    end
+
     test "propagates LLM errors" do
       episode = build_closed_episode()
 
