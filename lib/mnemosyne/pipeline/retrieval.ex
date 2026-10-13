@@ -5,11 +5,15 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   Classifies a query by memory mode, generates retrieval tags,
   embeds them, scores candidate nodes via value functions,
   and performs LLM-controlled multi-hop traversal to expand and
-  re-rank results. At each hop a controller decides whether the
-  accumulated candidates are sufficient to stop early, and selects
-  focus candidates that drive the next-hop query. Episodic queries
-  retrieve over the semantic graph and map results back to their
-  provenance-linked episodic nodes.
+  re-rank results. Every hop runs two channels: dense similarity
+  against low-level nodes, and routing through Tag/Intent nodes that
+  match the query or its tags, whose linked propositions and
+  prescriptions are activated regardless of their own similarity.
+  At each hop a controller decides whether the accumulated candidates
+  are sufficient to stop early, and selects focus candidates that
+  drive the next-hop query. Episodic queries retrieve over the
+  semantic graph and map results back to their provenance-linked
+  episodic nodes.
   """
 
   require Logger
@@ -117,11 +121,9 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   defp execute_pipeline(ctx) do
     Logger.debug("retrieval mode classified as #{ctx.mode}")
 
-    target_types = types_for_mode(ctx.mode)
-
     {hop0_us, candidates} =
       :timer.tc(fn ->
-        hop_0(ctx.backend, ctx.query_vector, ctx.tag_vectors, target_types, ctx.value_fns)
+        hop_0(ctx.backend, ctx.query_vector, ctx.tag_vectors, ctx.mode, ctx.value_fns)
       end)
 
     hop0_count = length(candidates)
@@ -254,16 +256,23 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   defp routing_types_for_mode(:mixed), do: [:tag, :intent]
   defp routing_types_for_mode(:episodic), do: [:tag]
 
-  defp hop_0(backend, query_vector, tag_vectors, target_types, value_fns) do
+  defp hop_0(backend, query_vector, tag_vectors, mode, value_fns) do
     {mod, bs} = backend
 
-    {:ok, candidates, _bs} =
-      mod.find_candidates(target_types, query_vector, tag_vectors, value_fns, [], bs)
+    {:ok, found, _bs} =
+      mod.find_candidates(types_for_mode(mode), query_vector, tag_vectors, value_fns, [], bs)
 
-    Enum.map(candidates, fn {node, score} -> TaggedCandidate.from_hop_0(node, score) end)
+    dense = Enum.map(found, fn {node, score} -> TaggedCandidate.from_hop_0(node, score) end)
+
+    routed =
+      backend
+      |> route_through_abstract_nodes(mode, query_vector, tag_vectors, value_fns, ids_of(dense))
+      |> Enum.map(fn {node, score} -> TaggedCandidate.from_routing(node, score, 0) end)
+
+    merge_pool(dense ++ routed)
   end
 
-  defp inject_refined_candidates(_backend, _qv, _vf, _mode, _seen, nil, _hop), do: []
+  defp inject_refined_candidates(_backend, _qv, _vf, _mode, _seen, [], _hop), do: []
 
   defp inject_refined_candidates(
          backend,
@@ -316,52 +325,35 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       refine_ctx: refine_ctx
     } = hop_ctx
 
-    seen_ids =
-      MapSet.new(candidates, fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
-
+    seen_ids = ids_of(candidates)
     hop_vector = focus_query_vector(refine_ctx, focus) || query_vector
 
-    routing_types = routing_types_for_mode(mode)
-
-    expanded_nodes =
-      expand_through_routing_nodes(
-        candidates,
+    expansion =
+      candidates
+      |> expand_through_routing_nodes(
         backend,
         seen_ids,
-        routing_types,
+        routing_types_for_mode(mode),
         hop_vector,
         value_fns
       )
-
-    vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
-
-    expansion_scored =
-      expanded_nodes
-      |> Enum.map(fn node ->
-        emb = NodeProtocol.embedding(node)
-        relevance = if emb, do: Similarity.cosine_similarity(hop_vector, emb), else: 0.0
-        type = NodeProtocol.node_type(node)
-        params = get_in(value_fns, [:params, type]) || %{}
-        score = vf_module.score(relevance, node, nil, params)
+      |> score_nodes([hop_vector], value_fns)
+      |> Enum.map(fn {node, score} ->
         TaggedCandidate.from_multi_hop(node, score, current_hop)
       end)
-      |> Enum.filter(fn %TaggedCandidate{node: node, score: score} ->
-        type = NodeProtocol.node_type(node)
-        threshold = get_in(value_fns, [:params, type, :threshold]) || 0.0
-        score >= threshold
-      end)
 
-    merged =
-      (candidates ++ expansion_scored)
-      |> Enum.uniq_by(fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
-      |> Enum.sort_by(& &1.score, :desc)
-      |> Enum.take(@max_candidates_per_hop)
+    pool = merge_pool(candidates ++ expansion)
 
     {refined_vectors, control_state} =
-      case HopControl.refine(control_state, refine_ctx.query, merged, current_hop, refine_ctx) do
+      case HopControl.refine(control_state, refine_ctx.query, pool, current_hop, refine_ctx) do
         {:refined, _tags, vectors, new_state} -> {vectors, new_state}
-        {:skip, new_state} -> {nil, new_state}
+        {:skip, new_state} -> {[], new_state}
       end
+
+    routed =
+      backend
+      |> route_through_abstract_nodes(mode, hop_vector, refined_vectors, value_fns, seen_ids)
+      |> Enum.map(fn {node, score} -> TaggedCandidate.from_routing(node, score, current_hop) end)
 
     refined_tagged =
       inject_refined_candidates(
@@ -374,17 +366,72 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         current_hop
       )
 
-    merged =
-      if refined_tagged != [] do
-        (merged ++ refined_tagged)
-        |> Enum.uniq_by(fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
-        |> Enum.sort_by(& &1.score, :desc)
-        |> Enum.take(@max_candidates_per_hop)
-      else
-        merged
-      end
+    {merge_pool(pool ++ routed ++ refined_tagged), control_state}
+  end
 
-    {merged, control_state}
+  # Linking channel: Tag/Intent nodes matching the query or its tags act as
+  # routing signals whose linked low-level nodes join the pool, even when
+  # those nodes are not themselves similar enough to surface via the dense
+  # channel. Routing nodes are never returned as candidates.
+  defp route_through_abstract_nodes(backend, mode, query_vector, tag_vectors, value_fns, seen) do
+    {mod, bs} = backend
+    routing_types = routing_types_for_mode(mode)
+    target_types = types_for_mode(mode)
+
+    {:ok, routing_nodes, _bs} =
+      mod.find_candidates(routing_types, query_vector, tag_vectors, value_fns, [], bs)
+
+    child_ids =
+      routing_nodes
+      |> Enum.flat_map(fn {node, _} ->
+        node |> NodeHelpers.all_linked_ids() |> MapSet.to_list()
+      end)
+      |> Enum.reject(&MapSet.member?(seen, &1))
+      |> Enum.uniq()
+
+    {:ok, children, _bs} = mod.get_linked_nodes(child_ids, nil, bs)
+
+    children
+    |> Enum.filter(&(NodeProtocol.node_type(&1) in target_types))
+    |> score_nodes([query_vector | tag_vectors], value_fns)
+  end
+
+  # Scores nodes by their best similarity to any of the given vectors,
+  # through the value function without metadata, and drops those below
+  # the per-type threshold.
+  defp score_nodes(nodes, vectors, value_fns) do
+    vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
+
+    nodes
+    |> Enum.map(fn node ->
+      type = NodeProtocol.node_type(node)
+      params = get_in(value_fns, [:params, type]) || %{}
+      {node, vf_module.score(relevance(node, vectors), node, nil, params)}
+    end)
+    |> Enum.filter(fn {node, score} ->
+      score >= (get_in(value_fns, [:params, NodeProtocol.node_type(node), :threshold]) || 0.0)
+    end)
+  end
+
+  defp relevance(node, vectors) do
+    case NodeProtocol.embedding(node) do
+      nil ->
+        0.0
+
+      emb ->
+        vectors |> Enum.map(&Similarity.cosine_similarity(&1, emb)) |> Enum.max(fn -> 0.0 end)
+    end
+  end
+
+  defp merge_pool(candidates) do
+    candidates
+    |> Enum.uniq_by(fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
+    |> Enum.sort_by(& &1.score, :desc)
+    |> Enum.take(@max_candidates_per_hop)
+  end
+
+  defp ids_of(candidates) do
+    MapSet.new(candidates, fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
   end
 
   defp focus_query_vector(_refine_ctx, []), do: nil

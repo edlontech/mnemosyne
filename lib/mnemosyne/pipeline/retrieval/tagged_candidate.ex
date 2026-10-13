@@ -26,6 +26,12 @@ defmodule Mnemosyne.Pipeline.Retrieval.TaggedCandidate do
     %__MODULE__{node: node, score: score, phase: :multi_hop, hop: hop}
   end
 
+  @doc "Builds a tagged candidate activated through a Tag or Intent node at the given hop."
+  @spec from_routing(struct(), float(), non_neg_integer()) :: t()
+  def from_routing(node, score, hop) do
+    %__MODULE__{node: node, score: score, phase: :routing, hop: hop}
+  end
+
   @doc "Builds a tagged candidate from the query refinement phase at the given hop."
   @spec from_refinement(struct(), float(), non_neg_integer()) :: t()
   def from_refinement(node, score, hop) do

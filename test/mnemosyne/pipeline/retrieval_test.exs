@@ -641,6 +641,116 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     end
   end
 
+  describe "abstract-node routing" do
+    # Semantic top_k is 1, so the dense channel is saturated by sem_seed and
+    # the bridge fact can only arrive through its tag node. The tag threshold
+    # keeps tag_bridge from routing on query similarity alone.
+    @routing_query_vec List.duplicate(0.5, 128)
+    @routing_bridge_vec List.duplicate(1.0, 64) ++ List.duplicate(-0.9, 64)
+    @routing_bridge_fact_vec List.duplicate(1.0, 64) ++ List.duplicate(0.0, 64)
+
+    defp build_bridge_graph do
+      Graph.new()
+      |> Graph.put_node(%Semantic{
+        id: "sem_seed",
+        proposition: "Seed fact",
+        confidence: 0.9,
+        embedding: List.duplicate(0.49, 128)
+      })
+      |> Graph.put_node(%Semantic{
+        id: "sem_bridge",
+        proposition: "Bridge fact",
+        confidence: 0.9,
+        embedding: @routing_bridge_fact_vec
+      })
+      |> Graph.put_node(%Tag{id: "tag_seed", label: "seed", embedding: @routing_query_vec})
+      |> Graph.put_node(%Tag{id: "tag_bridge", label: "bridge", embedding: @routing_bridge_vec})
+      |> Graph.link("tag_seed", "sem_seed", :membership)
+      |> Graph.link("tag_bridge", "sem_bridge", :membership)
+    end
+
+    defp narrow_value_function do
+      @value_function
+      |> put_in([:params, :semantic, :top_k], 1)
+      |> put_in([:params, :tag, :threshold], 0.3)
+    end
+
+    defp bridge_retrieval_opts(graph, extra) do
+      backend_state = %InMemory{graph: graph}
+
+      @default_opts ++
+        [backend: {InMemory, backend_state}, value_function: narrow_value_function()] ++ extra
+    end
+
+    defp stub_bridge_embedding do
+      to_vec = fn text ->
+        if text =~ "bridge", do: @routing_bridge_vec, else: @routing_query_vec
+      end
+
+      Mnemosyne.MockEmbedding
+      |> stub(:embed, fn text, _opts ->
+        {:ok, %Embedding.Response{vectors: [to_vec.(text)], model: "m", usage: %{}}}
+      end)
+      |> stub(:embed_batch, fn texts, _opts ->
+        {:ok, %Embedding.Response{vectors: Enum.map(texts, to_vec), model: "m", usage: %{}}}
+      end)
+    end
+
+    defp candidate_ids(result) do
+      result.candidates
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.map(fn %TaggedCandidate{node: node} -> node.id end)
+    end
+
+    test "hop 0 plan tags activate propositions through unrelated tag nodes" do
+      graph = build_bridge_graph()
+      stub_retrieval_llm("semantic", "bridge")
+      stub_bridge_embedding()
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve("Seed question", bridge_retrieval_opts(graph, max_hops: 0))
+
+      ids = candidate_ids(result)
+      assert "sem_seed" in ids
+      assert "sem_bridge" in ids
+
+      assert %TaggedCandidate{phase: :routing, hop: 0} =
+               Enum.find(result.candidates.semantic, &(&1.node.id == "sem_bridge"))
+    end
+
+    test "refined tags at hop 1 route through tag nodes beyond the seed neighborhood" do
+      graph = build_bridge_graph()
+      stub_retrieval_llm("semantic", "seed")
+      stub_bridge_embedding()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok, %LLM.Response{content: %{tags: ["bridge"]}, model: "m", usage: %{}}}
+      end)
+
+      config = %Config{
+        llm: %{model: "test:model", opts: %{}},
+        embedding: %{model: "test:embed", opts: %{}},
+        value_function: narrow_value_function(),
+        refinement_budget: 1
+      }
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve(
+          "Seed question",
+          bridge_retrieval_opts(graph, config: config, max_hops: 1)
+        )
+
+      ids = candidate_ids(result)
+      assert "sem_seed" in ids
+      assert "sem_bridge" in ids
+
+      assert %TaggedCandidate{phase: :routing, hop: 1} =
+               Enum.find(result.candidates.semantic, &(&1.node.id == "sem_bridge"))
+    end
+  end
+
   describe "retrieve/2" do
     test "returns retrieval result with mode, tags, and candidates" do
       graph = build_test_graph()
