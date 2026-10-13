@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.6.1...mnemosyne-v0.7.0) (2026-10-13)
+
+
+### Features
+
+* **config:** Make procedural memory extraction optional ([0cdab17](https://github.com/edlontech/mnemosyne/commit/0cdab173a2074969ad49af1d1237d9bb41506a6d))
+* **pipeline-perf:** Batch episode standardization and parallelize trajectory extraction ([fe56258](https://github.com/edlontech/mnemosyne/commit/fe562582fba478bce03b8aa3bdb4b14ce31b2b39))
+
+
+### Bug Fixes
+
+* Match stored intents by raw cosine instead of value-function score ([d647ab4](https://github.com/edlontech/mnemosyne/commit/d647ab4e07cce4b60ad1a325ec31b72dd9037134))
+* report semantic provenance fallbacks and invalid source steps ([5aa65e7](https://github.com/edlontech/mnemosyne/commit/5aa65e7d3ba4292db297b9399a13f2b4f9b764fb))
+* Route retrieval through Tag/Intent nodes matched by query and tags ([3bec89f](https://github.com/edlontech/mnemosyne/commit/3bec89f085479449c9552e90345a019715c64d87))
+
 ## [0.6.1](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.6.0...mnemosyne-v0.6.1) (2026-10-05)
 
 
