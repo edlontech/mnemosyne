@@ -66,7 +66,7 @@ defmodule Mnemosyne.ModelCostIngestionTelemetryTest do
            end) == %{
              {:llm, :chat, :get_state} => 1,
              {:llm, :chat_structured, :get_subgoal} => 1,
-             {:embedding, :embed, :get_subgoal} => 1,
+             {:embedding, :embed_batch, :get_subgoal} => 1,
              {:llm, :chat, :get_reward} => 1,
              {:llm, :chat_structured, :get_semantic} => 1,
              {:embedding, :embed_batch, :get_semantic} => 2,

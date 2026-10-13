@@ -21,18 +21,21 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
   setup :set_mimic_global
 
   defp build_closed_episode do
-    stub_append_cycle()
-    episode = Episode.new("Optimize the database")
+    stub_chat_responses(["Derived state", "Derived state", "0.8", "0.9"])
+    subgoal = %{reasoning: "analysis", subgoal: "Optimize queries"}
+    stub_chat_structured_responses([subgoal, subgoal])
+    stub_default_embedding()
 
-    {:ok, episode, _trace} =
-      Episode.append(episode, "Slow query found", "Added index", @default_opts)
+    {:ok, closed} =
+      Episode.standardize(
+        Episode.new("Optimize the database"),
+        [
+          %{observation: "Slow query found", action: "Added index"},
+          %{observation: "Index applied", action: "Run benchmark"}
+        ],
+        @default_opts
+      )
 
-    stub_append_cycle("Continue optimization", "0.9")
-
-    {:ok, episode, _trace} =
-      Episode.append(episode, "Index applied", "Run benchmark", @default_opts)
-
-    {:ok, closed} = Episode.close(episode)
     closed
   end
 
@@ -55,21 +58,10 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         }
       end)
 
-    episode = %Episode{
-      id: "ep_test",
-      goal: "Optimize the database",
-      steps: steps,
-      current_trajectory_id: traj_id
-    }
+    episode = %Episode{id: "ep_test", goal: "Optimize the database", steps: steps}
 
     {:ok, closed} = Episode.close(episode)
     closed
-  end
-
-  defp stub_append_cycle(subgoal \\ "Optimize queries", reward \\ "0.8") do
-    stub_chat_responses(["Derived state", reward])
-    stub_chat_structured_responses([%{reasoning: "analysis", subgoal: subgoal}])
-    stub_default_embedding()
   end
 
   defp stub_chat_responses(responses) do

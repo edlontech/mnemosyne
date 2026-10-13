@@ -157,6 +157,7 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
     Mnemosyne.MockEmbedding
     |> stub(:embed_batch, fn texts, _opts ->
       assert texts in [
+               ["Record the upstream timeout"],
                ["The upstream request timed out"],
                ["upstream timeout"],
                ["Timeout from upstream"]
@@ -295,10 +296,12 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
     refute digest == changed_step_order
   end
 
-  defp stub_successful_pipeline do
-    {:ok, subgoals} = Agent.start_link(fn -> ["First subgoal", "Second subgoal"] end)
-    {:ok, embeddings} = Agent.start_link(fn -> [[1.0, 0.0], [0.0, 1.0]] end)
+  # Subgoals are keyed by action so concurrent inference stays deterministic;
+  # orthogonal subgoal embeddings force a trajectory boundary between the steps.
+  @subgoals %{"First action" => "First subgoal", "Second action" => "Second subgoal"}
+  @subgoal_vectors %{"First subgoal" => [1.0, 0.0], "Second subgoal" => [0.0, 1.0]}
 
+  defp stub_successful_pipeline do
     Mnemosyne.MockLLM
     |> stub(:chat, fn messages, _opts ->
       content = system_content(messages)
@@ -314,7 +317,7 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
       response =
         cond do
           content =~ "infer the subgoal" ->
-            %{reasoning: "analysis", subgoal: next_subgoal(subgoals)}
+            %{reasoning: "analysis", subgoal: subgoal_for(messages)}
 
           content =~ "factual knowledge" ->
             %{
@@ -348,17 +351,8 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
     end)
 
     Mnemosyne.MockEmbedding
-    |> stub(:embed, fn _text, _opts ->
-      vector =
-        Agent.get_and_update(embeddings, fn
-          [vector | rest] -> {vector, rest}
-          [] -> {[0.1, 0.1], []}
-        end)
-
-      {:ok, %Embedding.Response{vectors: [vector], model: "mock:embed", usage: %{}}}
-    end)
     |> stub(:embed_batch, fn texts, _opts ->
-      vectors = Enum.map(texts, fn _ -> [0.1, 0.1] end)
+      vectors = Enum.map(texts, &Map.get(@subgoal_vectors, &1, [0.1, 0.1]))
       {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
     end)
   end
@@ -387,13 +381,18 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
     end)
 
     Mnemosyne.MockEmbedding
-    |> stub(:embed, fn _text, _opts ->
-      {:ok, %Embedding.Response{vectors: [[0.1, 0.1]], model: "mock:embed", usage: %{}}}
+    |> stub(:embed_batch, fn texts, _opts ->
+      vectors = Enum.map(texts, fn _ -> [0.1, 0.1] end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
     end)
   end
 
-  defp next_subgoal(subgoals) do
-    Agent.get_and_update(subgoals, fn [subgoal | rest] -> {subgoal, rest} end)
+  defp subgoal_for(messages) do
+    user = messages |> Enum.find(&(&1.role == :user)) |> Map.fetch!(:content)
+
+    Enum.find_value(@subgoals, "Subgoal", fn {action, subgoal} ->
+      if user =~ action, do: subgoal
+    end)
   end
 
   defp system_content(messages) do

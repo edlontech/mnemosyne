@@ -2,9 +2,9 @@ defmodule Mnemosyne.Pipeline.Structuring do
   @moduledoc """
   Orchestrates knowledge extraction from a closed episode.
 
-  For each trajectory segment, runs GetSemantic, GetProcedural,
-  and GetReturn in parallel to extract knowledge nodes, then
-  assembles a Graph.Changeset with all nodes and links.
+  Trajectory segments are extracted concurrently. Within each segment,
+  GetSemantic and GetProcedural run in parallel, GetReturn scores the
+  resulting prescriptions, and everything is assembled into a Graph.Changeset.
   """
 
   require Logger
@@ -27,7 +27,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
   alias Mnemosyne.Pipeline.Prompts.GetProcedural, as: ProceduralPrompt
   alias Mnemosyne.Pipeline.Prompts.GetReturn
   alias Mnemosyne.Pipeline.Prompts.GetSemantic, as: SemanticPrompt
-  alias Mnemosyne.Pipeline.Prompts.GetState
+
+  @trajectory_timeout :timer.minutes(5)
 
   @doc "Extracts knowledge nodes from a closed episode into a changeset."
   @spec extract(Episode.t(), keyword()) ::
@@ -46,15 +47,19 @@ defmodule Mnemosyne.Pipeline.Structuring do
       fn ->
         changesets =
           episode.trajectories
-          |> Enum.map(fn trajectory ->
-            Logger.debug("extracting trajectory #{trajectory.id}")
+          |> Task.async_stream(
+            fn trajectory ->
+              Logger.debug("extracting trajectory #{trajectory.id}")
 
-            extract_trajectory(
-              trajectory,
-              episode.goal,
-              Keyword.put(opts, :episode_id, episode.id)
-            )
-          end)
+              extract_trajectory(
+                trajectory,
+                episode.goal,
+                Keyword.put(opts, :episode_id, episode.id)
+              )
+            end,
+            timeout: @trajectory_timeout
+          )
+          |> Enum.map(fn {:ok, result} -> result end)
           |> collect_results()
 
         case changesets do
@@ -124,32 +129,6 @@ defmodule Mnemosyne.Pipeline.Structuring do
          config
        ) do
     start_time = System.monotonic_time(:microsecond)
-
-    with {:ok, trajectory} <-
-           derive_progressive_states(trajectory, model_context, adapters.llm, llm_opts, config) do
-      do_extract_trajectory_inner(
-        trajectory,
-        goal,
-        episode_id,
-        model_context,
-        adapters,
-        llm_opts,
-        config,
-        start_time
-      )
-    end
-  end
-
-  defp do_extract_trajectory_inner(
-         trajectory,
-         goal,
-         episode_id,
-         model_context,
-         adapters,
-         llm_opts,
-         config,
-         start_time
-       ) do
     avg_reward = trajectory_avg_reward(trajectory)
     episodic_ids = Enum.map(trajectory.steps, fn _step -> generate_id("ep_node") end)
 
@@ -234,55 +213,6 @@ defmodule Mnemosyne.Pipeline.Structuring do
       }
 
       {:ok, cs, trace}
-    end
-  end
-
-  defp derive_progressive_states(trajectory, model_context, llm, llm_opts, config) do
-    if Enum.all?(trajectory.steps, &(&1.state != nil)) do
-      {:ok, trajectory}
-    else
-      do_derive_progressive_states(trajectory, model_context, llm, llm_opts, config)
-    end
-  end
-
-  defp do_derive_progressive_states(trajectory, model_context, llm, llm_opts, config) do
-    trajectory.steps
-    |> Enum.reduce_while({:ok, []}, fn step, {:ok, acc} ->
-      previous_state =
-        case acc do
-          [] -> nil
-          [prev | _] -> prev.state
-        end
-
-      messages =
-        GetState.build_messages(%{
-          previous_state: previous_state,
-          action: step.action,
-          observation: step.observation,
-          goal: trajectory.subgoal,
-          overlay: Config.resolve_overlay(config, :get_state)
-        })
-
-      with {:ok, %{content: content}} <-
-             ModelCall.chat(
-               model_context,
-               llm,
-               :get_state,
-               messages,
-               Config.llm_opts(config, :get_state, llm_opts)
-             ),
-           {:ok, state} <- GetState.parse_response(content) do
-        {:cont, {:ok, [%{step | state: state} | acc]}}
-      else
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-    |> case do
-      {:ok, reversed_steps} ->
-        {:ok, %{trajectory | steps: Enum.reverse(reversed_steps)}}
-
-      {:error, _} = err ->
-        err
     end
   end
 

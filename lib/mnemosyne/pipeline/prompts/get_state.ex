@@ -3,7 +3,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
   Prompt for deriving progressive environment state from a single step.
 
   Implements `s_t = f(s_{t-1}, a_{t-1}, o_t)` — each step's state is derived
-  from the previous state, the action taken, and the new observation.
+  from the previous state, the previous action, and the new observation.
+  The first step has no history, so `s_1` is derived from the goal and `o_1` only.
   """
 
   @behaviour Mnemosyne.Prompt
@@ -11,9 +12,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
   alias Mnemosyne.Errors.Invalid.PromptError
 
   @impl true
-  def build_messages(
-        %{previous_state: nil, action: action, observation: observation, goal: goal} = variables
-      ) do
+  def build_messages(%{previous_state: nil, observation: observation, goal: goal} = variables) do
     overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
 
     [
@@ -22,7 +21,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
         content:
           """
           You are an expert at deriving environment state from agent interactions.
-          Given an initial observation and the agent's first action, derive the current environment state.
+          Given the agent's goal and its initial observation, derive the current environment state.
 
           Respond with ONLY the state summary as a brief paragraph. No explanation.\
           """ <> overlay
@@ -33,7 +32,6 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
         Goal: #{goal}
 
         Observation: #{observation}
-        Action: #{action}
 
         Current environment state:\
         """
@@ -57,7 +55,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
         content:
           """
           You are an expert at deriving environment state from agent interactions.
-          Given the previous environment state, the action taken, and the new observation, derive the updated environment state.
+          Given the previous environment state, the action the agent then took, and the resulting observation, derive the updated environment state.
 
           Respond with ONLY the state summary as a brief paragraph. No explanation.\
           """ <> overlay

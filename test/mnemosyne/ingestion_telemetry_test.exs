@@ -126,7 +126,7 @@ defmodule Mnemosyne.IngestionTelemetryTest do
     for event <- [
           [:mnemosyne, :ingestion, :ingest, :start],
           [:mnemosyne, :ingestion, :ingest, :stop],
-          [:mnemosyne, :episode, :append, :start],
+          [:mnemosyne, :episode, :standardize, :start],
           [:mnemosyne, :structuring, :extract, :start],
           [:mnemosyne, :structuring, :extract_trajectory, :start]
         ] do
@@ -149,7 +149,7 @@ defmodule Mnemosyne.IngestionTelemetryTest do
     assert is_integer(measurements.duration)
     assert measurements.node_count > 0
 
-    assert_received {:telemetry, [:mnemosyne, :episode, :append, :start], _,
+    assert_received {:telemetry, [:mnemosyne, :episode, :standardize, :start], _,
                      %{repo_id: ^repo_id, source_id: ^source_id, episode_id: ^source_id}}
 
     assert_received {:telemetry, [:mnemosyne, :structuring, :extract, :start], _,

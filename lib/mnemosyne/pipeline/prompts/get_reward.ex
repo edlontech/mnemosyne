@@ -1,6 +1,9 @@
 defmodule Mnemosyne.Pipeline.Prompts.GetReward do
   @moduledoc """
   Prompt for evaluating how well a step serves the current sub-goal.
+
+  Implements `r_t = f(s_t, a_t, g_t, o_{t+1})`: the action is judged from the
+  state the agent was in, the sub-goal it pursued, and the outcome observed next.
   Returns a reward score between 0.0 and 1.0.
   """
 
@@ -11,7 +14,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReward do
   @impl true
   def build_messages(
         %{
-          observation: observation,
+          state: state,
           action: action,
           subgoal: subgoal,
           next_observation: next_observation
@@ -25,9 +28,11 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReward do
         content:
           """
           You are an expert at evaluating agent performance.
-          Given an observation, action, the sub-goal being pursued, and the
-          outcome that was observed after the action, rate how well this
+          Given the agent's state, the action it took, the sub-goal being pursued,
+          and the outcome that was observed after the action, rate how well this
           action served the sub-goal.
+          Consider whether the action advanced progress, caused a setback,
+          revealed useful information, or wasted effort.
 
           Respond with ONLY a decimal number between 0.0 and 1.0.
           0.0 = completely counterproductive
@@ -40,11 +45,11 @@ defmodule Mnemosyne.Pipeline.Prompts.GetReward do
         content: """
         Sub-goal: #{subgoal}
 
-        Observation: #{observation}
+        State (at time t): #{state}
 
-        Action: #{action}
+        Action (at time t): #{action}
 
-        Outcome observed after action: #{next_observation}
+        Observation (at time t + 1): #{next_observation}
 
         Score (0.0-1.0):\
         """

@@ -82,7 +82,7 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
     test "build_messages appends overlay to system message when provided" do
       messages =
         GetReward.build_messages(%{
-          observation: "Server responded 200",
+          state: "Server responded 200",
           action: "Send GET request",
           subgoal: "Verify API health",
           next_observation: "Dashboard shows green",
@@ -93,10 +93,10 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
       assert system =~ "Evaluate strictly."
     end
 
-    test "build_messages includes subgoal, observation, and action" do
+    test "build_messages includes subgoal, state, action, and next observation" do
       messages =
         GetReward.build_messages(%{
-          observation: "Server responded 200",
+          state: "Server responded 200",
           action: "Send GET request",
           subgoal: "Verify API health",
           next_observation: "Dashboard shows green"
@@ -135,7 +135,7 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
       messages =
         GetState.build_messages(%{
           previous_state: nil,
-          action: "Opened door",
+          action: nil,
           observation: "Saw door",
           goal: "Find the key",
           overlay: "Be concise."
@@ -145,11 +145,11 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
       assert system =~ "Be concise."
     end
 
-    test "build_messages for first step with nil previous_state" do
+    test "build_messages for first step uses only goal and observation" do
       messages =
         GetState.build_messages(%{
           previous_state: nil,
-          action: "Opened door",
+          action: nil,
           observation: "Saw door",
           goal: "Find the key"
         })
@@ -157,8 +157,8 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
       assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
       assert system =~ "initial observation"
       assert user =~ "Saw door"
-      assert user =~ "Opened door"
       assert user =~ "Find the key"
+      refute user =~ "Action"
     end
 
     test "build_messages for subsequent step with previous state" do

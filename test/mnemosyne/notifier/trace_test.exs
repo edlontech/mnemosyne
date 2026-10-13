@@ -1,7 +1,6 @@
 defmodule Mnemosyne.Notifier.TraceTest do
   use ExUnit.Case, async: true
 
-  alias Mnemosyne.Notifier.Trace.Episode
   alias Mnemosyne.Notifier.Trace.Recall
   alias Mnemosyne.Notifier.Trace.Structuring
 
@@ -51,49 +50,6 @@ defmodule Mnemosyne.Notifier.TraceTest do
       assert length(trace.scores) == 1
       assert length(trace.rejected) == 1
       assert trace.phase_timings.classify == 100
-    end
-  end
-
-  describe "Episode trace" do
-    test "defaults to summary verbosity" do
-      trace = %Episode{}
-      assert trace.verbosity == :summary
-    end
-
-    test "summary-level fields have correct defaults" do
-      trace = %Episode{}
-      assert trace.step_index == 0
-      assert trace.trajectory_id == nil
-      assert trace.boundary_detected == false
-      assert trace.reward == 0.0
-      assert trace.duration_us == 0
-    end
-
-    test "detailed-only fields default to nil" do
-      trace = %Episode{}
-      assert trace.subgoal == nil
-      assert trace.similarity_score == nil
-      assert trace.similarity_threshold == nil
-    end
-
-    test "detailed verbosity can populate all fields" do
-      trace = %Episode{
-        verbosity: :detailed,
-        step_index: 3,
-        trajectory_id: "traj-abc",
-        boundary_detected: true,
-        reward: 0.85,
-        duration_us: 2000,
-        subgoal: "find relevant docs",
-        similarity_score: 0.72,
-        similarity_threshold: 0.75
-      }
-
-      assert trace.verbosity == :detailed
-      assert trace.step_index == 3
-      assert trace.trajectory_id == "traj-abc"
-      assert trace.boundary_detected == true
-      assert trace.similarity_score == 0.72
     end
   end
 

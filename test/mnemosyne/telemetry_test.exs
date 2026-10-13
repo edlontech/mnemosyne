@@ -32,7 +32,7 @@ defmodule Mnemosyne.TelemetryTest do
         [:mnemosyne, :embedding, :embed],
         [:mnemosyne, :embedding, :embed_batch],
         [:mnemosyne, :model, :call],
-        [:mnemosyne, :episode, :append],
+        [:mnemosyne, :episode, :standardize],
         [:mnemosyne, :structuring, :extract],
         [:mnemosyne, :structuring, :extract_trajectory],
         [:mnemosyne, :retrieval, :retrieve],

@@ -18,6 +18,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
 
   @default_opts [llm: Mnemosyne.MockLLM, embedding: Mnemosyne.MockEmbedding]
   @test_vector List.duplicate(0.1, 128)
+  @raw_steps [%{observation: "obs", action: "act"}]
 
   defp attach_telemetry(event_name, test_pid \\ self()) do
     handler_id = "test-#{inspect(event_name)}-#{System.unique_integer()}"
@@ -34,7 +35,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
     on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
-  defp stub_append_cycle do
+  defp stub_standardize_cycle do
     Mnemosyne.MockLLM
     |> stub(:chat, fn _messages, _opts ->
       {:ok, %LLM.Response{content: "0.8", model: "mock:test", usage: %{}}}
@@ -49,8 +50,9 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
     end)
 
     Mnemosyne.MockEmbedding
-    |> stub(:embed, fn _text, _opts ->
-      {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
+    |> stub(:embed_batch, fn texts, _opts ->
+      vectors = Enum.map(texts, fn _ -> @test_vector end)
+      {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
     end)
   end
 
@@ -142,38 +144,38 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
     end)
   end
 
-  describe "Episode.append/4 telemetry" do
+  describe "Episode.standardize/3 telemetry" do
     test "emits start and stop events with optional source correlation" do
-      stub_append_cycle()
-      attach_telemetry([:mnemosyne, :episode, :append, :start])
-      attach_telemetry([:mnemosyne, :episode, :append, :stop])
+      stub_standardize_cycle()
+      attach_telemetry([:mnemosyne, :episode, :standardize, :start])
+      attach_telemetry([:mnemosyne, :episode, :standardize, :stop])
 
       episode = Episode.new("Test goal")
-      {:ok, _updated, _trace} = Episode.append(episode, "obs", "act", @default_opts)
+      {:ok, _closed} = Episode.standardize(episode, @raw_steps, @default_opts)
 
-      assert_received {:telemetry, [:mnemosyne, :episode, :append, :start], start_measurements,
-                       %{episode_id: _, repo_id: nil, source_id: nil}}
+      assert_received {:telemetry, [:mnemosyne, :episode, :standardize, :start],
+                       start_measurements, %{episode_id: _, repo_id: nil, source_id: nil}}
 
       assert is_integer(start_measurements.monotonic_time)
 
-      assert_received {:telemetry, [:mnemosyne, :episode, :append, :stop], stop_measurements,
+      assert_received {:telemetry, [:mnemosyne, :episode, :standardize, :stop], stop_measurements,
                        %{episode_id: _, repo_id: nil, source_id: nil}}
 
       assert is_integer(stop_measurements.duration)
-      assert is_integer(stop_measurements.step_count)
-      assert is_boolean(stop_measurements.new_trajectory)
+      assert stop_measurements.step_count == 1
+      assert stop_measurements.trajectory_count == 1
     end
 
     test "does not emit telemetry for closed episode" do
-      attach_telemetry([:mnemosyne, :episode, :append, :start])
+      attach_telemetry([:mnemosyne, :episode, :standardize, :start])
 
       episode = Episode.new("Test goal")
       {:ok, closed} = Episode.close(episode)
 
       {:error, %EpisodeError{reason: :episode_closed}} =
-        Episode.append(closed, "obs", "act", @default_opts)
+        Episode.standardize(closed, @raw_steps, @default_opts)
 
-      refute_received {:telemetry, [:mnemosyne, :episode, :append, :start], _, _}
+      refute_received {:telemetry, [:mnemosyne, :episode, :standardize, :start], _, _}
     end
   end
 
@@ -185,9 +187,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
       attach_telemetry([:mnemosyne, :structuring, :extract_trajectory, :start])
       attach_telemetry([:mnemosyne, :structuring, :extract_trajectory, :stop])
 
-      episode = Episode.new("Test goal")
-      {:ok, episode, _trace} = Episode.append(episode, "obs", "act", @default_opts)
-      {:ok, closed} = Episode.close(episode)
+      {:ok, closed} = Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
 
       opts = @default_opts ++ [repo_id: "repo-1", source_id: "source-1"]
       stub_extraction_llm()

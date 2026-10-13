@@ -15,52 +15,51 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     overrides: %{}
   }
 
-  defp stub_chat_responses(responses) do
-    {:ok, agent} = Agent.start_link(fn -> responses end)
+  @raw_steps [
+    %{observation: "saw something", action: "did something"},
+    %{observation: "result appeared", action: "clicked it"}
+  ]
+
+  defp user_content(messages), do: Enum.find(messages, &(&1.role == :user)).content
+  defp system_content(messages), do: Enum.find(messages, &(&1.role == :system)).content
+
+  # State responses echo the observation so step order can be asserted; reward
+  # responses are looked up by the step's action.
+  defp stub_llm(opts \\ []) do
+    rewards = Keyword.get(opts, :rewards, %{})
+    subgoals = Keyword.get(opts, :subgoals, %{})
 
     Mnemosyne.MockLLM
-    |> stub(:chat, fn _messages, _opts ->
+    |> stub(:chat, fn messages, _opts ->
+      user = user_content(messages)
+
       content =
-        Agent.get_and_update(agent, fn
-          [head | tail] -> {head, tail}
-          [] -> {"default", []}
-        end)
+        if system_content(messages) =~ "evaluating agent performance",
+          do: by_action(rewards, user, "0.5"),
+          else: "state after: " <> (Regex.run(~r/Observation: (.*)/, user) |> Enum.at(1))
 
       {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
     end)
-  end
+    |> stub(:chat_structured, fn messages, _schema, _opts ->
+      subgoal = by_action(subgoals, user_content(messages), "default subgoal")
 
-  defp stub_chat_structured_responses(responses) do
-    {:ok, agent} = Agent.start_link(fn -> responses end)
-
-    Mnemosyne.MockLLM
-    |> stub(:chat_structured, fn _messages, _schema, _opts ->
-      content =
-        Agent.get_and_update(agent, fn
-          [head | tail] -> {head, tail}
-          [] -> {%{}, []}
-        end)
-
-      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
-    end)
-  end
-
-  defp stub_embedding do
-    Mnemosyne.MockEmbedding
-    |> stub(:embed, fn _text, _opts ->
       {:ok,
-       %Embedding.Response{vectors: [List.duplicate(0.1, 128)], model: "mock:embed", usage: %{}}}
+       %LLM.Response{content: %{reasoning: "r", subgoal: subgoal}, model: "mock:test", usage: %{}}}
     end)
+  end
+
+  defp by_action(responses, user, default) do
+    Enum.find_value(responses, default, fn {action, response} ->
+      if user =~ action, do: response
+    end)
+  end
+
+  defp stub_embedding(vectors_by_subgoal \\ %{}) do
+    Mnemosyne.MockEmbedding
     |> stub(:embed_batch, fn texts, _opts ->
-      vectors = Enum.map(texts, fn _ -> List.duplicate(0.1, 128) end)
+      vectors = Enum.map(texts, &Map.get(vectors_by_subgoal, &1, List.duplicate(0.1, 128)))
       {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
     end)
-  end
-
-  defp stub_first_append(subgoal \\ "Navigate to config") do
-    stub_chat_responses(["The agent is in the initial state"])
-    stub_chat_structured_responses([%{reasoning: "analysis", subgoal: subgoal}])
-    stub_embedding()
   end
 
   describe "new/1" do
@@ -72,7 +71,6 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       assert episode.trajectories == []
       assert episode.closed == false
       assert String.starts_with?(episode.id, "ep_")
-      assert String.starts_with?(episode.current_trajectory_id, "traj_")
     end
   end
 
@@ -84,56 +82,112 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
     end
   end
 
-  describe "append/4" do
-    test "first append stores step with derived state and subgoal" do
-      stub_first_append()
-      episode = Episode.new("Test goal")
-
-      assert {:ok, episode, _trace} =
-               Episode.append(episode, "saw something", "did something", @default_opts)
-
-      assert [step] = episode.steps
-      assert step.observation == "saw something"
-      assert step.action == "did something"
-      assert step.subgoal == "Navigate to config"
-      assert step.state == "The agent is in the initial state"
-      assert step.reward == nil
-      assert step.index == 0
-      assert is_list(step.embedding)
-    end
-
-    test "second append scores the previous step using current observation" do
-      stub_first_append("Navigate to config")
-      episode = Episode.new("Test goal")
-
-      {:ok, episode, _trace} =
-        Episode.append(episode, "saw something", "did something", @default_opts)
-
-      # Second append: chat calls = [state derivation, reward for step 0]
-      # chat_structured calls = [subgoal for step 1]
-      stub_chat_responses(["Agent has navigated to config", "0.8"])
-
-      stub_chat_structured_responses([
-        %{reasoning: "analysis", subgoal: "Explore options"}
-      ])
+  describe "standardize/3" do
+    test "derives state, subgoal, reward and embedding for every step in order" do
+      stub_llm(
+        rewards: %{"did something" => "0.8", "clicked it" => "0.3"},
+        subgoals: %{"did something" => "Navigate to config", "clicked it" => "Explore options"}
+      )
 
       stub_embedding()
 
-      {:ok, episode, _trace} =
-        Episode.append(episode, "result appeared", "clicked it", @default_opts)
+      assert {:ok, episode} =
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
 
+      assert episode.closed
       assert [step_0, step_1] = episode.steps
-      assert step_0.reward == 0.8
-      assert step_1.reward == nil
-      assert step_1.state == "Agent has navigated to config"
+
+      assert %{
+               index: 0,
+               observation: "saw something",
+               action: "did something",
+               subgoal: "Navigate to config",
+               state: "state after: saw something",
+               reward: 0.8
+             } = step_0
+
+      assert %{
+               index: 1,
+               observation: "result appeared",
+               action: "clicked it",
+               subgoal: "Explore options",
+               state: "state after: result appeared",
+               reward: 0.3
+             } = step_1
+
+      assert is_list(step_0.embedding) and is_list(step_1.embedding)
+      assert step_0.trajectory_id == step_1.trajectory_id
+      assert [%{steps: [_, _]}] = episode.trajectories
     end
 
-    test "rejects append on closed episode" do
-      episode = Episode.new("Test goal")
-      {:ok, episode} = Episode.close(episode)
+    test "chains state derivation and scores rewards against the next observation" do
+      stub_llm()
+      stub_embedding()
+      test_pid = self()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat, fn messages, _opts ->
+        send(test_pid, {:chat, system_content(messages), user_content(messages)})
+        {:ok, %LLM.Response{content: "0.5", model: "mock:test", usage: %{}}}
+      end)
+
+      assert {:ok, _} = Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
+
+      assert_received {:chat, first_state_system, first_state_user}
+      assert first_state_system =~ "initial observation"
+      assert first_state_user =~ "saw something"
+      refute first_state_user =~ "did something"
+
+      assert_received {:chat, _, second_state_user}
+      assert second_state_user =~ "Previous state: 0.5"
+      assert second_state_user =~ "Action: did something"
+      assert second_state_user =~ "Observation: result appeared"
+
+      rewards =
+        for _ <- 1..2 do
+          assert_received {:chat, system, user}
+          assert system =~ "evaluating agent performance"
+          user
+        end
+
+      assert Enum.any?(rewards, &(&1 =~ "Observation (at time t + 1): result appeared"))
+      assert Enum.any?(rewards, &(&1 =~ "[Episode ended - no further observation]"))
+    end
+
+    test "starts a new trajectory when adjacent subgoals diverge" do
+      stub_llm(subgoals: %{"did something" => "first", "clicked it" => "second"})
+      stub_embedding(%{"first" => [1.0, 0.0], "second" => [0.0, 1.0]})
+
+      assert {:ok, episode} =
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
+
+      assert [step_0, step_1] = episode.steps
+      refute step_0.trajectory_id == step_1.trajectory_id
+      assert [%{subgoal: "first"}, %{subgoal: "second"}] = episode.trajectories
+    end
+
+    test "falls back to 0.5 when reward scoring fails" do
+      stub_llm()
+      stub_embedding()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat, fn messages, _opts ->
+        if system_content(messages) =~ "evaluating agent performance",
+          do: {:error, :llm_failure},
+          else: {:ok, %LLM.Response{content: "state", model: "mock:test", usage: %{}}}
+      end)
+
+      assert {:ok, episode} =
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
+
+      assert Enum.map(episode.steps, & &1.reward) == [0.5, 0.5]
+    end
+
+    test "rejects a closed episode" do
+      {:ok, closed} = Episode.close(Episode.new("Test goal"))
 
       assert {:error, %EpisodeError{reason: :episode_closed}} =
-               Episode.append(episode, "obs", "act", @default_opts)
+               Episode.standardize(closed, @raw_steps, @default_opts)
     end
 
     test "accepts config option and resolves per-step opts" do
@@ -155,84 +209,37 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
          }}
       end)
 
-      episode = Episode.new("Test goal")
       opts = @default_opts ++ [config: @test_config]
 
-      assert {:ok, _episode, _trace} =
-               Episode.append(episode, "saw something", "did something", opts)
+      assert {:ok, _episode} = Episode.standardize(Episode.new("Test goal"), @raw_steps, opts)
     end
 
     test "propagates LLM errors from state derivation" do
       Mnemosyne.MockLLM
       |> stub(:chat, fn _messages, _opts -> {:error, :llm_failure} end)
 
-      episode = Episode.new("Test goal")
-
       assert {:error, :llm_failure} =
-               Episode.append(episode, "obs", "act", @default_opts)
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
     end
 
     test "propagates LLM errors from subgoal inference" do
-      stub_chat_responses(["derived state"])
+      stub_llm()
 
       Mnemosyne.MockLLM
       |> stub(:chat_structured, fn _messages, _schema, _opts -> {:error, :llm_failure} end)
 
-      episode = Episode.new("Test goal")
-
       assert {:error, :llm_failure} =
-               Episode.append(episode, "obs", "act", @default_opts)
-    end
-  end
-
-  describe "score_pending_reward/2" do
-    test "scores the last step with sentinel" do
-      stub_first_append()
-      episode = Episode.new("Test goal")
-      {:ok, episode, _} = Episode.append(episode, "saw something", "did something", @default_opts)
-
-      assert hd(episode.steps).reward == nil
-
-      stub_chat_responses(["0.7"])
-      assert {:ok, episode} = Episode.score_pending_reward(episode, @default_opts)
-      assert hd(episode.steps).reward == 0.7
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
     end
 
-    test "is no-op for empty episode" do
-      episode = Episode.new("Test goal")
-      assert {:ok, ^episode} = Episode.score_pending_reward(episode, @default_opts)
-    end
+    test "propagates embedding errors" do
+      stub_llm()
 
-    test "is no-op when reward already scored" do
-      stub_first_append()
-      episode = Episode.new("Test goal")
-      {:ok, episode, _} = Episode.append(episode, "obs", "act", @default_opts)
+      Mnemosyne.MockEmbedding
+      |> stub(:embed_batch, fn _texts, _opts -> {:error, :embed_failure} end)
 
-      [step] = episode.steps
-      episode = %{episode | steps: [%{step | reward: 0.9}]}
-
-      assert {:ok, scored} = Episode.score_pending_reward(episode, @default_opts)
-      assert hd(scored.steps).reward == 0.9
-    end
-
-    test "falls back to 0.5 on LLM error" do
-      stub_first_append()
-      episode = Episode.new("Test goal")
-      {:ok, episode, _} = Episode.append(episode, "obs", "act", @default_opts)
-
-      Mnemosyne.MockLLM
-      |> stub(:chat, fn _messages, _opts -> {:error, :llm_failure} end)
-
-      assert {:ok, episode} = Episode.score_pending_reward(episode, @default_opts)
-      assert hd(episode.steps).reward == 0.5
-    end
-
-    test "rejects on closed episode" do
-      episode = Episode.new("Test goal")
-      {:ok, closed} = Episode.close(episode)
-
-      assert {:error, %EpisodeError{reason: :episode_closed}} =
-               Episode.score_pending_reward(closed, @default_opts)
+      assert {:error, :embed_failure} =
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
     end
   end
 
@@ -305,30 +312,31 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
   end
 
   describe "close/1" do
-    test "closes episode and builds trajectories" do
-      stub_first_append()
-      episode = Episode.new("Test goal")
-      {:ok, episode, _trace} = Episode.append(episode, "obs1", "act1", @default_opts)
+    test "closes episode and groups steps into trajectories" do
+      step = fn index, trajectory_id ->
+        %{
+          index: index,
+          observation: "obs#{index}",
+          action: "act#{index}",
+          subgoal: "subgoal#{index}",
+          state: "state#{index}",
+          reward: 0.5,
+          embedding: [0.1],
+          trajectory_id: trajectory_id
+        }
+      end
 
-      # Second append: chat = [state, reward], chat_structured = [subgoal]
-      stub_chat_responses(["Updated state", "0.9"])
-      stub_chat_structured_responses([%{reasoning: "r", subgoal: "Same subgoal"}])
-      stub_embedding()
-      {:ok, episode, _trace} = Episode.append(episode, "obs2", "act2", @default_opts)
-
-      # Score last pending step before close
-      stub_chat_responses(["0.8"])
-      {:ok, episode} = Episode.score_pending_reward(episode, @default_opts)
+      episode = %{
+        Episode.new("Test goal")
+        | steps: [step.(0, "traj_a"), step.(1, "traj_a"), step.(2, "traj_b")]
+      }
 
       {:ok, closed} = Episode.close(episode)
 
       assert closed.closed == true
-      assert [_ | _] = closed.trajectories
 
-      [traj | _] = closed.trajectories
-      assert is_binary(traj.id)
-      assert is_list(traj.steps)
-      assert is_binary(traj.subgoal)
+      assert [%{id: "traj_a", subgoal: "subgoal1"}, %{id: "traj_b", subgoal: "subgoal2"}] =
+               closed.trajectories
     end
 
     test "rejects double close" do

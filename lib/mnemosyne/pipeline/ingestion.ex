@@ -40,9 +40,7 @@ defmodule Mnemosyne.Pipeline.Ingestion do
     opts = Keyword.put(opts, :source_id, trajectory.source_id)
     episode = Episode.new(trajectory.goal, id: trajectory.source_id)
 
-    with {:ok, episode} <- append_steps(episode, trajectory.steps, opts),
-         {:ok, episode} <- Episode.score_pending_reward(episode, opts),
-         {:ok, episode} <- Episode.close(episode),
+    with {:ok, episode} <- Episode.standardize(episode, trajectory.steps, opts),
          {:ok, changeset} <- Structuring.extract(episode, opts) do
       metadata =
         Map.new(changeset.metadata, fn {id, meta} ->
@@ -60,16 +58,6 @@ defmodule Mnemosyne.Pipeline.Ingestion do
       {:ok, audience} -> {:ok, audience}
       {:error, _} -> {:error, :invalid_audience}
     end
-  end
-
-  defp append_steps(episode, steps, opts) do
-    Enum.reduce_while(steps, {:ok, episode}, fn %{observation: observation, action: action},
-                                                {:ok, episode} ->
-      case Episode.append(episode, observation, action, opts) do
-        {:ok, episode, _trace} -> {:cont, {:ok, episode}}
-        {:error, _} = error -> {:halt, error}
-      end
-    end)
   end
 
   defp validate(trajectory) do
