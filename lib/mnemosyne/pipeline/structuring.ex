@@ -464,6 +464,9 @@ defmodule Mnemosyne.Pipeline.Structuring do
     {sem_node, cs}
   end
 
+  defp extract_procedural(_, _, _, _, _, %Config{procedural_extraction: false}, _, _),
+    do: {:ok, Changeset.new(), []}
+
   defp extract_procedural(
          trajectory,
          goal,

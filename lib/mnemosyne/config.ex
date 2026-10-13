@@ -156,6 +156,11 @@ defmodule Mnemosyne.Config do
                      Zoi.default(Zoi.optional(Zoi.any()), nil,
                        description:
                          "Optional ExtractionProfile for domain-specific prompt overlays"
+                     ),
+                   procedural_extraction:
+                     Zoi.default(Zoi.boolean(), true,
+                       description:
+                         "When false, ingestion skips procedural memory extraction (no Procedural or Intent nodes)"
                      )
                  })
 
@@ -195,6 +200,11 @@ defmodule Mnemosyne.Config do
     extraction_profile:
       Zoi.default(Zoi.optional(Zoi.any()), nil,
         description: "Optional ExtractionProfile for domain-specific prompt overlays"
+      ),
+    procedural_extraction:
+      Zoi.default(Zoi.boolean(), true,
+        description:
+          "When false, ingestion skips procedural memory extraction (no Procedural or Intent nodes)"
       )
   )
 

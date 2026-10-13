@@ -511,6 +511,37 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       end)
     end
 
+    test "skips procedural extraction when disabled in config" do
+      episode = build_closed_episode()
+      stub_extraction_llm()
+
+      test_pid = self()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn [%{content: system} | _], _schema, _opts ->
+        if system =~ "actionable instructions" or system =~ "prescription quality",
+          do: send(test_pid, :procedural_llm_called)
+
+        content =
+          if system =~ "factual knowledge",
+            do: %{facts: [%{proposition: "Indexes help", concepts: ["indexes"]}]},
+            else: %{}
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      config = %{@test_config | procedural_extraction: false}
+
+      assert {:ok, cs} = Structuring.extract(episode, @default_opts ++ [config: config])
+
+      types = cs.additions |> Enum.map(&struct_type/1) |> Enum.uniq()
+      assert :semantic in types
+      refute :procedural in types
+      refute :intent in types
+
+      refute_received :procedural_llm_called
+    end
+
     test "derives progressive states before extraction" do
       episode = build_closed_episode()
       stub_extraction_llm()

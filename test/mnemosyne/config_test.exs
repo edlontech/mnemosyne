@@ -210,6 +210,19 @@ defmodule Mnemosyne.ConfigTest do
     end
   end
 
+  describe "procedural_extraction config" do
+    test "defaults to true when not provided" do
+      {:ok, config} = Zoi.parse(Config.t(), @valid_config)
+      assert config.procedural_extraction == true
+    end
+
+    test "accepts false" do
+      input = Map.put(@valid_config, :procedural_extraction, false)
+      {:ok, config} = Zoi.parse(Config.t(), input)
+      assert config.procedural_extraction == false
+    end
+  end
+
   describe "resolve_value_function/2" do
     test "returns correct params for known node types" do
       {:ok, config} = Zoi.parse(Config.t(), @valid_config)
