@@ -113,11 +113,6 @@ defmodule Mnemosyne.MemoryStoreTest do
      }}
   end
 
-  def score(_relevance, _node, _metadata, %{test_pid: test_pid}) do
-    send(test_pid, :override_value_function_used)
-    0.88
-  end
-
   defp trajectory(overrides \\ []) do
     struct!(
       Trajectory,
@@ -236,12 +231,6 @@ defmodule Mnemosyne.MemoryStoreTest do
           embedding: %{
             model: "override-embedding",
             opts: %{config_embedding_opt: true}
-          },
-          value_function: %{
-            module: __MODULE__,
-            params: %{
-              intent: %{test_pid: test_pid, threshold: 0.0, top_k: 20}
-            }
           }
       }
 
@@ -295,7 +284,7 @@ defmodule Mnemosyne.MemoryStoreTest do
         |> Changeset.add_node(%Intent{
           id: "intent-new",
           description: "New intent",
-          embedding: [1.0, 0.0]
+          embedding: [0.88, 0.475]
         })
         |> Changeset.add_node(%Procedural{
           id: "procedure-new",
@@ -312,7 +301,6 @@ defmodule Mnemosyne.MemoryStoreTest do
       assert_receive {^second_tag, {:ok, ^receipt}}
       assert_receive {:write_intent_merge_opts, write_opts}
       assert write_opts[:model_context] == expected_context
-      assert_receive :override_value_function_used
       assert_receive {:override_llm_used, llm_opts}
       assert_receive {:override_embedding_used, embedding_opts}
       assert_receive {:intent_merge_metadata, %{repo_id: "override-repo"}}

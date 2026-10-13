@@ -639,8 +639,6 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   defp merge_changeset(changeset, backend, execution_opts) do
-    config = Keyword.fetch!(execution_opts, :config)
-
     scoped_backend =
       if Keyword.get(execution_opts, :access_control) do
         View.scope(backend, Keyword.fetch!(execution_opts, :audience))
@@ -649,10 +647,7 @@ defmodule Mnemosyne.MemoryStore do
       end
 
     with {:ok, backend} <- scoped_backend do
-      merge_opts =
-        execution_opts
-        |> Keyword.put(:backend, backend)
-        |> Keyword.put(:value_function, config.value_function)
+      merge_opts = Keyword.put(execution_opts, :backend, backend)
 
       with {:ok, deduped_cs} <- TagDeduplicator.deduplicate(changeset, merge_opts) do
         IntentMerger.merge(deduped_cs, merge_opts)

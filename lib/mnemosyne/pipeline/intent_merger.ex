@@ -3,6 +3,10 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
   Deduplicates intent nodes in a changeset against both the existing
   graph and other intents within the same batch.
 
+  Matching uses raw cosine similarity between intent embeddings, both
+  against stored intents and within the batch, so the configured
+  thresholds are independent of value-function metadata factors.
+
   Applies three strategies based on cosine similarity thresholds:
   - Below merge threshold: keep the new intent as-is
   - Between merge and identity thresholds: LLM-merge descriptions, re-embed
@@ -30,7 +34,6 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
   - `:config` - `%Config{}` with threshold settings
   - `:llm_opts` - additional options passed to the LLM adapter
   - `:embedding_opts` - additional options passed to the embedding adapter
-  - `:value_function` - value function config map (`:module` + `:params`) for candidate scoring
   """
   @spec merge(Changeset.t(), keyword()) :: {:ok, Changeset.t()} | {:error, term()}
   def merge(%Changeset{} = changeset, opts) do
@@ -49,19 +52,12 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
             {backend_mod, backend_state} = Keyword.fetch!(opts, :backend)
             config = Keyword.fetch!(opts, :config)
 
-            value_function =
-              Keyword.get(opts, :value_function, %{
-                module: Mnemosyne.ValueFunction.Default,
-                params: %{}
-              })
-
             process_intents(
               intents,
               backend_mod,
               backend_state,
               opts,
               config,
-              value_function,
               changeset.metadata
             )
           end
@@ -85,20 +81,11 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     end
   end
 
-  defp process_intents(
-         intents,
-         backend_mod,
-         backend_state,
-         opts,
-         config,
-         value_function,
-         metadata
-       ) do
+  defp process_intents(intents, backend_mod, backend_state, opts, config, metadata) do
     Enum.reduce_while(intents, {:ok, {[], %{}, %{}, metadata}}, fn intent, {:ok, acc} ->
       {acc_intents, acc_rewrites, seen, acc_meta} = acc
 
-      with {:ok, graph_match} <-
-             find_graph_match(intent, backend_mod, backend_state, value_function),
+      with {:ok, graph_match} <- find_graph_match(intent, backend_mod, backend_state),
            batch_match = find_batch_match(intent, seen),
            strategy = classify_match(pick_best_match(graph_match, batch_match), config),
            {:ok, acc_meta} <- load_match_metadata(strategy, acc_meta, backend_mod, backend_state) do
@@ -194,34 +181,23 @@ defmodule Mnemosyne.Pipeline.IntentMerger do
     end
   end
 
-  defp find_graph_match(intent, backend_mod, backend_state, value_function) do
-    case backend_mod.find_candidates(
-           [:intent],
-           intent.embedding,
-           [],
-           value_function,
-           [],
-           backend_state
-         ) do
-      {:ok, [{node, score} | _], _state} -> {:ok, {node, score}}
-      {:ok, [], _state} -> {:ok, nil}
+  defp find_graph_match(intent, backend_mod, backend_state) do
+    case backend_mod.get_nodes_by_type([:intent], backend_state) do
+      {:ok, stored, _state} -> {:ok, most_similar(intent, stored)}
       {:error, _reason} = error -> error
     end
   end
 
-  defp find_batch_match(_intent, seen) when map_size(seen) == 0, do: nil
+  defp find_batch_match(intent, seen), do: most_similar(intent, Map.values(seen))
 
-  defp find_batch_match(intent, seen) do
-    seen
-    |> Enum.map(fn {_id, existing} ->
-      score = Similarity.cosine_similarity(intent.embedding, existing.embedding)
-      {existing, score}
-    end)
+  defp most_similar(_intent, []), do: nil
+
+  defp most_similar(intent, candidates) do
+    candidates
+    |> Enum.filter(&(&1.embedding != nil))
+    |> Enum.map(&{&1, Similarity.cosine_similarity(intent.embedding, &1.embedding)})
     |> Enum.filter(fn {_node, score} -> is_float(score) end)
-    |> case do
-      [] -> nil
-      candidates -> Enum.max_by(candidates, &elem(&1, 1))
-    end
+    |> Enum.max_by(&elem(&1, 1), fn -> nil end)
   end
 
   defp pick_best_match(nil, nil), do: nil

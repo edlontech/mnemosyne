@@ -121,10 +121,6 @@ defmodule Mnemosyne.Pipeline.CustomMetadataMergeTest do
         embedding: %{model: "mock:embed", opts: %{}},
         intent_merge_threshold: 0.8,
         intent_identity_threshold: 0.95
-      },
-      value_function: %{
-        module: Mnemosyne.ValueFunction.Default,
-        params: %{intent: %{lambda: 0.0, base_floor: 1.0}}
       }
     ]
 
@@ -152,7 +148,13 @@ defmodule Mnemosyne.Pipeline.CustomMetadataMergeTest do
 
   test "intent synthesis and its failure fallback preserve custom metadata" do
     existing = %Intent{id: "stored", description: "Diagnose timeouts", embedding: [1.0, 0.0]}
-    incoming = %{existing | id: "incoming", description: "Investigate timeouts"}
+
+    incoming = %{
+      existing
+      | id: "incoming",
+        description: "Investigate timeouts",
+        embedding: [0.9, 0.436]
+    }
 
     stored =
       NodeMetadata.new(
@@ -171,8 +173,8 @@ defmodule Mnemosyne.Pipeline.CustomMetadataMergeTest do
     {:ok, backend} = InMemory.init([])
     {:ok, backend} = InMemory.update_metadata(%{existing.id => stored}, backend)
 
-    stub(InMemory, :find_candidates, fn [:intent], _vector, [], _vf, [], state ->
-      {:ok, [{existing, 0.9}], state}
+    stub(InMemory, :get_nodes_by_type, fn [:intent], state ->
+      {:ok, [existing], state}
     end)
 
     for outcome <- [:success, :failure] do

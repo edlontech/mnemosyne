@@ -78,7 +78,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_new", "proc_1", :hierarchical)
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
+      |> expect(:get_nodes_by_type, fn [:intent], @backend_state ->
         {:ok, [], @backend_state}
       end)
 
@@ -106,8 +106,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_new", "proc_1", :hierarchical)
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
-        {:ok, [{existing_intent, 0.97}], @backend_state}
+      |> expect(:get_nodes_by_type, fn [:intent], @backend_state ->
+        {:ok, [existing_intent], @backend_state}
       end)
 
       assert {:ok, result} = IntentMerger.merge(cs, @base_opts)
@@ -122,8 +122,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
 
   describe "merge/2 with LLM merge (0.8-0.95)" do
     test "merges intent via LLM, re-embeds, and rewrites links" do
-      new_intent = make_intent("int_new", "Deploy app", [0.9, 0.1, 0.0])
-      existing_intent = make_intent("int_existing", "Deploy service", [0.9, 0.1, 0.0])
+      new_intent = make_intent("int_new", "Deploy app", [1.0, 0.0, 0.0])
+      existing_intent = make_intent("int_existing", "Deploy service", [0.88, 0.475, 0.0])
       proc = make_procedural("proc_1")
 
       cs =
@@ -133,8 +133,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_new", "proc_1", :hierarchical)
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
-        {:ok, [{existing_intent, 0.88}], @backend_state}
+      |> expect(:get_nodes_by_type, fn [:intent], @backend_state ->
+        {:ok, [existing_intent], @backend_state}
       end)
 
       Mnemosyne.MockLLM
@@ -173,8 +173,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
 
   describe "merge/2 with LLM failure" do
     test "falls back to identity rewrite when LLM merge fails" do
-      new_intent = make_intent("int_new", "Deploy app", [0.9, 0.1, 0.0])
-      existing_intent = make_intent("int_existing", "Deploy service", [0.9, 0.1, 0.0])
+      new_intent = make_intent("int_new", "Deploy app", [1.0, 0.0, 0.0])
+      existing_intent = make_intent("int_existing", "Deploy service", [0.88, 0.475, 0.0])
       proc = make_procedural("proc_1")
 
       cs =
@@ -184,8 +184,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_new", "proc_1", :hierarchical)
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
-        {:ok, [{existing_intent, 0.88}], @backend_state}
+      |> expect(:get_nodes_by_type, fn [:intent], @backend_state ->
+        {:ok, [existing_intent], @backend_state}
       end)
 
       Mnemosyne.MockLLM
@@ -219,7 +219,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.add_link("int_b", "proc_b", :hierarchical)
 
       InMemory
-      |> stub(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
+      |> stub(:get_nodes_by_type, fn [:intent], @backend_state ->
         {:ok, [], @backend_state}
       end)
 
@@ -252,8 +252,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.put_metadata("int_new", new_meta)
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
-        {:ok, [{existing_intent, 0.97}], @backend_state}
+      |> expect(:get_nodes_by_type, fn [:intent], @backend_state ->
+        {:ok, [existing_intent], @backend_state}
       end)
 
       assert {:ok, result} = IntentMerger.merge(cs, @base_opts)
@@ -265,8 +265,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
     end
 
     test "LLM merge propagates reward from new intent to merged intent" do
-      new_intent = make_intent("int_new", "Deploy app", [0.9, 0.1, 0.0])
-      existing_intent = make_intent("int_existing", "Deploy service", [0.9, 0.1, 0.0])
+      new_intent = make_intent("int_new", "Deploy app", [1.0, 0.0, 0.0])
+      existing_intent = make_intent("int_existing", "Deploy service", [0.88, 0.475, 0.0])
       proc = make_procedural("proc_1")
       new_meta = NodeMetadata.new(cumulative_reward: 3.0, reward_count: 1)
 
@@ -278,8 +278,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.put_metadata("int_new", new_meta)
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
-        {:ok, [{existing_intent, 0.88}], @backend_state}
+      |> expect(:get_nodes_by_type, fn [:intent], @backend_state ->
+        {:ok, [existing_intent], @backend_state}
       end)
 
       Mnemosyne.MockLLM
@@ -327,8 +327,8 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.put_metadata("int_new", new_meta)
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
-        {:ok, [{existing_intent, 0.97}], @backend_state}
+      |> expect(:get_nodes_by_type, fn [:intent], @backend_state ->
+        {:ok, [existing_intent], @backend_state}
       end)
 
       assert {:ok, result} = IntentMerger.merge(cs, @base_opts)
@@ -353,7 +353,7 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
         |> Changeset.put_metadata("int_new", intent_meta)
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
+      |> expect(:get_nodes_by_type, fn [:intent], @backend_state ->
         {:ok, [], @backend_state}
       end)
 
@@ -366,15 +366,47 @@ defmodule Mnemosyne.Pipeline.IntentMergerTest do
   describe "merge/2 backend errors" do
     test "propagates candidate read errors" do
       intent = make_intent("int_new", "Deploy to production", [1.0, 0.0, 0.0])
-      error = StorageError.exception(operation: :find_candidates, reason: :unavailable)
+      error = StorageError.exception(operation: :get_nodes_by_type, reason: :unavailable)
       cs = Changeset.add_node(Changeset.new(), intent)
 
       InMemory
-      |> expect(:find_candidates, fn [:intent], _emb, [], _vf_config, [], @backend_state ->
+      |> expect(:get_nodes_by_type, fn [:intent], @backend_state ->
         {:error, error}
       end)
 
       assert {:error, ^error} = IntentMerger.merge(cs, @base_opts)
+    end
+  end
+
+  describe "merge/2 against a real backend" do
+    test "matches stored intents by raw cosine, not by value-function score" do
+      existing = make_intent("int_existing", "Deploy to production", [1.0, 0.0, 0.0])
+      incoming = make_intent("int_new", "Deploy to production", [1.0, 0.0, 0.0])
+      proc = make_procedural("proc_1")
+
+      {:ok, backend} = InMemory.init([])
+
+      {:ok, backend} =
+        InMemory.apply_changeset(Changeset.add_node(Changeset.new(), existing), backend)
+
+      {:ok, backend} =
+        InMemory.update_metadata(
+          %{"int_existing" => NodeMetadata.new(cumulative_reward: 0.8, reward_count: 1)},
+          backend
+        )
+
+      cs =
+        Changeset.new()
+        |> Changeset.add_node(incoming)
+        |> Changeset.add_node(proc)
+        |> Changeset.add_link("int_new", "proc_1", :hierarchical)
+
+      opts = Keyword.put(@base_opts, :backend, {InMemory, backend})
+
+      assert {:ok, result} = IntentMerger.merge(cs, opts)
+
+      assert Enum.filter(result.additions, &match?(%Intent{}, &1)) == []
+      assert {"int_existing", "proc_1", :hierarchical} in result.links
     end
   end
 end
