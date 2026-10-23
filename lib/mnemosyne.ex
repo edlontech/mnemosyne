@@ -315,10 +315,24 @@ defmodule Mnemosyne do
   @spec recall(String.t(), String.t(), keyword()) ::
           {:ok, RecallResult.t()} | {:error, Mnemosyne.Errors.error()}
   def recall(repo_id, query, opts \\ []) do
-    with {:ok, pid} <- lookup_repo(repo_id, opts) do
-      MemoryStore.recall(pid, query, Keyword.delete(opts, :supervisor))
-    end
+    metadata = %{repo_id: repo_id, source_id: Keyword.get(opts, :source_id)}
+
+    Mnemosyne.Telemetry.span([:recall, :execute], metadata, fn ->
+      result =
+        with {:ok, pid} <- lookup_repo(repo_id, opts) do
+          MemoryStore.recall(pid, query, Keyword.delete(opts, :supervisor))
+        end
+
+      recall_telemetry(result)
+    end)
   end
+
+  defp recall_telemetry({:ok, %RecallResult{touched_nodes: touched, trace: trace}} = result) do
+    {result, %{result_count: length(touched), hops: trace.hops},
+     %{status: :ok, matched: touched != [], mode: trace.mode}}
+  end
+
+  defp recall_telemetry({:error, _} = error), do: {error, %{}, %{status: :error}}
 
   @doc """
   Returns the current knowledge graph held by the repo's MemoryStore.

@@ -46,6 +46,7 @@ defmodule Mnemosyne.TelemetryTest do
         [:mnemosyne, :episodic_validation, :validate],
         [:mnemosyne, :graph_repair, :repair],
         [:mnemosyne, :ingestion, :ingest],
+        [:mnemosyne, :recall, :execute],
         [:mnemosyne, :repo, :open],
         [:mnemosyne, :repo, :close],
         [:mnemosyne, :memory_store, :queue],

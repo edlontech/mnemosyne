@@ -79,6 +79,8 @@ defmodule Mnemosyne.Telemetry.DefaultHandler do
       |> maybe_add("links", measurements[:links_added])
       |> maybe_add("trajectories", measurements[:trajectory_count])
       |> maybe_add("candidates", measurements[:candidates_found])
+      |> maybe_add("results", measurements[:result_count])
+      |> maybe_add("matched", metadata[:matched])
       |> maybe_add("steps", measurements[:step_count])
       |> maybe_add("checked", measurements[:checked])
       |> maybe_add("deleted", measurements[:deleted])

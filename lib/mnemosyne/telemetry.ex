@@ -33,6 +33,12 @@ defmodule Mnemosyne.Telemetry do
     - Metadata: `repo_id`, `source_id`
     - Stop measurements: `node_count` on success
 
+  ### Recall
+  - `[:mnemosyne, :recall, :execute, :start | :stop | :exception]` - end-to-end `Mnemosyne.recall/3`
+    - Metadata: `repo_id`, `source_id`
+    - Stop measurements: `result_count`, `hops` on success
+    - Stop metadata: `status` (`:ok` or `:error`); `matched` (at least one node returned) and `mode` on success
+
   ### Maintenance
   - `[:mnemosyne, :decay, :prune, :start | :stop | :exception]`
   - `[:mnemosyne, :consolidator, :consolidate, :start | :stop | :exception]`
@@ -75,6 +81,7 @@ defmodule Mnemosyne.Telemetry do
     @prefix ++ [:episodic_validation, :validate],
     @prefix ++ [:graph_repair, :repair],
     @prefix ++ [:ingestion, :ingest],
+    @prefix ++ [:recall, :execute],
     @prefix ++ [:repo, :open],
     @prefix ++ [:repo, :close],
     @prefix ++ [:memory_store, :queue],
