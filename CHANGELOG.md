@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.7.0...mnemosyne-v0.8.0) (2026-10-23)
+
+
+### Features
+
+* **telemetry:** Added recall metrics for timing/hits ([f131abc](https://github.com/edlontech/mnemosyne/commit/f131abcfecb20955e7cb372936abde185184c6bc))
+
 ## [0.7.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.6.1...mnemosyne-v0.7.0) (2026-10-13)
 
 
