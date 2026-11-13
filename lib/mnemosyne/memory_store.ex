@@ -23,6 +23,7 @@ defmodule Mnemosyne.MemoryStore do
   alias Mnemosyne.Errors.Invalid.AccessError
   alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph
+  alias Mnemosyne.Graph.Node
   alias Mnemosyne.IngestionReceipt
   alias Mnemosyne.ModelCall.Context
   alias Mnemosyne.NodeMetadata
@@ -155,10 +156,21 @@ defmodule Mnemosyne.MemoryStore do
   end
 
   @doc "Fetches nodes by their IDs from the backend."
-  @spec get_linked_nodes(GenServer.server(), [String.t()], keyword()) ::
+  @spec get_nodes(GenServer.server(), [String.t()], keyword()) ::
           {:ok, [struct()]} | {:error, term()}
-  def get_linked_nodes(server, node_ids, opts \\ []) do
+  def get_nodes(server, node_ids, opts \\ []) do
     GenServer.call(server, {:authorized_read, {:get_linked_nodes, node_ids}, opts})
+  end
+
+  @doc false
+  @deprecated "Use get_nodes/3; it fetches by ID and does not traverse links"
+  def get_linked_nodes(server, node_ids, opts \\ []), do: get_nodes(server, node_ids, opts)
+
+  @doc "Resolves node IDs to the `Source` nodes they were derived from. See `Mnemosyne.get_sources/3`."
+  @spec get_sources(GenServer.server(), [String.t()], keyword()) ::
+          {:ok, [struct()]} | {:error, term()}
+  def get_sources(server, node_ids, opts \\ []) do
+    GenServer.call(server, {:authorized_read, {:get_sources, node_ids}, opts})
   end
 
   @doc """
@@ -1084,7 +1096,7 @@ defmodule Mnemosyne.MemoryStore do
     metadata = %{source_id: source_id}
 
     case result do
-      {:ok, %RecallResult{} = recall_result} ->
+      {:ok, %RecallResult{} = recall_result, accessed_ids} ->
         metadata = Map.put(metadata, :trace, recall_result.trace)
 
         Notifier.safe_notify(
@@ -1095,7 +1107,7 @@ defmodule Mnemosyne.MemoryStore do
 
         GenServer.reply(from, {:ok, recall_result})
 
-        backend = update_access_metadata(recall_result.touched_nodes, state.backend)
+        backend = update_access_metadata(accessed_ids, state.backend)
         {:noreply, %{state | pending_recalls: pending, backend: backend}}
 
       {:error, reason} ->
@@ -1164,9 +1176,24 @@ defmodule Mnemosyne.MemoryStore do
           |> Enum.map(&TouchedNode.from_tagged(&1, verbosity))
           |> Enum.sort_by(& &1.score, :desc)
 
-        {:ok, %RecallResult{reasoned: reasoned, touched_nodes: touched_nodes, trace: trace}}
+        reasoned_ids = Reasoning.reasoned_ids(result, config)
+
+        {:ok,
+         %RecallResult{
+           reasoned: reasoned,
+           reasoned_ids: reasoned_ids,
+           touched_nodes: touched_nodes,
+           trace: trace
+         }, accessed_ids(reasoned_ids, result.support)}
       end
     end)
+  end
+
+  # Access is recorded only for nodes the reasoner read, plus the semantic
+  # nodes that produced reasoned episodic results.
+  defp accessed_ids(reasoned_ids, support) do
+    ids = reasoned_ids |> Map.values() |> List.flatten()
+    Enum.uniq(ids ++ Enum.flat_map(ids, &Map.get(support, &1, [])))
   end
 
   defp read_backend(%{access_control: nil, backend: backend}, _opts), do: {:ok, backend}
@@ -1196,6 +1223,16 @@ defmodule Mnemosyne.MemoryStore do
     end
   end
 
+  # Provenance links run semantic/procedural -> episodic -> source.
+  defp read_request({:get_sources, node_ids}, backend) do
+    nodes = fetch_nodes(node_ids, backend)
+    {derived, direct} = Enum.split_with(nodes, &(Node.node_type(&1) in [:semantic, :procedural]))
+    episodes = direct ++ fetch_provenance(derived, :episodic, backend)
+    sources = Enum.filter(direct, &(Node.node_type(&1) == :source))
+
+    {:ok, Enum.uniq_by(sources ++ fetch_provenance(episodes, :source, backend), &Node.id/1)}
+  end
+
   defp read_request({operation, argument}, {module, backend_state}) do
     result =
       case operation do
@@ -1209,6 +1246,19 @@ defmodule Mnemosyne.MemoryStore do
       {:ok, value, _backend_state} -> {:ok, value}
       {:error, _} = error -> error
     end
+  end
+
+  defp fetch_nodes(ids, {module, backend_state}) do
+    {:ok, nodes, _} = module.get_linked_nodes(Enum.uniq(ids), nil, backend_state)
+    nodes
+  end
+
+  defp fetch_provenance(nodes, type, backend) do
+    nodes
+    |> Enum.filter(&(Node.node_type(&1) != :source))
+    |> Enum.flat_map(&(&1 |> Node.links(:provenance) |> MapSet.to_list()))
+    |> fetch_nodes(backend)
+    |> Enum.filter(&(Node.node_type(&1) == type))
   end
 
   defp fetch_nodes_with_metadata(types, {backend_mod, backend_state}) do
@@ -1230,8 +1280,7 @@ defmodule Mnemosyne.MemoryStore do
   defp maybe_update_metadata(backend_mod, metadata, bs),
     do: backend_mod.update_metadata(metadata, bs)
 
-  defp update_access_metadata(touched_nodes, {backend_mod, backend_state}) do
-    node_ids = Enum.map(touched_nodes, & &1.id)
+  defp update_access_metadata(node_ids, {backend_mod, backend_state}) do
     do_update_access_metadata(node_ids, backend_mod, backend_state)
   end
 

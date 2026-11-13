@@ -379,11 +379,30 @@ defmodule Mnemosyne do
   end
 
   @doc "Fetches nodes by their IDs, filtered by `:authorization` in protected repos."
-  @spec get_linked_nodes(String.t(), [String.t()], keyword()) ::
-          {:ok, [struct()]} | {:error, term()}
-  def get_linked_nodes(repo_id, node_ids, opts \\ []) do
+  @spec get_nodes(String.t(), [String.t()], keyword()) :: {:ok, [struct()]} | {:error, term()}
+  def get_nodes(repo_id, node_ids, opts \\ []) do
     with {:ok, pid} <- lookup_repo(repo_id, opts) do
-      MemoryStore.get_linked_nodes(pid, node_ids, Keyword.delete(opts, :supervisor))
+      MemoryStore.get_nodes(pid, node_ids, Keyword.delete(opts, :supervisor))
+    end
+  end
+
+  @doc false
+  @deprecated "Use get_nodes/3; it fetches by ID and does not traverse links"
+  def get_linked_nodes(repo_id, node_ids, opts \\ []), do: get_nodes(repo_id, node_ids, opts)
+
+  @doc """
+  Resolves node IDs to the `Source` nodes they were derived from, in any recall mode.
+
+  Semantic and procedural nodes resolve through their provenance-linked episodic
+  nodes, episodic nodes resolve directly, and source IDs resolve to themselves.
+  Pass `RecallResult.reasoned_ids` values to get the sources behind an answer.
+  Filtered by `:authorization` in protected repos.
+  """
+  @spec get_sources(String.t(), [String.t()], keyword()) ::
+          {:ok, [Mnemosyne.Graph.Node.Source.t()]} | {:error, term()}
+  def get_sources(repo_id, node_ids, opts \\ []) do
+    with {:ok, pid} <- lookup_repo(repo_id, opts) do
+      MemoryStore.get_sources(pid, node_ids, Keyword.delete(opts, :supervisor))
     end
   end
 

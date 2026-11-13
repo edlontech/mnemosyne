@@ -53,21 +53,36 @@ defmodule Mnemosyne.ModelCall do
         adapter.chat_structured(messages, schema, opts)
       end)
 
-  @doc "Invokes one embedding call with optional repository-attributed telemetry."
+  @doc """
+  Invokes one embedding call with optional repository-attributed telemetry.
+
+  Adds `purpose: :query | :document` to the adapter opts (see `embed_purpose/1`)
+  so adapters for asymmetric models can embed queries and documents differently.
+  """
   @spec embed(Context.t() | nil, module(), atom(), String.t(), keyword()) ::
           {:ok, Embedding.Response.t()} | {:error, term()}
-  def embed(context, adapter, step, text, opts),
-    do:
-      invoke(context, :embedding, :embed, adapter, step, opts, fn -> adapter.embed(text, opts) end)
+  def embed(context, adapter, step, text, opts) do
+    opts = Keyword.put_new(opts, :purpose, embed_purpose(step))
+    invoke(context, :embedding, :embed, adapter, step, opts, fn -> adapter.embed(text, opts) end)
+  end
 
   @doc "Invokes a batched embedding call with optional repository-attributed telemetry."
   @spec embed_batch(Context.t() | nil, module(), atom(), [String.t()], keyword()) ::
           {:ok, Embedding.Response.t()} | {:error, term()}
-  def embed_batch(context, adapter, step, texts, opts),
-    do:
-      invoke(context, :embedding, :embed_batch, adapter, step, opts, fn ->
-        adapter.embed_batch(texts, opts)
-      end)
+  def embed_batch(context, adapter, step, texts, opts) do
+    opts = Keyword.put_new(opts, :purpose, embed_purpose(step))
+
+    invoke(context, :embedding, :embed_batch, adapter, step, opts, fn ->
+      adapter.embed_batch(texts, opts)
+    end)
+  end
+
+  @query_steps [:retrieval, :retrieval_focus, :get_refined_query]
+
+  @doc "Returns `:query` for retrieval-time embedding steps and `:document` for everything else."
+  @spec embed_purpose(atom()) :: :query | :document
+  def embed_purpose(step) when step in @query_steps, do: :query
+  def embed_purpose(_step), do: :document
 
   defp invoke(nil, _kind, _callback, _adapter, _step, _opts, fun), do: fun.()
 

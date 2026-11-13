@@ -13,8 +13,10 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
   alias Mnemosyne.Graph.Node.Source
   alias Mnemosyne.Graph.Node.Subgoal
   alias Mnemosyne.Graph.Node.Tag
+  alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.GraphBackends.InMemory
   alias Mnemosyne.LLM
+  alias Mnemosyne.NodeMetadata
   alias Mnemosyne.Pipeline.Retrieval
   alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
@@ -742,6 +744,50 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       assert %TaggedCandidate{phase: :routing, hop: 1} =
                Enum.find(result.candidates.semantic, &(&1.node.id == "sem_bridge"))
     end
+
+    test "stale, never-accessed tags still route on raw cosine" do
+      stale = DateTime.add(DateTime.utc_now(), -200 * 24 * 3600, :second)
+
+      metadata = %{
+        "tag_bridge" =>
+          NodeMetadata.new(created_at: stale, cumulative_reward: 0.8, reward_count: 1)
+      }
+
+      backend = {InMemory, %InMemory{graph: build_bridge_graph(), metadata: metadata}}
+      stub_retrieval_llm("semantic", "bridge")
+      stub_bridge_embedding()
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve(
+          "Seed question",
+          @default_opts ++
+            [backend: backend, value_function: narrow_value_function(), max_hops: 0]
+        )
+
+      assert "sem_bridge" in candidate_ids(result)
+    end
+
+    test "routed candidates are ranked by the value function with their metadata" do
+      metadata = %{"sem_bridge" => NodeMetadata.new()}
+      backend = {InMemory, %InMemory{graph: build_bridge_graph(), metadata: metadata}}
+      stub_retrieval_llm("semantic", "bridge")
+      stub_bridge_embedding()
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve(
+          "Seed question",
+          @default_opts ++
+            [backend: backend, value_function: narrow_value_function(), max_hops: 0]
+        )
+
+      bridge = Enum.find(result.candidates.semantic, &(&1.node.id == "sem_bridge"))
+
+      relevance =
+        Similarity.cosine_similarity(@routing_bridge_vec, @routing_bridge_fact_vec)
+
+      # Fresh, never-accessed metadata applies the 0.3 frequency floor.
+      assert_in_delta bridge.score, relevance * 0.3, 0.01
+    end
   end
 
   describe "retrieve/2" do
@@ -1199,6 +1245,21 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       assert "ep_2" in ids
       refute "sem_pool" in ids
       refute "sem_throughput" in ids
+    end
+
+    test "episodic mode records which semantic candidates support each episode" do
+      graph = build_provenance_graph()
+      stub_retrieval_llm("episodic", "pooling")
+      stub_default_embedding()
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve("What happened with pooling?", retrieval_opts(graph, max_hops: 0))
+
+      for %TaggedCandidate{node: episode} <- result.candidates.episodic do
+        supporting = Map.fetch!(result.support, episode.id)
+        assert supporting != []
+        assert Enum.all?(supporting, &(&1 in NodeProtocol.links(episode, :provenance)))
+      end
     end
 
     test "episodic mode falls back to direct search without semantic provenance" do

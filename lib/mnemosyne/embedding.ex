@@ -4,6 +4,11 @@ defmodule Mnemosyne.Embedding do
 
   Implementations must convert text into vector representations
   suitable for similarity search.
+
+  Mnemosyne passes `purpose: :query | :document` in `opts`: `:query` for
+  retrieval-time text, `:document` for stored content. Adapters for
+  asymmetric models (for example Cohere `input_type: "search_query"` vs
+  `"search_document"`) should map it; others can ignore it.
   """
   defmodule Response do
     @moduledoc "Struct returned by embedding generation calls."

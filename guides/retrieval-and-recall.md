@@ -29,13 +29,11 @@ The graph backend scores all nodes of the target types against both the query em
 - Cosine similarity with the query vector
 - Maximum cosine similarity across all tag vectors
 
-This raw relevance is then combined with node metadata through the value function:
+Candidates below the per-type threshold (compared to raw relevance) are filtered out, and only the top-k per type by relevance survive. Every other channel (routing, expansion, refinement) uses the same raw-relevance threshold. Once the pool is complete, the value function ranks it once, using node metadata:
 
 ```
 score = relevance * recency_factor * frequency_factor * reward_factor
 ```
-
-Candidates below the per-type threshold are filtered out, and only the top-k per type survive.
 
 ### 4. Controlled Multi-Hop Traversal
 
@@ -105,9 +103,9 @@ config = %Mnemosyne.Config{
   value_function: %{
     module: Mnemosyne.ValueFunction.Default,
     params: %{
-      semantic: %{threshold: 0.1, top_k: 30, lambda: 0.005, k: 10, base_floor: 0.2, beta: 1.5},
-      procedural: %{threshold: 0.12, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
-      episodic: %{threshold: 0.0, top_k: 30, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
+      semantic: %{threshold: 0.35, top_k: 30, lambda: 0.005, k: 10, base_floor: 0.2, beta: 1.5},
+      procedural: %{threshold: 0.3, top_k: 10, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0},
+      episodic: %{threshold: 0.3, top_k: 30, lambda: 0.01, k: 5, base_floor: 0.3, beta: 1.0}
     }
   }
 }
@@ -117,7 +115,7 @@ config = %Mnemosyne.Config{
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `threshold` | varies | Minimum score to include a candidate. Higher = stricter filtering. |
+| `threshold` | 0.3 (tag/intent 0.5, source 0.0) | Minimum raw cosine relevance to include a candidate, before the value function. Tune it above your embedding model's noise floor for unrelated text. |
 | `top_k` | varies | Maximum candidates per node type. |
 | `lambda` | 0.01 | Recency decay rate. Higher = faster decay, stronger preference for recent nodes. |
 | `k` | 5 | Frequency saturation constant. Higher = slower ramp-up for frequently accessed nodes. |

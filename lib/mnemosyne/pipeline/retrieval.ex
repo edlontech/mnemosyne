@@ -14,6 +14,10 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   drive the next-hop query. Episodic queries retrieve over the
   semantic graph and map results back to their provenance-linked
   episodic nodes.
+
+  Candidates are gathered and thresholded on raw cosine relevance in every
+  channel, so per-type thresholds mean the same thing everywhere. The
+  configured value function ranks the final pool once, with node metadata.
   """
 
   require Logger
@@ -29,22 +33,27 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   alias Mnemosyne.Pipeline.Prompts.GetMode
   alias Mnemosyne.Pipeline.Prompts.GetPlan
   alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
+  alias Mnemosyne.ValueFunction
 
   defmodule Result do
     @moduledoc """
     Result of a retrieval operation containing the classified mode,
     generated tags, and scored candidate nodes partitioned by type.
+
+    `support` maps each episodic candidate ID to the semantic candidate IDs
+    that produced it in episodic mode, and is empty otherwise.
     """
 
     alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
 
-    defstruct [:mode, :tags, candidates: %{}, phases: %{}]
+    defstruct [:mode, :tags, candidates: %{}, phases: %{}, support: %{}]
 
     @type t :: %__MODULE__{
             mode: atom(),
             tags: [String.t()],
             candidates: %{atom() => [TaggedCandidate.t()]},
-            phases: map()
+            phases: map(),
+            support: %{String.t() => [String.t()]}
           }
   end
 
@@ -101,7 +110,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
             query_vector: query_vector,
             tag_vectors: tag_vectors,
             backend: backend,
-            value_fns: value_fns,
+            value_fns: Map.put(value_fns, :module, ValueFunction.Relevance),
+            ranking_fns: value_fns,
             llm: llm,
             embedding: embedding,
             llm_opts: llm_opts,
@@ -155,11 +165,14 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     post_multihop_count = length(candidates)
     multihop_rejected = hop0_count - min(hop0_count, post_multihop_count)
 
-    {prov_us, candidates} =
+    {prov_us, {candidates, support}} =
       :timer.tc(fn ->
-        candidates
-        |> finalize_for_mode(ctx)
-        |> maybe_expand_provenance(ctx.backend, ctx.mode)
+        {candidates, support} =
+          candidates
+          |> apply_value_function(ctx)
+          |> finalize_for_mode(ctx)
+
+        {maybe_expand_provenance(candidates, ctx.backend, ctx.mode), support}
       end)
 
     candidates = partition_by_type(candidates)
@@ -206,7 +219,14 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       stopped_early_at: control_state.stopped_early_at
     }
 
-    result = %Result{mode: ctx.mode, tags: ctx.tags, candidates: candidates, phases: phases}
+    result = %Result{
+      mode: ctx.mode,
+      tags: ctx.tags,
+      candidates: candidates,
+      phases: phases,
+      support: support
+    }
+
     {{:ok, result, trace}, %{candidates_found: total_candidates}}
   end
 
@@ -396,20 +416,29 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     |> score_nodes([query_vector | tag_vectors], value_fns)
   end
 
-  # Scores nodes by their best similarity to any of the given vectors,
-  # through the value function without metadata, and drops those below
-  # the per-type threshold.
+  # Scores nodes by their best similarity to any of the given vectors and
+  # drops those below the per-type threshold.
   defp score_nodes(nodes, vectors, value_fns) do
-    vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
-
     nodes
-    |> Enum.map(fn node ->
-      type = NodeProtocol.node_type(node)
-      params = get_in(value_fns, [:params, type]) || %{}
-      {node, vf_module.score(relevance(node, vectors), node, nil, params)}
-    end)
-    |> Enum.filter(fn {node, score} ->
-      score >= (get_in(value_fns, [:params, NodeProtocol.node_type(node), :threshold]) || 0.0)
+    |> Enum.map(fn node -> {node, relevance(node, vectors)} end)
+    |> Enum.filter(fn {node, score} -> score >= threshold(value_fns, node) end)
+  end
+
+  defp threshold(value_fns, node) do
+    get_in(value_fns, [:params, NodeProtocol.node_type(node), :threshold]) || 0.0
+  end
+
+  # Ranks the pool once with the configured value function and node metadata.
+  # Candidate scores are raw relevance up to this point.
+  defp apply_value_function(candidates, %{backend: {mod, bs}, ranking_fns: value_fns}) do
+    vf_module = Map.get(value_fns, :module, ValueFunction.Default)
+    ids = Enum.map(candidates, fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)
+    {:ok, metadata, _bs} = mod.get_metadata(ids, bs)
+
+    Enum.map(candidates, fn %TaggedCandidate{node: node, score: relevance} = candidate ->
+      params = get_in(value_fns, [:params, NodeProtocol.node_type(node)]) || %{}
+      meta = Map.get(metadata, NodeProtocol.id(node))
+      %{candidate | score: vf_module.score(relevance, node, meta, params)}
     end)
   end
 
@@ -466,7 +495,6 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         value_fns
       ) do
     {mod, bs} = backend
-    vf_module = Map.get(value_fns, :module, Mnemosyne.ValueFunction.Default)
 
     candidate_link_ids =
       candidates
@@ -480,7 +508,7 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     routing_nodes =
       Enum.filter(linked_nodes, fn node ->
         NodeProtocol.node_type(node) in routing_types and
-          routing_node_above_threshold?(node, query_vector, value_fns, vf_module)
+          relevance(node, [query_vector]) >= threshold(value_fns, node)
       end)
 
     sibling_ids =
@@ -503,17 +531,18 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   defp finalize_for_mode(candidates, %{mode: :episodic} = ctx) do
     {mod, bs} = ctx.backend
 
+    # episodic id => {summed score, contributing semantic ids}
     episodic_scores =
       candidates
       |> Enum.filter(fn %TaggedCandidate{node: node} ->
         NodeProtocol.node_type(node) == :semantic
       end)
       |> Enum.reduce(%{}, fn %TaggedCandidate{node: node, score: score}, acc ->
+        id = NodeProtocol.id(node)
+
         node
         |> NodeProtocol.links(:provenance)
-        |> Enum.reduce(acc, fn linked_id, inner ->
-          Map.update(inner, linked_id, score, &(&1 + score))
-        end)
+        |> Enum.reduce(acc, &add_support(&2, &1, id, score))
       end)
 
     {:ok, linked_nodes, _bs} = mod.get_linked_nodes(Map.keys(episodic_scores), nil, bs)
@@ -522,18 +551,33 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       linked_nodes
       |> Enum.filter(&(NodeProtocol.node_type(&1) == :episodic))
       |> Enum.map(fn node ->
-        score = Map.fetch!(episodic_scores, NodeProtocol.id(node))
+        {score, _ids} = Map.fetch!(episodic_scores, NodeProtocol.id(node))
         TaggedCandidate.from_provenance(node, score)
       end)
       |> Enum.sort_by(& &1.score, :desc)
 
     case episodic do
-      [] -> direct_episodic_fallback(ctx)
-      eps -> eps
+      [] ->
+        {direct_episodic_fallback(ctx), %{}}
+
+      eps ->
+        support =
+          Map.new(eps, fn %TaggedCandidate{node: node} ->
+            id = NodeProtocol.id(node)
+            {id, episodic_scores |> Map.fetch!(id) |> elem(1)}
+          end)
+
+        {eps, support}
     end
   end
 
-  defp finalize_for_mode(candidates, _ctx), do: candidates
+  defp finalize_for_mode(candidates, _ctx), do: {candidates, %{}}
+
+  defp add_support(acc, episode_id, semantic_id, score) do
+    Map.update(acc, episode_id, {score, [semantic_id]}, fn {sum, ids} ->
+      {sum + score, [semantic_id | ids]}
+    end)
+  end
 
   # Fallback for graphs with no semantic layer (or no provenance links):
   # search episodic and subgoal nodes directly by embedding.
@@ -550,7 +594,9 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         bs
       )
 
-    Enum.map(found, fn {node, score} -> TaggedCandidate.from_hop_0(node, score) end)
+    found
+    |> Enum.map(fn {node, score} -> TaggedCandidate.from_hop_0(node, score) end)
+    |> apply_value_function(ctx)
   end
 
   defp maybe_expand_provenance(candidates, backend, :episodic) do
@@ -598,16 +644,6 @@ defmodule Mnemosyne.Pipeline.Retrieval do
       candidates,
       fn %TaggedCandidate{node: node} -> NodeProtocol.node_type(node) end
     )
-  end
-
-  defp routing_node_above_threshold?(node, query_vector, value_fns, vf_module) do
-    emb = NodeProtocol.embedding(node)
-    type = NodeProtocol.node_type(node)
-    params = get_in(value_fns, [:params, type]) || %{}
-    threshold = Map.get(params, :threshold, 0.0)
-    relevance = if emb, do: Similarity.cosine_similarity(query_vector, emb), else: 0.0
-    score = vf_module.score(relevance, node, nil, params)
-    score >= threshold
   end
 
   defp build_scores_map(candidates) do

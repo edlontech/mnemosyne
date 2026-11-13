@@ -106,7 +106,7 @@ end
 def handle_info(_event, socket), do: {:noreply, socket}
 ```
 
-Notifications report outcomes; query current graph state with `Mnemosyne.get_node/3`, `get_nodes_by_type/3`, `get_metadata/3`, or `get_linked_nodes/3` when a consumer needs full node data.
+Notifications report outcomes; query current graph state with `Mnemosyne.get_node/3`, `get_nodes_by_type/3`, `get_metadata/3`, `get_nodes/3`, or `get_sources/3` when a consumer needs full node data.
 
 ## Next Steps
 

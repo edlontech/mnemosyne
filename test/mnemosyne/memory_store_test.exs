@@ -17,9 +17,11 @@ defmodule Mnemosyne.MemoryStoreTest do
   alias Mnemosyne.Errors.Invalid.IngestionError
   alias Mnemosyne.Graph
   alias Mnemosyne.Graph.Changeset
+  alias Mnemosyne.Graph.Node.Episodic
   alias Mnemosyne.Graph.Node.Intent
   alias Mnemosyne.Graph.Node.Procedural
   alias Mnemosyne.Graph.Node.Semantic
+  alias Mnemosyne.Graph.Node.Source
   alias Mnemosyne.Graph.Node.Tag
   alias Mnemosyne.GraphBackends.InMemory
   alias Mnemosyne.GraphBackends.Persistence.DETS
@@ -1320,7 +1322,7 @@ defmodule Mnemosyne.MemoryStoreTest do
 
       pid = start_store(tmp_dir)
 
-      node = make_semantic("s1", "Elixir is functional")
+      node = %{make_semantic("s1", "Elixir is functional") | embedding: List.duplicate(0.1, 128)}
       tag = %Tag{id: "t1", label: "elixir"}
 
       changeset =
@@ -1345,6 +1347,112 @@ defmodule Mnemosyne.MemoryStoreTest do
           MemoryStore.get_metadata(pid, ["s1"])
         )
       )
+    end
+
+    test "records access only for the nodes the reasoner read", %{tmp_dir: tmp_dir} do
+      query_vector = List.duplicate(0.1, 128)
+
+      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
+      end)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        {:ok,
+         %LLM.Response{
+           content: %{reasoning: "analysis", information: "Summary."},
+           model: "test",
+           usage: %{}
+         }}
+      end)
+
+      stub(Mnemosyne.MockEmbedding, :embed_batch, fn texts, _opts ->
+        {:ok,
+         %Embedding.Response{
+           vectors: Enum.map(texts, fn _ -> query_vector end),
+           model: "test",
+           usage: %{}
+         }}
+      end)
+
+      {:ok, config} =
+        Zoi.parse(Config.t(), %{
+          llm: %{model: "test-model", opts: %{}},
+          embedding: %{model: "test-embed", opts: %{}},
+          value_function: %{params: %{semantic: %{threshold: 0.3, top_k: 1}}}
+        })
+
+      pid = start_store(tmp_dir, config: config)
+      near = %{make_semantic("near", "Close match") | embedding: query_vector}
+
+      far = %{
+        make_semantic("far", "Weaker match")
+        | embedding: List.duplicate(0.1, 64) ++ List.duplicate(0.02, 64)
+      }
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(near)
+        |> Changeset.add_node(far)
+        |> Changeset.add_node(%Tag{id: "t1", label: "query", embedding: query_vector})
+        |> Changeset.add_link("t1", "far", :membership)
+        |> Changeset.put_metadata("near", NodeMetadata.new())
+        |> Changeset.put_metadata("far", NodeMetadata.new())
+
+      :ok = MemoryStore.apply_changeset(pid, changeset)
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "far") != nil)
+
+      assert {:ok, %RecallResult{reasoned_ids: %{semantic: ["near"]}} = result} =
+               MemoryStore.recall(pid, "query", max_hops: 0)
+
+      assert "far" in Enum.map(result.touched_nodes, & &1.id)
+
+      assert_eventually(
+        match?(
+          {:ok, %{"near" => %NodeMetadata{access_count: 1}}},
+          MemoryStore.get_metadata(pid, ["near"])
+        )
+      )
+
+      assert {:ok, %{"far" => %NodeMetadata{access_count: 0}}} =
+               MemoryStore.get_metadata(pid, ["far"])
+    end
+  end
+
+  describe "get_sources/3" do
+    test "resolves semantic and episodic nodes to their sources", %{tmp_dir: tmp_dir} do
+      pid = start_store(tmp_dir)
+
+      episode = fn id ->
+        %Episodic{
+          id: id,
+          observation: "o",
+          action: "a",
+          state: "s",
+          subgoal: "g",
+          reward: 0.5,
+          trajectory_id: "t"
+        }
+      end
+
+      changeset =
+        Changeset.new()
+        |> Changeset.add_node(make_semantic("fact", "A fact"))
+        |> Changeset.add_node(episode.("ep_a"))
+        |> Changeset.add_node(episode.("ep_b"))
+        |> Changeset.add_node(%Source{id: "src_a", episode_id: "e", step_index: 0})
+        |> Changeset.add_node(%Source{id: "src_b", episode_id: "e", step_index: 1})
+        |> Changeset.add_node(%Source{id: "src_other", episode_id: "e", step_index: 2})
+        |> Changeset.add_node(episode.("ep_other"))
+        |> Changeset.add_link("fact", "ep_a", :provenance)
+        |> Changeset.add_link("ep_a", "src_a", :provenance)
+        |> Changeset.add_link("ep_b", "src_b", :provenance)
+        |> Changeset.add_link("ep_other", "src_other", :provenance)
+
+      :ok = MemoryStore.apply_changeset(pid, changeset)
+      assert_eventually(Graph.get_node(MemoryStore.get_graph(pid), "src_other") != nil)
+
+      assert {:ok, sources} = MemoryStore.get_sources(pid, ["fact", "ep_b"])
+      assert sources |> Enum.map(& &1.id) |> Enum.sort() == ["src_a", "src_b"]
     end
   end
 end

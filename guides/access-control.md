@@ -76,7 +76,8 @@ Pass the same `authorization:` option to:
 - `latest/3`
 - `get_node/3`
 - `get_nodes_by_type/3`
-- `get_linked_nodes/3`
+- `get_nodes/3`
+- `get_sources/3`
 - `get_metadata/3`
 
 Missing/invalid identity or missing repo membership returns an `AccessError`. For a valid member, inaccessible nodes behave as absent: a single-node read returns `{:ok, nil}`, lists omit them, and metadata contains only accessible IDs. Returned node links omit inaccessible targets.

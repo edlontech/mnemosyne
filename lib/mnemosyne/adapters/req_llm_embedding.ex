@@ -47,6 +47,7 @@ if Code.ensure_loaded?(ReqLLM) do
 
     defp do_embed(texts, opts, operation) do
       {model, req_opts} = Keyword.pop!(opts, :model)
+      req_opts = Keyword.delete(req_opts, :purpose)
       req_opts = Keyword.merge(req_opts, return_usage: true, encoding_format: "float")
 
       case ReqLLM.embed(model, texts, req_opts) do

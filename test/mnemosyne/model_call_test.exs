@@ -132,8 +132,9 @@ defmodule Mnemosyne.ModelCallTest do
     batch_result =
       {:ok, %EmbeddingResponse{vectors: [[0.1], [0.2]], model: "embed-2", usage: %{}}}
 
-    expect(Mnemosyne.MockEmbedding, :embed, fn ^text, ^opts -> single_result end)
-    expect(Mnemosyne.MockEmbedding, :embed_batch, fn ^texts, ^opts -> batch_result end)
+    adapter_opts = Keyword.put(opts, :purpose, :query)
+    expect(Mnemosyne.MockEmbedding, :embed, fn ^text, ^adapter_opts -> single_result end)
+    expect(Mnemosyne.MockEmbedding, :embed_batch, fn ^texts, ^adapter_opts -> batch_result end)
 
     context = %Context{repo_id: "repo-1", operation: :recall}
 

@@ -67,13 +67,13 @@ defmodule Mnemosyne.Config do
                    })
 
   @vf_param_defaults %{
-    semantic: @vf_base_default,
-    procedural: %{@vf_base_default | threshold: 0.12, top_k: 10},
-    episodic: %{@vf_base_default | top_k: 30},
-    subgoal: %{@vf_base_default | threshold: 0.225, top_k: 10},
-    tag: %{@vf_base_default | threshold: 0.135, top_k: 10},
+    semantic: %{@vf_base_default | threshold: 0.3},
+    procedural: %{@vf_base_default | threshold: 0.3, top_k: 10},
+    episodic: %{@vf_base_default | threshold: 0.3, top_k: 30},
+    subgoal: %{@vf_base_default | threshold: 0.3, top_k: 10},
+    tag: %{@vf_base_default | threshold: 0.5, top_k: 10},
     source: %{@vf_base_default | top_k: 50},
-    intent: %{@vf_base_default | threshold: 0.105, top_k: 10}
+    intent: %{@vf_base_default | threshold: 0.5, top_k: 10}
   }
 
   @vf_safe_default @vf_base_default

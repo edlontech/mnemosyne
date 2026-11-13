@@ -283,7 +283,13 @@ defmodule MnemosyneTest do
       start_supervisor(tmp_dir)
       repo = open_test_repo(tmp_dir)
 
-      node = %Semantic{id: "context-node", proposition: "Inspect timeout logs", confidence: 0.9}
+      node = %Semantic{
+        id: "context-node",
+        proposition: "Inspect timeout logs",
+        confidence: 0.9,
+        embedding: List.duplicate(0.1, 128)
+      }
+
       :ok = Mnemosyne.apply_changeset(repo, Changeset.add_node(Changeset.new(), node))
       assert_eventually(Mnemosyne.get_graph(repo).nodes["context-node"] != nil)
 
@@ -324,7 +330,13 @@ defmodule MnemosyneTest do
       start_supervisor(tmp_dir)
       repo = open_test_repo(tmp_dir)
 
-      node = %Semantic{id: "plain-node", proposition: "Plain recall", confidence: 0.9}
+      node = %Semantic{
+        id: "plain-node",
+        proposition: "Plain recall",
+        confidence: 0.9,
+        embedding: List.duplicate(0.1, 128)
+      }
+
       :ok = Mnemosyne.apply_changeset(repo, Changeset.add_node(Changeset.new(), node))
       assert_eventually(Mnemosyne.get_graph(repo).nodes["plain-node"] != nil)
       stub_recall_query_capture(test_pid)

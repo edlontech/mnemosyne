@@ -11,6 +11,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   require Logger
 
   alias Mnemosyne.Config
+  alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.LLM
   alias Mnemosyne.ModelCall
   alias Mnemosyne.Pipeline.Prompts.ReasonEpisodic
@@ -141,13 +142,32 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   end
 
   defp extract_nodes(candidates, type, config) do
+    candidates
+    |> select(type, config)
+    |> Enum.map(fn %TaggedCandidate{node: node} -> node end)
+  end
+
+  @doc """
+  Returns, per reasoned type, the IDs of the candidates `reason/2` reads
+  (the per-type `top_k` cut). Types with no candidates are omitted.
+  """
+  @spec reasoned_ids(Retrieval.Result.t(), Config.t() | nil) :: %{atom() => [String.t()]}
+  def reasoned_ids(%Retrieval.Result{candidates: candidates}, config) do
+    for type <- [:episodic, :semantic, :procedural],
+        selected = select(candidates, type, config),
+        selected != [],
+        into: %{} do
+      {type, Enum.map(selected, fn %TaggedCandidate{node: node} -> NodeProtocol.id(node) end)}
+    end
+  end
+
+  defp select(candidates, type, config) do
     top_k = resolve_top_k(type, config)
 
     candidates
     |> Map.get(type, [])
     |> Enum.sort_by(& &1.score, :desc)
     |> Enum.take(top_k)
-    |> Enum.map(fn %TaggedCandidate{node: node} -> node end)
   end
 
   defp resolve_top_k(type, nil), do: default_top_k(type)

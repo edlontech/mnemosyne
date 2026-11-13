@@ -258,7 +258,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
     subgoal_node = %Subgoal{
       id: generate_id("sg"),
       description: trajectory.subgoal,
-      parent_goal: goal
+      parent_goal: goal,
+      embedding: List.last(trajectory.steps).embedding
     }
 
     observations = Enum.map(trajectory.steps, & &1.observation)

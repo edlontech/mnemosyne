@@ -131,26 +131,26 @@ defmodule Mnemosyne.ConfigTest do
       end
 
       semantic = config.value_function.params[:semantic]
-      assert semantic.threshold == 0.0
+      assert semantic.threshold == 0.3
       assert semantic.top_k == 20
       assert semantic.k == 5
       assert semantic.base_floor == 0.3
       assert semantic.beta == 1.0
 
       procedural = config.value_function.params[:procedural]
-      assert procedural.threshold == 0.12
+      assert procedural.threshold == 0.3
       assert procedural.top_k == 10
 
       episodic = config.value_function.params[:episodic]
-      assert episodic.threshold == 0.0
+      assert episodic.threshold == 0.3
       assert episodic.top_k == 30
 
       subgoal = config.value_function.params[:subgoal]
-      assert subgoal.threshold == 0.225
+      assert subgoal.threshold == 0.3
       assert subgoal.top_k == 10
 
       tag = config.value_function.params[:tag]
-      assert tag.threshold == 0.135
+      assert tag.threshold == 0.5
       assert tag.top_k == 10
 
       source = config.value_function.params[:source]
@@ -158,7 +158,7 @@ defmodule Mnemosyne.ConfigTest do
       assert source.top_k == 50
 
       intent = config.value_function.params[:intent]
-      assert intent.threshold == 0.105
+      assert intent.threshold == 0.5
       assert intent.top_k == 10
     end
 
@@ -228,7 +228,7 @@ defmodule Mnemosyne.ConfigTest do
       {:ok, config} = Zoi.parse(Config.t(), @valid_config)
 
       params = Config.resolve_value_function(config, :semantic)
-      assert params.threshold == 0.0
+      assert params.threshold == 0.3
       assert params.top_k == 20
       assert params.lambda == @default_recency_lambda
       assert params.k == 5
@@ -245,7 +245,7 @@ defmodule Mnemosyne.ConfigTest do
       {:ok, config} = Zoi.parse(Config.t(), input)
 
       params = Config.resolve_value_function(config, :procedural)
-      assert params.threshold == 0.12
+      assert params.threshold == 0.3
       assert params.top_k == 10
       assert params.lambda == @default_recency_lambda
       assert params.k == 5
@@ -277,7 +277,7 @@ defmodule Mnemosyne.ConfigTest do
 
       params = Config.resolve_value_function(config, :semantic)
       assert params.base_floor == 0.15
-      assert params.threshold == 0.0
+      assert params.threshold == 0.3
       assert params.top_k == 20
     end
 
@@ -310,7 +310,7 @@ defmodule Mnemosyne.ConfigTest do
       {:ok, config} = Zoi.parse(Config.t(), input)
 
       params = Config.resolve_value_function(config, :procedural)
-      assert params.threshold == 0.12
+      assert params.threshold == 0.3
       assert params.top_k == 10
       assert params.base_floor == 0.3
     end
