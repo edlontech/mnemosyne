@@ -44,14 +44,16 @@ defmodule Mnemosyne.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.8", only: :dev, runtime: false},
-      {:bumblebee, "~> 0.6", optional: true},
+      {:bumblebee, "~> 0.8", optional: true},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:doctor, "~> 0.22", only: :dev},
       {:ex_check, "~> 0.16", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.18", only: [:dev, :test]},
-      {:exla, "~> 0.10", only: [:dev, :test]},
-      {:emlx, "~> 0.2", only: [:dev, :test], runtime: false},
+      {:exla, "~> 1.0", only: [:dev, :test]},
+      {:emlx, "~> 0.5", only: [:dev, :test], runtime: false},
+      # emlx 0.5.x NIF does not build against fine 0.2 (Decoder API change)
+      {:fine, "~> 0.1.6", only: [:dev, :test], runtime: false},
       {:ex_cedar, "~> 0.1", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:assert_eventually, "~> 1.0", only: :test},
@@ -59,7 +61,7 @@ defmodule Mnemosyne.MixProject do
       {:mix_audit, ">= 0.0.0", only: [:dev, :test], runtime: false},
       {:recode, "~> 0.8", only: [:dev], runtime: false},
       {:req_llm, "~> 1.22", optional: true},
-      {:scholar, "~> 0.4"},
+      {:scholar, "~> 0.5"},
       {:splode, "~> 0.3"},
       {:sycophant, "~> 0.1", optional: true},
       {:telemetry, "~> 1.3"},
