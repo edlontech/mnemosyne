@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.7.0...mnemosyne-v0.8.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **retrieval:** threshold on raw cosine, rank once with value function, expose reasoned sources
+
+### Features
+
+* **telemetry:** Added recall metrics for timing/hits ([f131abc](https://github.com/edlontech/mnemosyne/commit/f131abcfecb20955e7cb372936abde185184c6bc))
+
+
+### Bug Fixes
+
+* **retrieval:** threshold on raw cosine, rank once with value function, expose reasoned sources ([962976a](https://github.com/edlontech/mnemosyne/commit/962976af5d1c03fef5f79452d128d7217530accf))
+* Updated deps for CVEs ([b352922](https://github.com/edlontech/mnemosyne/commit/b35292246856f893e1731a1c9aeb97ff6c2284c1))
+
 ## [0.7.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.6.1...mnemosyne-v0.7.0) (2026-10-13)
 
 
