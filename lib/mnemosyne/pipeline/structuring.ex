@@ -7,6 +7,11 @@ defmodule Mnemosyne.Pipeline.Structuring do
   unit, while GetProcedural runs once over the whole segment and GetReturn
   scores the resulting prescriptions. Everything is assembled into a
   Graph.Changeset.
+
+  Steps a decision model scored below `Config.fact_gate_threshold` (their
+  `salience`) skip GetSemantic and stay as episodic memory only. With
+  `Config.decision` set, the decision model also scores the prescriptions in
+  place of GetReturn.
   """
 
   require Logger
@@ -117,7 +122,8 @@ defmodule Mnemosyne.Pipeline.Structuring do
                nodes_created: length(cs.additions),
                links_created: length(cs.links),
                provenance_fallbacks: trace.provenance_fallbacks,
-               invalid_source_steps: trace.invalid_source_steps
+               invalid_source_steps: trace.invalid_source_steps,
+               gated_steps: trace.gated_steps
              }}
 
           {:error, _} = err ->
@@ -226,6 +232,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
         intent_count: count_nodes_of_type(cs, Intent),
         provenance_fallbacks: provenance_stats.fallbacks,
         invalid_source_steps: provenance_stats.invalid,
+        gated_steps: provenance_stats.gated,
         duration_us: duration_us
       }
 
@@ -245,8 +252,14 @@ defmodule Mnemosyne.Pipeline.Structuring do
          avg_reward,
          episodic_ids
        ) do
-    trajectory.steps
-    |> Enum.zip(episodic_ids)
+    threshold = if config, do: config.fact_gate_threshold, else: 0.0
+
+    {kept, gated} =
+      trajectory.steps
+      |> Enum.zip(episodic_ids)
+      |> Enum.split_with(fn {step, _id} -> (Map.get(step, :salience) || 1.0) >= threshold end)
+
+    kept
     |> Task.async_stream(
       fn {step, episodic_id} ->
         extract_semantic(
@@ -262,14 +275,17 @@ defmodule Mnemosyne.Pipeline.Structuring do
       end,
       timeout: :timer.seconds(60)
     )
-    |> Enum.reduce_while({:ok, Changeset.new(), @empty_provenance_stats}, fn
-      {:ok, {:ok, cs, stats}}, {:ok, acc_cs, acc_stats} ->
-        merged = Map.merge(acc_stats, stats, fn _key, a, b -> a + b end)
-        {:cont, {:ok, Changeset.merge(acc_cs, cs), merged}}
+    |> Enum.reduce_while(
+      {:ok, Changeset.new(), %{fallbacks: 0, invalid: 0, gated: length(gated)}},
+      fn
+        {:ok, {:ok, cs, stats}}, {:ok, acc_cs, acc_stats} ->
+          merged = Map.merge(acc_stats, stats, fn _key, a, b -> a + b end)
+          {:cont, {:ok, Changeset.merge(acc_cs, cs), merged}}
 
-      {:ok, {:error, _} = err}, _acc ->
-        {:halt, err}
-    end)
+        {:ok, {:error, _} = err}, _acc ->
+          {:halt, err}
+      end
+    )
   end
 
   defp trajectory_avg_reward(%{steps: steps}) do
@@ -567,6 +583,63 @@ defmodule Mnemosyne.Pipeline.Structuring do
        do: {:ok, []}
 
   defp compute_return(trajectory, goal, instructions, model_context, llm, llm_opts, config) do
+    case Config.decision_opts(config) do
+      nil -> prompt_return(trajectory, goal, instructions, model_context, llm, llm_opts, config)
+      opts -> judge_return(trajectory, goal, instructions, model_context, llm, config, opts)
+    end
+  end
+
+  # One decision request asks, per prescription, whether its intent was
+  # achieved. A failed request leaves the nodes on the trajectory's reward.
+  defp judge_return(trajectory, goal, instructions, model_context, llm, config, opts) do
+    overlay = Config.resolve_overlay(config, :get_return)
+
+    state = %{
+      goal: goal,
+      steps:
+        trajectory.steps
+        |> Enum.with_index(1)
+        |> Enum.map(fn {step, number} ->
+          %{
+            step: number,
+            action: step.action,
+            observation: String.slice(step.observation, 0, 500),
+            reward: step.reward
+          }
+        end),
+      prescriptions:
+        instructions
+        |> Enum.with_index()
+        |> Enum.map(fn {instr, idx} ->
+          instr
+          |> Map.take([:intent, :instruction, :condition, :expected_outcome])
+          |> Map.put(:id, "p#{idx}")
+        end)
+    }
+
+    questions =
+      Map.new(state.prescriptions, fn %{id: "p" <> idx = id} ->
+        {"return_#{idx}",
+         "Does the trajectory show that following prescription #{id} achieved its intent?" <>
+           if(overlay, do: "\n\n#{overlay}", else: "")}
+      end)
+
+    case ModelCall.evaluate(model_context, llm, :get_return, state, questions, opts) do
+      {:ok, %{content: probabilities}} ->
+        {:ok,
+         for idx <- 0..(length(instructions) - 1)//1,
+             probability = probabilities["return_#{idx}"],
+             is_number(probability) do
+           %{index: idx, return_score: probability / 1}
+         end}
+
+      {:error, reason} ->
+        Logger.warning("decision return scoring failed: #{inspect(reason)}")
+        {:ok, []}
+    end
+  end
+
+  defp prompt_return(trajectory, goal, instructions, model_context, llm, llm_opts, config) do
     prescriptions =
       instructions
       |> Enum.with_index()

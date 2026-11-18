@@ -1,15 +1,33 @@
 defmodule Mnemosyne.Pipeline.Prompts.GetPlan do
   @moduledoc """
-  Prompt for generating retrieval tags from a query and its classified mode.
-  Produces a list of search tags used to query the knowledge graph.
-  """
+  Prompt that plans a retrieval in one call: classifies the query into a
+  memory mode (`:episodic`, `:semantic`, `:procedural` or `:mixed`) and
+  generates the search tags used to query the knowledge graph.
 
-  @behaviour Mnemosyne.Prompt
+  Returns structured output via `chat_structured/3` using a Zoi schema.
+  """
 
   alias Mnemosyne.Errors.Invalid.PromptError
 
-  @impl true
-  def build_messages(%{query: query, mode: mode} = variables) do
+  @mode_map %{
+    "episodic" => :episodic,
+    "semantic" => :semantic,
+    "procedural" => :procedural,
+    "mixed" => :mixed
+  }
+
+  @doc "Returns the Zoi schema for structured LLM output validation."
+  @spec schema :: Zoi.Type.t()
+  def schema do
+    Zoi.map(
+      %{mode: Zoi.enum(Map.keys(@mode_map)), tags: Zoi.list(Zoi.string())},
+      coerce: true
+    )
+  end
+
+  @doc "Builds the system and user messages for the retrieval planning prompt."
+  @spec build_messages(map()) :: [map()]
+  def build_messages(%{query: query} = variables) do
     overlay = if variables[:overlay], do: "\n\n#{variables.overlay}", else: ""
 
     [
@@ -18,8 +36,15 @@ defmodule Mnemosyne.Pipeline.Prompts.GetPlan do
         content:
           """
           You are an expert at planning memory retrieval strategies.
-          Given a query and its classified memory mode, generate a prioritized list of
-          search tags that would help find relevant memories in a knowledge graph.
+          Given a query, first classify which type of memory is most relevant, then
+          generate a prioritized list of search tags that would help find relevant
+          memories in a knowledge graph.
+
+          Memory modes:
+          - episodic: Questions about past experiences, events, or "what happened when..."
+          - semantic: Questions about facts, concepts, or general knowledge
+          - procedural: Questions about how to do something, instructions, or procedures
+          - mixed: Questions that require multiple memory types to answer fully
 
           Goal-directed tag selection:
           - Only generate tags that are HIGHLY LIKELY to retrieve evidence needed to
@@ -46,32 +71,41 @@ defmodule Mnemosyne.Pipeline.Prompts.GetPlan do
 
           Keep the total number of tags proportionate to the query (not "as many as
           possible"), sorted by expected retrieval usefulness (most useful first).
-          Respond with one tag per line. No numbering or bullet points.\
+
+          Return a JSON object with:
+          - "mode": one of "episodic", "semantic", "procedural", "mixed"
+          - "tags": the list of search tags\
           """ <> overlay
       },
       %{
         role: :user,
         content: """
         Query: #{query}
-        Memory Mode: #{mode}
 
-        Generate retrieval tags:\
+        Plan the retrieval:\
         """
       }
     ]
   end
 
-  @impl true
-  def parse_response(response) do
-    tags =
-      response
-      |> String.split("\n")
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
+  @doc "Validates the planned mode and tags, returning the mode as an atom."
+  @spec parse_response(map()) ::
+          {:ok, %{mode: atom(), tags: [String.t()]}} | {:error, PromptError.t()}
+  def parse_response(%{mode: mode, tags: tags}) when is_binary(mode) and is_list(tags) do
+    tags = tags |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
 
-    case tags do
-      [] -> {:error, PromptError.exception(prompt: :get_plan, reason: :no_tags_generated)}
-      tags -> {:ok, tags}
+    case {Map.get(@mode_map, mode |> String.trim() |> String.downcase()), tags} do
+      {nil, _tags} ->
+        {:error, PromptError.exception(prompt: :get_plan, reason: :invalid_mode)}
+
+      {_mode, []} ->
+        {:error, PromptError.exception(prompt: :get_plan, reason: :no_tags_generated)}
+
+      {mode, tags} ->
+        {:ok, %{mode: mode, tags: tags}}
     end
   end
+
+  def parse_response(_),
+    do: {:error, PromptError.exception(prompt: :get_plan, reason: :invalid_plan)}
 end

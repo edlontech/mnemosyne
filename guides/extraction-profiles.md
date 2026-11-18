@@ -83,9 +83,9 @@ Overlays are keyed by pipeline step and apply only when present:
 
 | Pipeline Stage | Keys |
 |----------------|------|
-| Episode | `:get_state`, `:get_subgoal`, `:get_reward` |
-| Structuring | `:get_state`, `:get_semantic`, `:get_procedural`, `:get_return` |
-| Retrieval | `:get_mode`, `:get_plan` |
+| Episode | `:annotate_steps`, `:get_reward` |
+| Structuring | `:get_semantic`, `:get_procedural`, `:get_return` |
+| Retrieval | `:get_plan` |
 | Hop control | `:multi_hop_control`, `:get_refined_query` |
 | Reasoning | `:reason_episodic`, `:reason_semantic`, `:reason_procedural` |
 | Intent merger | `:merge_intent` |

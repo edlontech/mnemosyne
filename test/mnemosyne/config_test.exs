@@ -349,4 +349,16 @@ defmodule Mnemosyne.ConfigTest do
       assert Config.resolve_overlay(config, :nonexistent_step) == nil
     end
   end
+
+  describe "decision_opts/1" do
+    test "is nil without a decision model and flattens model and opts when configured" do
+      assert {:ok, config} = Zoi.parse(Config.t(), @valid_config)
+      assert Config.decision_opts(config) == nil
+      assert Config.decision_opts(nil) == nil
+
+      input = Map.put(@valid_config, :decision, %{model: "typesafe:jev-latest", opts: %{a: 1}})
+      assert {:ok, config} = Zoi.parse(Config.t(), input)
+      assert Config.decision_opts(config) == [model: "typesafe:jev-latest", a: 1]
+    end
+  end
 end

@@ -79,11 +79,11 @@ defmodule Mnemosyne.ModelCostTelemetryTest do
     assert {:ok, %IngestionReceipt{source_id: "a"}} = Task.await(task_a, 5_000)
     assert {:ok, %IngestionReceipt{source_id: "b"}} = Task.await(task_b, 5_000)
 
-    events = collect_telemetry(48)
+    events = collect_telemetry(44)
     {canonical, adapter_events} = Enum.split_with(events, &(elem(&1, 0) == :canonical))
 
-    assert length(canonical) == 24
-    assert length(adapter_events) == 24
+    assert length(canonical) == 22
+    assert length(adapter_events) == 22
     refute_receive {:telemetry, _kind, _event, _measurements, _metadata}, 0
 
     assert Enum.all?(canonical, fn {:canonical, _event, measurements, metadata} ->
@@ -110,7 +110,7 @@ defmodule Mnemosyne.ModelCostTelemetryTest do
         end
       end)
 
-    assert total_costs == %{repo_a.id => 3.0}
+    assert total_costs == %{repo_a.id => 2.75}
 
     assert Enum.all?(canonical, fn {:canonical, _event, measurements, metadata} ->
              metadata.repo_id != repo_b.id or not Map.has_key?(measurements, :total_cost)
@@ -155,8 +155,8 @@ defmodule Mnemosyne.ModelCostTelemetryTest do
 
       object =
         cond do
-          system_content(messages) =~ "infer the subgoal" ->
-            %{reasoning: "analysis", subgoal: "Inspect #{marker}"}
+          system_content(messages) =~ "analysing agent trajectories" ->
+            Mnemosyne.TestPrompts.annotations(messages, subgoal: "Inspect #{marker}")
 
           system_content(messages) =~ "factual knowledge" ->
             %{facts: [%{proposition: "#{marker} timed out", concepts: [marker]}]}

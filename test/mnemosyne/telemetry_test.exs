@@ -29,6 +29,7 @@ defmodule Mnemosyne.TelemetryTest do
       MapSet.new([
         [:mnemosyne, :llm, :chat],
         [:mnemosyne, :llm, :chat_structured],
+        [:mnemosyne, :llm, :evaluate],
         [:mnemosyne, :embedding, :embed],
         [:mnemosyne, :embedding, :embed_batch],
         [:mnemosyne, :model, :call],

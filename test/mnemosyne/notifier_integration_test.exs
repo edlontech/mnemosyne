@@ -763,14 +763,15 @@ defmodule Mnemosyne.NotifierRecallIntegrationTest do
 
   describe "recall notification" do
     test "emits {:recall_executed, query, result, metadata} on success", %{tmp_dir: tmp_dir} do
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
-      end)
-
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
         {:ok,
          %LLM.Response{
-           content: %{reasoning: "analysis", information: "Summary."},
+           content: %{
+             mode: "semantic",
+             tags: ["semantic"],
+             reasoning: "analysis",
+             information: "Summary."
+           },
            model: "test",
            usage: %{}
          }}

@@ -2,84 +2,36 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
   use ExUnit.Case, async: true
 
   alias Mnemosyne.Errors.Invalid.PromptError
-  alias Mnemosyne.Pipeline.Prompts.GetMode
   alias Mnemosyne.Pipeline.Prompts.GetPlan
   alias Mnemosyne.Pipeline.Prompts.ReasonEpisodic
   alias Mnemosyne.Pipeline.Prompts.ReasonProcedural
   alias Mnemosyne.Pipeline.Prompts.ReasonSemantic
 
-  describe "GetMode" do
-    test "build_messages appends overlay to system message when provided" do
-      messages = GetMode.build_messages(%{query: "Test?", overlay: "Prefer episodic."})
-      assert [%{role: :system, content: system}, _] = messages
-      assert system =~ "Prefer episodic."
-    end
-
-    test "build_messages returns system and user messages with query" do
-      messages = GetMode.build_messages(%{query: "What happened last Tuesday?"})
+  describe "GetPlan" do
+    test "build_messages includes the query and appends the overlay to the system message" do
+      messages = GetPlan.build_messages(%{query: "How do I deploy?", overlay: "Use broad tags."})
 
       assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
-      assert system =~ "episodic"
-      assert system =~ "semantic"
-      assert system =~ "procedural"
-      assert system =~ "mixed"
-      assert user =~ "What happened last Tuesday?"
-    end
-
-    test "parse_response parses valid modes" do
-      assert {:ok, :episodic} = GetMode.parse_response("episodic")
-      assert {:ok, :semantic} = GetMode.parse_response("semantic")
-      assert {:ok, :procedural} = GetMode.parse_response("procedural")
-      assert {:ok, :mixed} = GetMode.parse_response("mixed")
-    end
-
-    test "parse_response handles whitespace and casing" do
-      assert {:ok, :episodic} = GetMode.parse_response("  Episodic  \n")
-      assert {:ok, :semantic} = GetMode.parse_response("SEMANTIC")
-    end
-
-    test "parse_response rejects invalid modes" do
-      assert {:error, %PromptError{reason: :invalid_mode}} = GetMode.parse_response("narrative")
-      assert {:error, %PromptError{reason: :invalid_mode}} = GetMode.parse_response("")
-    end
-  end
-
-  describe "GetPlan" do
-    test "build_messages appends overlay to system message when provided" do
-      messages =
-        GetPlan.build_messages(%{query: "Test?", mode: :semantic, overlay: "Use broad tags."})
-
-      assert [%{role: :system, content: system}, _] = messages
       assert system =~ "Use broad tags."
-    end
-
-    test "build_messages includes query and mode" do
-      messages = GetPlan.build_messages(%{query: "How do I deploy?", mode: :procedural})
-
-      assert [%{role: :system}, %{role: :user, content: user}] = messages
       assert user =~ "How do I deploy?"
-      assert user =~ "procedural"
     end
 
-    test "parse_response splits lines into tags" do
-      response = """
-      deployment
-      CI/CD pipeline
-      production environment
-      """
-
-      assert {:ok, tags} = GetPlan.parse_response(response)
-      assert ["deployment", "CI/CD pipeline", "production environment"] = tags
+    test "parse_response returns the mode as an atom with trimmed, non-blank tags" do
+      assert {:ok, %{mode: :procedural, tags: ["deployment", "CI/CD pipeline"]}} =
+               GetPlan.parse_response(%{
+                 mode: " Procedural ",
+                 tags: ["deployment", "  ", " CI/CD pipeline "]
+               })
     end
 
-    test "parse_response skips blank lines" do
-      assert {:ok, ["tag one", "tag two"]} =
-               GetPlan.parse_response("tag one\n\n\ntag two\n")
+    test "parse_response rejects an unknown mode" do
+      assert {:error, %PromptError{reason: :invalid_mode}} =
+               GetPlan.parse_response(%{mode: "narrative", tags: ["a"]})
     end
 
-    test "parse_response rejects empty response" do
+    test "parse_response rejects a plan with no tags" do
       assert {:error, %PromptError{reason: :no_tags_generated}} =
-               GetPlan.parse_response("   \n  \n  ")
+               GetPlan.parse_response(%{mode: "semantic", tags: ["  "]})
     end
   end
 

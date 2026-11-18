@@ -153,20 +153,18 @@ defmodule Mnemosyne.SensitiveMemoryTest do
     assert {:ok, store} = open(ctx, config: config)
     parent = self()
 
-    stub(MockLLM, :chat, fn messages, _opts ->
-      text = Enum.map_join(messages, "\n", & &1.content)
-      send(parent, {:prompt, text})
-      content = if text =~ "classifying memory retrieval", do: "semantic", else: "knowledge"
-      {:ok, %LLMResponse{content: content, model: "test", usage: %{}}}
-    end)
-
     stub(MockLLM, :chat_structured, fn messages, _schema, _opts ->
       text = Enum.map_join(messages, "\n", & &1.content)
       send(parent, {:prompt, text})
 
       {:ok,
        %LLMResponse{
-         content: %{reasoning: "facts", information: "Shared knowledge"},
+         content: %{
+           mode: "semantic",
+           tags: ["knowledge"],
+           reasoning: "facts",
+           information: "Shared knowledge"
+         },
          model: "test",
          usage: %{}
        }}
@@ -521,8 +519,8 @@ defmodule Mnemosyne.SensitiveMemoryTest do
 
       content =
         cond do
-          system =~ "infer the subgoal" ->
-            %{reasoning: "analysis", subgoal: "Investigate"}
+          system =~ "analysing agent trajectories" ->
+            Mnemosyne.TestPrompts.annotations(messages, subgoal: "Investigate")
 
           system =~ "factual knowledge" ->
             %{

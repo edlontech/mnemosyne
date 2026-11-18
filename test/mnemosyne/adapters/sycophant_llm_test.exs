@@ -96,4 +96,50 @@ defmodule Mnemosyne.Adapters.SycophantLLMTest do
                )
     end
   end
+
+  describe "evaluate/3" do
+    test "asks boolean questions and returns the probability per answered question" do
+      Mimic.expect(Sycophant, :evaluate, fn model, state, questions, opts ->
+        assert model == "typesafe:jev-latest"
+        assert state == %{query: "refund?"}
+
+        assert questions == %{
+                 "urgent" => %{type: :boolean, instructions: "Is this urgent?"},
+                 "spam" => %{type: :boolean, instructions: "Is this spam?"}
+               }
+
+        assert opts == []
+
+        {:ok,
+         %Sycophant.EvaluationResponse{
+           model: "jev-1.14",
+           usage: %Sycophant.Usage{input_tokens: 40, output_tokens: 0},
+           answers: %{
+             "urgent" => %Sycophant.EvaluationAnswer{type: :boolean, probability: 0.93},
+             "spam" => %Sycophant.EvaluationAnswer{type: :refusal, reason: "policy"}
+           }
+         }}
+      end)
+
+      assert {:ok, %Response{} = resp} =
+               SycophantLLM.evaluate(
+                 %{query: "refund?"},
+                 %{"urgent" => "Is this urgent?", "spam" => "Is this spam?"},
+                 model: "typesafe:jev-latest"
+               )
+
+      assert resp.content == %{"urgent" => 0.93}
+      assert resp.model == "jev-1.14"
+      assert resp.usage == %{input_tokens: 40, output_tokens: 0}
+    end
+
+    test "propagates errors from Sycophant" do
+      Mimic.expect(Sycophant, :evaluate, fn _model, _state, _questions, _opts ->
+        {:error, :rate_limited}
+      end)
+
+      assert {:error, :rate_limited} =
+               SycophantLLM.evaluate("state", %{"q" => "Yes?"}, model: "typesafe:jev-latest")
+    end
+  end
 end

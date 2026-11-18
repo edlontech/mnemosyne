@@ -74,7 +74,7 @@ defmodule Mnemosyne.IngestionTelemetryTest do
       content =
         cond do
           String.contains?(system_content, "subgoal") ->
-            %{reasoning: "analysis", subgoal: "test subgoal"}
+            Mnemosyne.TestPrompts.annotations(messages)
 
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "some fact", concepts: ["concept"]}]}

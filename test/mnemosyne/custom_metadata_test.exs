@@ -170,8 +170,8 @@ defmodule Mnemosyne.CustomMetadataTest do
 
       response =
         cond do
-          content =~ "infer the subgoal" ->
-            %{reasoning: "analysis", subgoal: "Diagnose timeouts"}
+          content =~ "analysing agent trajectories" ->
+            Mnemosyne.TestPrompts.annotations(messages, subgoal: "Diagnose timeouts")
 
           content =~ "factual knowledge" ->
             %{

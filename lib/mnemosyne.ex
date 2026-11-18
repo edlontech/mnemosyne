@@ -299,6 +299,9 @@ defmodule Mnemosyne do
     * `:now` - `DateTime` the reasoning prompts present as the current date. Defaults to
       the wall clock. Set it when replaying past queries, so relative dates resolve against
       the time the query was asked. It does not affect scoring or which memories are retrieved.
+    * `:reasoning` - Set to `false` to skip the summarising LLM calls. `reasoned` is then `nil`
+      and the touched nodes listed in `reasoned_ids` carry their `node`. Defaults to `true`.
+    * `:max_hops` - Maximum multi-hop traversal depth. Defaults to `2`.
 
   ## Examples
 

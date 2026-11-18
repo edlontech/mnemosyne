@@ -111,23 +111,27 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
     |> Graph.link("ep_2", "sg_1", :hierarchical)
   end
 
-  defp stub_retrieval_llm(mode \\ "semantic", tags \\ "BEAM VM\nfault tolerance") do
-    Mnemosyne.MockLLM
-    |> stub(:chat, fn messages, _opts ->
-      system_content =
-        messages
-        |> Enum.find(%{content: ""}, &(&1.role == :system))
-        |> Map.get(:content)
-
-      content =
-        cond do
-          system_content =~ "classifying memory retrieval" -> mode
-          system_content =~ "planning memory retrieval" -> tags
-          true -> "default"
+  # Answers the planning call with `mode` and `tags`; every other structured
+  # call (hop control, refinement) goes to `other`.
+  defp stub_retrieval_llm(mode \\ "semantic", tags \\ "BEAM VM\nfault tolerance", other \\ nil) do
+    other =
+      other ||
+        fn _messages, _schema, _opts ->
+          {:ok, %LLM.Response{content: %{}, model: "mock:test", usage: %{}}}
         end
 
-      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    stub(Mnemosyne.MockLLM, :chat_structured, fn messages, schema, opts ->
+      if planning?(messages) do
+        plan = %{mode: mode, tags: String.split(tags, "\n")}
+        {:ok, %LLM.Response{content: plan, model: "mock:test", usage: %{}}}
+      else
+        other.(messages, schema, opts)
+      end
     end)
+  end
+
+  defp planning?(messages) do
+    Enum.any?(messages, &(&1.role == :system and &1.content =~ "planning memory retrieval"))
   end
 
   defp stub_default_embedding do
@@ -716,11 +720,9 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
 
     test "refined tags at hop 1 route through tag nodes beyond the seed neighborhood" do
       graph = build_bridge_graph()
-      stub_retrieval_llm("semantic", "seed")
       stub_bridge_embedding()
 
-      Mnemosyne.MockLLM
-      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      stub_retrieval_llm("semantic", "seed", fn _messages, _schema, _opts ->
         {:ok, %LLM.Response{content: %{tags: ["bridge"]}, model: "m", usage: %{}}}
       end)
 
@@ -909,7 +911,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       stub_default_embedding()
 
       Mnemosyne.MockLLM
-      |> stub(:chat, fn _messages, _opts -> {:error, :llm_unavailable} end)
+      |> stub(:chat_structured, fn _messages, _schema, _opts -> {:error, :llm_unavailable} end)
 
       assert {:error, :llm_unavailable} =
                Retrieval.retrieve("test", retrieval_opts(graph))
@@ -935,34 +937,28 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         llm: %{model: "test:model", opts: %{}},
         embedding: %{model: "test:embed", opts: %{}},
         value_function: %{module: Mnemosyne.ValueFunction.Default, params: %{}},
-        overrides: %{get_mode: %{model: "test:fast", opts: %{}}}
+        overrides: %{get_plan: %{model: "test:fast", opts: %{}}}
       }
 
-      Mnemosyne.MockLLM
-      |> stub(:chat, fn messages, opts ->
-        system_content =
-          messages
-          |> Enum.find(%{content: ""}, &(&1.role == :system))
-          |> Map.get(:content)
+      test_pid = self()
 
-        if system_content =~ "classifying memory retrieval" do
-          assert Keyword.get(opts, :model) == "test:fast"
-        end
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, opts ->
+        if planning?(messages), do: send(test_pid, {:plan_model, Keyword.get(opts, :model)})
 
-        content =
-          cond do
-            system_content =~ "classifying memory retrieval" -> "semantic"
-            system_content =~ "planning memory retrieval" -> "BEAM VM"
-            true -> "default"
-          end
-
-        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+        {:ok,
+         %LLM.Response{
+           content: %{mode: "semantic", tags: ["BEAM VM"]},
+           model: "mock:test",
+           usage: %{}
+         }}
       end)
 
       opts = retrieval_opts(graph, config: config)
 
       assert {:ok, %Retrieval.Result{}, %Mnemosyne.Notifier.Trace.Recall{}} =
                Retrieval.retrieve("test", opts)
+
+      assert_received {:plan_model, "test:fast"}
     end
 
     test "procedural mode discovers prescriptions through intent nodes" do
@@ -1055,8 +1051,6 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       graph = build_low_similarity_graph()
       config = refinement_config(budget: 1)
 
-      stub_retrieval_llm("semantic", "weak concept")
-
       Mnemosyne.MockEmbedding
       |> stub(:embed, fn _text, _opts ->
         {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
@@ -1065,8 +1059,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
       end)
 
-      Mnemosyne.MockLLM
-      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      stub_retrieval_llm("semantic", "weak concept", fn _messages, _schema, _opts ->
         {:ok, %LLM.Response{content: %{tags: ["refined tag"]}, model: "mock:test", usage: %{}}}
       end)
 
@@ -1084,8 +1077,6 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       graph = build_test_graph()
       config = refinement_config(budget: 0)
 
-      stub_retrieval_llm("semantic", "BEAM VM")
-
       Mnemosyne.MockEmbedding
       |> stub(:embed, fn _text, _opts ->
         {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
@@ -1094,8 +1085,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
       end)
 
-      Mnemosyne.MockLLM
-      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      stub_retrieval_llm("semantic", "BEAM VM", fn _messages, _schema, _opts ->
         {:ok,
          %LLM.Response{
            content: %{enough: false, top_indices: []},
@@ -1118,8 +1108,6 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       graph = build_low_similarity_graph()
       config = refinement_config(budget: 1)
 
-      stub_retrieval_llm("semantic", "weak concept")
-
       Mnemosyne.MockEmbedding
       |> stub(:embed, fn _text, _opts ->
         {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
@@ -1128,8 +1116,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
       end)
 
-      Mnemosyne.MockLLM
-      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      stub_retrieval_llm("semantic", "weak concept", fn _messages, _schema, _opts ->
         {:ok, %LLM.Response{content: %{tags: []}, model: "mock:test", usage: %{}}}
       end)
 
@@ -1147,8 +1134,6 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
       graph = build_low_similarity_graph()
       config = refinement_config(budget: 1)
 
-      stub_retrieval_llm("semantic", "weak concept")
-
       Mnemosyne.MockEmbedding
       |> stub(:embed, fn _text, _opts ->
         {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
@@ -1157,8 +1142,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         {:ok, %Embedding.Response{vectors: [@test_vector], model: "mock:embed", usage: %{}}}
       end)
 
-      Mnemosyne.MockLLM
-      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      stub_retrieval_llm("semantic", "weak concept", fn _messages, _schema, _opts ->
         {:error, :llm_unavailable}
       end)
 
@@ -1173,13 +1157,42 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
   end
 
   describe "multi-hop control" do
-    test "stops early when the controller reports sufficiency" do
+    test "a decision model judges the final pool even without hops" do
       graph = build_test_graph()
       stub_retrieval_llm("semantic", "deployment")
       stub_default_embedding()
 
-      Mnemosyne.MockLLM
-      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      config = %Config{
+        llm: %{model: "test:model", opts: %{}},
+        embedding: %{model: "test:embed", opts: %{}},
+        value_function: put_in(@value_function, [:params, :semantic, :threshold], 0.3),
+        decision: %{model: "test:decision", opts: %{}}
+      }
+
+      expect(Mnemosyne.MockLLM, :evaluate, fn state, _questions, _opts ->
+        probabilities =
+          Map.new(state.candidates, fn %{id: id, content: content} ->
+            {id, if(content =~ "BEAM", do: 0.9, else: 0.05)}
+          end)
+
+        {:ok, %LLM.Response{content: probabilities, model: "mock:test", usage: %{}}}
+      end)
+
+      {:ok, result, _trace} =
+        Retrieval.retrieve(
+          "What runs Elixir?",
+          retrieval_opts(graph, config: config, max_hops: 0)
+        )
+
+      assert [%TaggedCandidate{node: %{id: "sem_1"}, score: score}] = result.candidates.semantic
+      assert score > 0.0
+    end
+
+    test "stops early when the controller reports sufficiency" do
+      graph = build_test_graph()
+      stub_default_embedding()
+
+      stub_retrieval_llm("semantic", "deployment", fn _messages, _schema, _opts ->
         {:ok,
          %LLM.Response{
            content: %{enough: true, top_indices: []},
@@ -1197,8 +1210,6 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
 
     test "controller focus candidates drive the next-hop query embedding" do
       graph = build_test_graph()
-      stub_retrieval_llm("semantic", "deployment")
-
       test_pid = self()
 
       Mnemosyne.MockEmbedding
@@ -1211,8 +1222,7 @@ defmodule Mnemosyne.Pipeline.RetrievalTest do
         {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
       end)
 
-      Mnemosyne.MockLLM
-      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+      stub_retrieval_llm("semantic", "deployment", fn _messages, _schema, _opts ->
         {:ok,
          %LLM.Response{
            content: %{enough: false, top_indices: [0]},

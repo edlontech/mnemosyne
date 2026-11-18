@@ -4,7 +4,7 @@ if Code.ensure_loaded?(Sycophant) do
     LLM adapter backed by Sycophant.
 
     Translates between the `Mnemosyne.LLM` behaviour and Sycophant's
-    `generate_text/3` and `generate_object/4` APIs.
+    `generate_text/3`, `generate_object/4` and `evaluate/4` APIs.
     """
     @behaviour Mnemosyne.LLM
 
@@ -71,6 +71,39 @@ if Code.ensure_loaded?(Sycophant) do
           end
         end
       )
+    end
+
+    @impl true
+    def evaluate(state, questions, opts) do
+      {model, sycophant_opts} = Keyword.pop!(opts, :model)
+      step = Keyword.get(sycophant_opts, :step)
+
+      Mnemosyne.Telemetry.span([:llm, :evaluate], %{model: model, step: step}, fn ->
+        case Sycophant.evaluate(model, state, boolean_questions(questions), sycophant_opts) do
+          {:ok, response} ->
+            usage = extract_usage(response.usage)
+            content = probabilities(response.answers)
+
+            {{:ok, %Response{content: content, model: response.model, usage: usage}},
+             %{tokens_input: usage[:input_tokens], tokens_output: usage[:output_tokens]}}
+
+          {:error, _} = err ->
+            {err, %{}}
+        end
+      end)
+    end
+
+    defp boolean_questions(questions) do
+      Map.new(questions, fn {id, instructions} ->
+        {id, %{type: :boolean, instructions: instructions}}
+      end)
+    end
+
+    defp probabilities(answers) do
+      for {id, %{probability: probability}} <- answers,
+          is_number(probability),
+          into: %{},
+          do: {id, probability}
     end
 
     defp to_sycophant_message(%{role: :system, content: content}), do: Message.system(content)

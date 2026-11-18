@@ -9,6 +9,11 @@ defmodule Mnemosyne.Pipeline.HopControl do
   retrieval tags are regenerated conditioned on what has been retrieved
   so far. Tag refinement is capped by the configured refinement budget
   to bound LLM cost.
+
+  When `Config.decision` is set, a decision model replaces the controller
+  prompt: one request scores sufficiency and the relevance of each shown
+  candidate. Those relevance probabilities become the candidates' scores,
+  and candidates scoring below their node type's threshold are dropped.
   """
 
   require Logger
@@ -24,6 +29,7 @@ defmodule Mnemosyne.Pipeline.HopControl do
 
   @max_focus 2
   @max_control_candidates 20
+  @max_judged_chars 1_000
 
   defmodule State do
     @moduledoc """
@@ -59,61 +65,164 @@ defmodule Mnemosyne.Pipeline.HopControl do
   @doc """
   Assesses whether retrieval can stop at the current hop.
 
-  Returns `{:stop, state}` when the controller judges the candidates
-  sufficient, or `{:continue, focus_candidates, state}` with up to
-  #{@max_focus} focus candidates selected to drive the next hop.
-  Degrades to `{:continue, [], state}` on any LLM or parse failure so
-  retrieval never breaks on controller errors.
+  Returns `{:stop, candidates, state}` when the controller judges the
+  candidates sufficient, or `{:continue, focus, candidates, state}` with up
+  to #{@max_focus} focus candidates selected to drive the next hop. The
+  returned candidates are the input ones, reranked when a decision model is
+  configured (see `rerank/3`). Degrades to `{:continue, [], candidates, state}`
+  on any model or parse failure so retrieval never breaks on controller errors.
   """
   @spec assess(State.t(), String.t(), [TaggedCandidate.t()], non_neg_integer(), map()) ::
-          {:stop, State.t()} | {:continue, [TaggedCandidate.t()], State.t()}
-  def assess(%State{} = state, _query, [], _hop, _ctx), do: {:continue, [], state}
+          {:stop, [TaggedCandidate.t()], State.t()}
+          | {:continue, [TaggedCandidate.t()], [TaggedCandidate.t()], State.t()}
+  def assess(%State{} = state, _query, [], _hop, _ctx), do: {:continue, [], [], state}
 
   def assess(%State{} = state, query, candidates, hop, ctx) do
     metadata = %{hop: hop, candidate_count: length(candidates)}
 
     Mnemosyne.Telemetry.span([:retrieval, :hop_control], metadata, fn ->
-      shown = Enum.take(candidates, @max_control_candidates)
+      case decide(query, candidates, ctx) do
+        {:stop, candidates} ->
+          {{:stop, candidates, %{state | stopped_early_at: hop}}, %{decision: :stop}}
 
-      summaries =
-        shown
-        |> Enum.with_index()
-        |> Enum.map(fn {%TaggedCandidate{node: node}, idx} ->
-          %{
-            index: idx,
-            type: NodeProtocol.node_type(node),
-            content: node |> node_content() |> String.slice(0, 200)
-          }
-        end)
-
-      messages =
-        MultiHopControl.build_messages(%{
-          query: query,
-          candidates: summaries,
-          max_focus: @max_focus,
-          overlay: Config.resolve_overlay(ctx.config, :multi_hop_control)
-        })
-
-      llm_opts = Config.llm_opts(ctx.config, :multi_hop_control, ctx.llm_opts)
-
-      case run_control(Map.get(ctx, :model_context), ctx.llm, messages, llm_opts) do
-        {:ok, %{enough: true}} ->
-          {{:stop, %{state | stopped_early_at: hop}}, %{decision: :stop}}
-
-        {:ok, %{enough: false, top_indices: indices}} ->
-          focus =
-            indices
-            |> Enum.uniq()
-            |> Enum.filter(&(&1 >= 0 and &1 < length(shown)))
-            |> Enum.take(@max_focus)
-            |> Enum.map(&Enum.at(shown, &1))
-
-          {{:continue, focus, state}, %{decision: :continue, focus_count: length(focus)}}
-
-        :error ->
-          {{:continue, [], state}, %{decision: :continue, focus_count: 0}}
+        {:continue, focus, candidates} ->
+          {{:continue, focus, candidates, state},
+           %{decision: :continue, focus_count: length(focus)}}
       end
     end)
+  end
+
+  @doc """
+  Rescores candidates with the decision model, when one is configured.
+
+  The top #{@max_control_candidates} candidates are judged for relevance to
+  the query: each takes its probability as score, and those below their node
+  type's threshold are dropped. Candidates beyond that cut, and all
+  candidates when no decision model is configured or the call fails, are
+  returned untouched.
+  """
+  @spec rerank(String.t(), [TaggedCandidate.t()], map()) :: [TaggedCandidate.t()]
+  def rerank(_query, [], _ctx), do: []
+
+  def rerank(query, candidates, ctx) do
+    case Config.decision_opts(ctx.config) do
+      nil -> candidates
+      opts -> query |> judge(candidates, ctx, opts) |> elem(2)
+    end
+  end
+
+  defp decide(query, candidates, ctx) do
+    case Config.decision_opts(ctx.config) do
+      nil ->
+        prompt_decision(query, candidates, ctx)
+
+      opts ->
+        case judge(query, candidates, ctx, opts) do
+          {true, _focus, reranked} -> {:stop, reranked}
+          {false, focus, reranked} -> {:continue, focus, reranked}
+        end
+    end
+  end
+
+  # One decision request: is the evidence enough, and is each shown candidate relevant?
+  defp judge(query, candidates, ctx, opts) do
+    {shown, rest} = Enum.split(candidates, @max_control_candidates)
+
+    summaries =
+      shown
+      |> Enum.with_index()
+      |> Enum.map(fn {%TaggedCandidate{node: node}, idx} ->
+        %{
+          id: "c#{idx}",
+          type: NodeProtocol.node_type(node),
+          content: node |> node_content() |> String.slice(0, @max_judged_chars)
+        }
+      end)
+
+    questions =
+      Map.new(summaries, fn %{id: id} ->
+        {id, "Does candidate #{id} contain information that helps answer the query?"}
+      end)
+      |> Map.put(
+        "enough",
+        "Do the candidates together contain enough information to answer the query?"
+      )
+
+    case ModelCall.evaluate(
+           Map.get(ctx, :model_context),
+           ctx.llm,
+           :multi_hop_control,
+           %{query: query, candidates: summaries},
+           questions,
+           opts
+         ) do
+      {:ok, %LLM.Response{content: probabilities}} ->
+        {judged, unjudged} =
+          shown
+          |> Enum.with_index()
+          |> Enum.split_with(fn {_candidate, idx} -> is_number(probabilities["c#{idx}"]) end)
+
+        relevant =
+          judged
+          |> Enum.map(fn {candidate, idx} -> %{candidate | score: probabilities["c#{idx}"]} end)
+          |> Enum.filter(&(&1.score >= threshold(&1.node, ctx.config)))
+          |> Enum.sort_by(& &1.score, :desc)
+
+        reranked =
+          Enum.sort_by(relevant ++ Enum.map(unjudged, &elem(&1, 0)) ++ rest, & &1.score, :desc)
+
+        {Map.get(probabilities, "enough", 0.0) >= 0.5, Enum.take(relevant, @max_focus), reranked}
+
+      error ->
+        Logger.debug("decision hop control failed, continuing retrieval: #{inspect(error)}")
+        {false, [], candidates}
+    end
+  end
+
+  defp threshold(node, config),
+    do: Config.resolve_value_function(config, NodeProtocol.node_type(node)).threshold
+
+  defp prompt_decision(query, candidates, ctx) do
+    shown = Enum.take(candidates, @max_control_candidates)
+
+    summaries =
+      shown
+      |> Enum.with_index()
+      |> Enum.map(fn {%TaggedCandidate{node: node}, idx} ->
+        %{
+          index: idx,
+          type: NodeProtocol.node_type(node),
+          content: node |> node_content() |> String.slice(0, 200)
+        }
+      end)
+
+    messages =
+      MultiHopControl.build_messages(%{
+        query: query,
+        candidates: summaries,
+        max_focus: @max_focus,
+        overlay: Config.resolve_overlay(ctx.config, :multi_hop_control)
+      })
+
+    llm_opts = Config.llm_opts(ctx.config, :multi_hop_control, ctx.llm_opts)
+
+    case run_control(Map.get(ctx, :model_context), ctx.llm, messages, llm_opts) do
+      {:ok, %{enough: true}} ->
+        {:stop, candidates}
+
+      {:ok, %{enough: false, top_indices: indices}} ->
+        focus =
+          indices
+          |> Enum.uniq()
+          |> Enum.filter(&(&1 >= 0 and &1 < length(shown)))
+          |> Enum.take(@max_focus)
+          |> Enum.map(&Enum.at(shown, &1))
+
+        {:continue, focus, candidates}
+
+      :error ->
+        {:continue, [], candidates}
+    end
   end
 
   @doc """

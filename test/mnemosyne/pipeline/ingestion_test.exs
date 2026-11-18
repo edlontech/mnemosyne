@@ -84,7 +84,7 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
 
   test "returns an append error without producing a changeset" do
     Mnemosyne.MockLLM
-    |> stub(:chat, fn _messages, _opts -> {:error, :append_failed} end)
+    |> stub(:chat_structured, fn _messages, _schema, _opts -> {:error, :append_failed} end)
 
     assert {:error, :append_failed} =
              Ingestion.run(trajectory(),
@@ -129,8 +129,8 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
 
       response =
         cond do
-          content =~ "infer the subgoal" ->
-            %{reasoning: "analysis", subgoal: "Record the upstream timeout"}
+          content =~ "analysing agent trajectories" ->
+            Mnemosyne.TestPrompts.annotations(messages, subgoal: "Record the upstream timeout")
 
           content =~ "factual knowledge" ->
             %{
@@ -335,8 +335,8 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
 
       response =
         cond do
-          content =~ "infer the subgoal" ->
-            %{reasoning: "analysis", subgoal: subgoal_for(messages)}
+          content =~ "analysing agent trajectories" ->
+            Mnemosyne.TestPrompts.annotations(messages, subgoal: @subgoals)
 
           content =~ "factual knowledge" ->
             %{
@@ -387,10 +387,10 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
       {:ok, %LLM.Response{content: response, model: "mock:test", usage: %{}}}
     end)
     |> stub(:chat_structured, fn messages, _schema, _opts ->
-      if system_content(messages) =~ "infer the subgoal" do
+      if Mnemosyne.TestPrompts.annotating?(messages) do
         {:ok,
          %LLM.Response{
-           content: %{reasoning: "analysis", subgoal: "Subgoal"},
+           content: Mnemosyne.TestPrompts.annotations(messages, subgoal: "Subgoal"),
            model: "mock:test",
            usage: %{}
          }}
@@ -403,14 +403,6 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
     |> stub(:embed_batch, fn texts, _opts ->
       vectors = Enum.map(texts, fn _ -> [0.1, 0.1] end)
       {:ok, %Embedding.Response{vectors: vectors, model: "mock:embed", usage: %{}}}
-    end)
-  end
-
-  defp subgoal_for(messages) do
-    user = messages |> Enum.find(&(&1.role == :user)) |> Map.fetch!(:content)
-
-    Enum.find_value(@subgoals, "Subgoal", fn {action, subgoal} ->
-      if user =~ action, do: subgoal
     end)
   end
 

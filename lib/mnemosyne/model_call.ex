@@ -54,6 +54,24 @@ defmodule Mnemosyne.ModelCall do
       end)
 
   @doc """
+  Asks a decision model yes/no `questions` about `state` with optional repository-attributed
+  telemetry. The response `content` maps each answered question to its probability of "yes".
+  """
+  @spec evaluate(
+          Context.t() | nil,
+          module(),
+          atom(),
+          String.t() | map() | list(),
+          %{String.t() => String.t()},
+          keyword()
+        ) :: {:ok, LLM.Response.t()} | {:error, term()}
+  def evaluate(context, adapter, step, state, questions, opts),
+    do:
+      invoke(context, :llm, :evaluate, adapter, step, opts, fn ->
+        adapter.evaluate(state, questions, opts)
+      end)
+
+  @doc """
   Invokes one embedding call with optional repository-attributed telemetry.
 
   Adds `purpose: :query | :document` to the adapter opts (see `embed_purpose/1`)

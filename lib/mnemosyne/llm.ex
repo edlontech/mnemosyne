@@ -4,6 +4,11 @@ defmodule Mnemosyne.LLM do
 
   Implementations must provide `chat/2` and `chat_structured/3` callbacks
   that take messages and options, returning a Response struct.
+
+  `evaluate/3` is optional and only needed when `Mnemosyne.Config` sets
+  `:decision`. It asks a decision model yes/no questions about a shared
+  `state` and returns, as the response `content`, the probability of "yes"
+  for every question the model answered.
   """
   @type message :: %{role: atom(), content: String.t()}
 
@@ -35,4 +40,12 @@ defmodule Mnemosyne.LLM do
               {:ok, Response.t()} | {:error, Mnemosyne.Errors.Framework.AdapterError.t()}
   @callback chat_structured(messages :: [message()], schema :: term(), opts :: keyword()) ::
               {:ok, Response.t()} | {:error, Mnemosyne.Errors.Framework.AdapterError.t()}
+  @callback evaluate(
+              state :: String.t() | map() | list(),
+              questions :: %{String.t() => String.t()},
+              opts :: keyword()
+            ) ::
+              {:ok, Response.t()} | {:error, Mnemosyne.Errors.Framework.AdapterError.t()}
+
+  @optional_callbacks evaluate: 3
 end

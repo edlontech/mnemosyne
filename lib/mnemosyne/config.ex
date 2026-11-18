@@ -36,6 +36,21 @@ defmodule Mnemosyne.Config do
                       description: "Default embedding model configuration for vector generation"
                     )
 
+  @decision_schema Zoi.object(
+                     %{
+                       model:
+                         Zoi.string(
+                           description:
+                             "The decision model identifier (e.g. `\"typesafe:jev-latest\"`)"
+                         ),
+                       opts:
+                         Zoi.default(Zoi.map(), %{},
+                           description: "Additional options forwarded to the LLM adapter"
+                         )
+                     },
+                     description: "Decision model configuration"
+                   )
+
   @backend_schema Zoi.object(
                     %{
                       module: Zoi.atom(description: "GraphBackend implementation module"),
@@ -123,6 +138,16 @@ defmodule Mnemosyne.Config do
                    llm: @llm_schema,
                    embedding: @embedding_schema,
                    overrides: @override_schema,
+                   decision:
+                     Zoi.default(Zoi.optional(@decision_schema), nil,
+                       description:
+                         "Optional decision model answering yes/no questions with probabilities. When set, it replaces the hop-control, reward and return-scoring LLM calls, reranks recalled candidates, and gates fact extraction. Requires an LLM adapter implementing `evaluate/3`"
+                     ),
+                   fact_gate_threshold:
+                     Zoi.default(Zoi.float(), 0.2,
+                       description:
+                         "With a decision model, steps whose probability of holding information worth remembering falls below this value skip fact extraction. `0.0` disables the gate"
+                     ),
                    backend: Zoi.optional(@backend_schema),
                    value_function: @vf_schema,
                    episodic_validation:
@@ -173,6 +198,16 @@ defmodule Mnemosyne.Config do
     llm: @llm_schema,
     embedding: @embedding_schema,
     overrides: @override_schema,
+    decision:
+      Zoi.default(Zoi.optional(@decision_schema), nil,
+        description:
+          "Optional decision model answering yes/no questions with probabilities. When set, it replaces the hop-control, reward and return-scoring LLM calls, reranks recalled candidates, and gates fact extraction. Requires an LLM adapter implementing `evaluate/3`"
+      ),
+    fact_gate_threshold:
+      Zoi.default(Zoi.float(), 0.2,
+        description:
+          "With a decision model, steps whose probability of holding information worth remembering falls below this value skip fact extraction. `0.0` disables the gate"
+      ),
     backend: Zoi.optional(@backend_schema),
     value_function: @vf_schema,
     episodic_validation:
@@ -284,7 +319,7 @@ defmodule Mnemosyne.Config do
       ...> }
       iex> Mnemosyne.Config.resolve(config, :get_semantic)
       %{model: "gpt-4o-mini", opts: %{temperature: 0.7}}
-      iex> Mnemosyne.Config.resolve(config, :get_mode)
+      iex> Mnemosyne.Config.resolve(config, :get_plan)
       %{model: "gpt-4o", opts: %{temperature: 0.7}}
   """
   @spec resolve(t(), atom()) :: %{model: String.t(), opts: map()}
@@ -365,6 +400,17 @@ defmodule Mnemosyne.Config do
     resolved = resolve(config, step)
     [model: resolved.model] ++ Map.to_list(resolved.opts) ++ base_opts
   end
+
+  @doc """
+  Returns decision-model keyword opts, or `nil` when no decision model is configured.
+
+  Pipeline steps use the `nil` to fall back to their LLM prompt.
+  """
+  @spec decision_opts(t() | nil) :: keyword() | nil
+  def decision_opts(%__MODULE__{decision: %{model: model} = decision}),
+    do: [model: model] ++ Map.to_list(Map.get(decision, :opts, %{}))
+
+  def decision_opts(_config), do: nil
 
   @doc """
   Returns embedding keyword opts from the config as a flat keyword list.

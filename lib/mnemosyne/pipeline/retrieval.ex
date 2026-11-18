@@ -2,8 +2,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   @moduledoc """
   Multi-hop graph retrieval pipeline.
 
-  Classifies a query by memory mode, generates retrieval tags,
-  embeds them, scores candidate nodes via value functions,
+  Plans a query in one LLM call (memory mode plus retrieval tags),
+  embeds the query and tags, scores candidate nodes via value functions,
   and performs LLM-controlled multi-hop traversal to expand and
   re-rank results. Every hop runs two channels: dense similarity
   against low-level nodes, and routing through Tag/Intent nodes that
@@ -18,6 +18,11 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   Candidates are gathered and thresholded on raw cosine relevance in every
   channel, so per-type thresholds mean the same thing everywhere. The
   configured value function ranks the final pool once, with node metadata.
+
+  With `Config.decision` set, a decision model takes over hop control and
+  judges the final pool once more: judged candidates take their relevance
+  probability as raw score and those below their type threshold are dropped
+  (see `Mnemosyne.Pipeline.HopControl.rerank/3`).
   """
 
   require Logger
@@ -30,7 +35,6 @@ defmodule Mnemosyne.Pipeline.Retrieval do
   alias Mnemosyne.ModelCall
   alias Mnemosyne.Notifier.Trace.Recall, as: RecallTrace
   alias Mnemosyne.Pipeline.HopControl
-  alias Mnemosyne.Pipeline.Prompts.GetMode
   alias Mnemosyne.Pipeline.Prompts.GetPlan
   alias Mnemosyne.Pipeline.Retrieval.TaggedCandidate
   alias Mnemosyne.ValueFunction
@@ -92,8 +96,8 @@ defmodule Mnemosyne.Pipeline.Retrieval do
         verbosity = if config, do: config.trace_verbosity, else: :summary
         start_time = System.monotonic_time(:microsecond)
 
-        with {:ok, mode} <- classify_mode(query, model_context, llm, llm_opts, config),
-             {:ok, tags} <- generate_plan(query, mode, model_context, llm, llm_opts, config),
+        with {:ok, %{mode: mode, tags: tags}} <-
+               plan(query, model_context, llm, llm_opts, config),
              {:ok, %Embedding.Response{vectors: [query_vector | tag_vectors]}} <-
                ModelCall.embed_batch(
                  model_context,
@@ -230,36 +234,17 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     {{:ok, result, trace}, %{candidates_found: total_candidates}}
   end
 
-  defp classify_mode(query, model_context, llm, llm_opts, config) do
+  defp plan(query, model_context, llm, llm_opts, config) do
     messages =
-      GetMode.build_messages(%{query: query, overlay: Config.resolve_overlay(config, :get_mode)})
+      GetPlan.build_messages(%{query: query, overlay: Config.resolve_overlay(config, :get_plan)})
 
     with {:ok, %{content: content}} <-
-           ModelCall.chat(
-             model_context,
-             llm,
-             :get_mode,
-             messages,
-             Config.llm_opts(config, :get_mode, llm_opts)
-           ) do
-      GetMode.parse_response(content)
-    end
-  end
-
-  defp generate_plan(query, mode, model_context, llm, llm_opts, config) do
-    messages =
-      GetPlan.build_messages(%{
-        query: query,
-        mode: mode,
-        overlay: Config.resolve_overlay(config, :get_plan)
-      })
-
-    with {:ok, %{content: content}} <-
-           ModelCall.chat(
+           ModelCall.chat_structured(
              model_context,
              llm,
              :get_plan,
              messages,
+             GetPlan.schema(),
              Config.llm_opts(config, :get_plan, llm_opts)
            ) do
       GetPlan.parse_response(content)
@@ -317,18 +302,18 @@ defmodule Mnemosyne.Pipeline.Retrieval do
     end
   end
 
-  defp multi_hop(candidates, _hop_ctx, 0, control_state, _current_hop) do
-    {candidates, control_state}
+  defp multi_hop(candidates, %{refine_ctx: refine_ctx}, 0, control_state, _current_hop) do
+    {HopControl.rerank(refine_ctx.query, candidates, refine_ctx), control_state}
   end
 
   defp multi_hop(candidates, hop_ctx, hops_remaining, control_state, current_hop) do
     %{refine_ctx: refine_ctx} = hop_ctx
 
     case HopControl.assess(control_state, refine_ctx.query, candidates, current_hop, refine_ctx) do
-      {:stop, control_state} ->
+      {:stop, candidates, control_state} ->
         {candidates, control_state}
 
-      {:continue, focus, control_state} ->
+      {:continue, focus, candidates, control_state} ->
         {merged, control_state} =
           run_hop(candidates, focus, hop_ctx, control_state, current_hop)
 

@@ -23,11 +23,12 @@ The dataset is downloaded to `benchmark/data/` on first use (15 MB for `oracle`,
 | `--variant` | `s` | `s` (about 115k tokens of history per question) or `oracle` (evidence sessions only) |
 | `--limit` | `100` | Number of questions, taken in a fixed order (hash of `question_id`) |
 | `--run` | the variant | Output directory name under `benchmark/runs/` |
-| `--llm` | `openrouter:deepseek/deepseek-v4.1-flash` | Model for ingestion, recall and the reader |
+| `--llm` | `openai:gpt-6-luna` | Model for ingestion, recall and the reader |
 | `--embedding` | `openai:text-embedding-3-small` | Embedding model |
 | `--judge` | `openai:gpt-6-luna` | Model that grades answers, at low reasoning effort. Upstream pins `gpt-4o-2024-08-06`, so accuracy is not directly comparable to published numbers |
+| `--decision` | none | Decision model (`Config.decision`), e.g. `typesafe:jev-latest`. Unset runs the LLM prompts it would replace |
 | `--concurrency` | `2` | Questions processed in parallel |
-| `--reasoning-effort` | `none` | Reasoning effort for `--llm` (`none`, `minimal`, `low`, `medium`, `high`). With the default model, `low` still spent about 1,000 output tokens per call and hit the 60-second task timeout |
+| `--reasoning-effort` | `none` | Reasoning effort for `--llm` (`none`, `minimal`, `low`, `medium`, `high`). With `openrouter:deepseek/deepseek-v4.1-flash`, `low` still spent about 1,000 output tokens per call and hit the 60-second task timeout |
 | `--segmentation-threshold` | `0.3` | `Config.segmentation_threshold`; 0.3 fits `text-embedding-3-small`, where consecutive same-session subgoals score a median of 0.49 and random pairs 0.19 |
 
 Model strings are Sycophant identifiers. Keep one `--run` per configuration or branch you want to compare, since a run directory is never reset.
@@ -58,24 +59,3 @@ A run can be stopped and restarted with the same command. Questions already in `
 | `memory_tokens` | Size of the recalled summaries given to the reader, as characters / 4 |
 
 Retrieved sessions are ranked by the score of their best `touched_nodes` entry. Retrieval metrics skip the 30 abstention questions, which have no evidence location. `usage_this_invocation` counts calls, tokens and cost per model for the current invocation only.
-
-### Cost
-
-Measured on a 3-question `oracle` run (6 sessions, about 21k tokens of chat): 219 LLM calls, 214k input and 32k output tokens, $0.20 with the default models, and about 40 seconds per session.
-
-Measured on 2 `s` questions (90 sessions, about 246k tokens of chat): 3,018 LLM calls, $2.52, about 12 minutes of ingestion at the default concurrency, and one 142 MB repo file per question. Ingestion makes three calls per step (state, subgoal, reward) and up to three per trajectory segment (facts, procedures, return scoring).
-
-Scaled by history size, plan for about $125 and 14 GB of disk per 100 questions, and about $630 for all 500.
-
-### Differences from upstream
-
-- The judge gets `max_tokens: 512` instead of 10. A reasoning model spends output tokens on thinking first, so a tight cap can cut off the verdict.
-- The reader prompt is upstream's "facts extracted from history chats" variant, fed with Mnemosyne's reasoned summaries instead of raw sessions.
-- Retrieval is scored at session level only. Turn-level `has_answer` labels are not used.
-
-### Known limits
-
-- With the `oracle` variant every session is gold, so retrieval metrics are trivially 1.0. Only `s` measures retrieval.
-- Dataset dates carry no time zone and are read as UTC.
-- Changing how sessions are turned into trajectories changes their payload, so an existing run directory then reports source conflicts. Use a new `--run` name after such a change.
-- `InMemory` recall scans every node, so recall time grows with haystack size.

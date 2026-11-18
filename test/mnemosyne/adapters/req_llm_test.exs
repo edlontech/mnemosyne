@@ -205,6 +205,57 @@ defmodule Mnemosyne.Adapters.ReqLLMTest do
     refute Enum.any?(usage, fn {_key, value} -> is_nil(value) end)
   end
 
+  test "evaluate asks boolean questions and returns the probability per question" do
+    http_adapter = fn req ->
+      request = req.body |> IO.iodata_to_binary() |> Jason.decode!()
+      assert request["model"] == "gpt-6-luna"
+
+      assert Enum.sort_by(request["questions"], & &1["name"]) == [
+               %{"name" => "spam", "type" => "predicate", "instructions" => "Is this spam?"},
+               %{"name" => "urgent", "type" => "predicate", "instructions" => "Is this urgent?"}
+             ]
+
+      answers =
+        Enum.map(request["questions"], fn %{"name" => name} ->
+          probability = if name == "urgent", do: 0.93, else: 0.1
+          %{"name" => name, "type" => "predicate", "probability" => probability}
+        end)
+
+      body = %{
+        "id" => "decision-test",
+        "model" => "gpt-6-luna",
+        "answers" => answers,
+        "usage" => %{"input_tokens" => 40, "output_tokens" => 0, "total_tokens" => 40}
+      }
+
+      {req, Req.Response.new(status: 200, body: body)}
+    end
+
+    assert {:ok, %Response{} = response} =
+             Adapter.evaluate(
+               %{ticket: "Refund me"},
+               %{"urgent" => "Is this urgent?", "spam" => "Is this spam?"},
+               opts(http_adapter, model: "openai:gpt-6-luna")
+             )
+
+    assert response.content == %{"urgent" => 0.93, "spam" => 0.1}
+    assert response.model == "gpt-6-luna"
+    assert response.usage.input_tokens == 40
+  end
+
+  test "evaluate wraps provider errors" do
+    http_adapter = fn req ->
+      {req, Req.Response.new(status: 401, body: %{"error" => %{"message" => "Invalid API key"}})}
+    end
+
+    assert {:error, %AdapterError{operation: :evaluate, reason: %{status: 401}}} =
+             Adapter.evaluate(
+               "state",
+               %{"q" => "Yes?"},
+               opts(http_adapter, model: "openai:gpt-6-luna")
+             )
+  end
+
   test "rejects structured content that does not satisfy the supplied schema" do
     http_adapter = fn req ->
       {req, Req.Response.new(status: 200, body: completion(~s({"name":42})))}

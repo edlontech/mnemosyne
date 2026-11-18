@@ -21,9 +21,13 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
   setup :set_mimic_global
 
   defp build_closed_episode do
-    stub_chat_responses(["Derived state", "Derived state", "0.8", "0.9"])
-    subgoal = %{reasoning: "analysis", subgoal: "Optimize queries"}
-    stub_chat_structured_responses([subgoal, subgoal])
+    stub_chat_responses(["0.8", "0.9"])
+
+    stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+      annotations = Mnemosyne.TestPrompts.annotations(messages, subgoal: "Optimize queries")
+      {:ok, %LLM.Response{content: annotations, model: "mock:test", usage: %{}}}
+    end)
+
     stub_default_embedding()
 
     {:ok, closed} =
@@ -389,6 +393,93 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         assert ["obs_" <> _ = observation] = sources
         assert fact.proposition == "Fact from #{observation}"
       end
+    end
+
+    test "skips fact extraction for steps whose salience is below the gate threshold" do
+      test_pid = self()
+      episode = build_closed_episode_with_rewards([0.8, 0.9, 0.7])
+
+      [trajectory] = episode.trajectories
+
+      steps =
+        Enum.zip_with(trajectory.steps, [0.05, 0.9, nil], &Map.put(&1, :salience, &2))
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn [%{content: system}, %{content: user}],
+                                                   _schema,
+                                                   _opts ->
+        content =
+          if system =~ "factual knowledge" do
+            send(test_pid, {:fact_prompt, user})
+            %{facts: []}
+          else
+            %{instructions: []}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      stub_default_embedding()
+
+      assert {:ok, cs, trace} =
+               Structuring.extract_trajectory(
+                 %{trajectory | steps: steps},
+                 episode.goal,
+                 @default_opts ++ [config: %{@test_config | fact_gate_threshold: 0.2}]
+               )
+
+      {:messages, messages} = Process.info(self(), :messages)
+      fact_prompts = for {:fact_prompt, prompt} <- messages, do: prompt
+
+      assert length(fact_prompts) == 2
+      refute Enum.any?(fact_prompts, &(&1 =~ "obs_0"))
+      assert trace.gated_steps == 1
+
+      # the gated step still becomes episodic memory
+      assert Enum.count(cs.additions, &match?(%Mnemosyne.Graph.Node.Episodic{}, &1)) == 3
+    end
+
+    test "scores returns with the decision model when one is configured" do
+      episode = build_closed_episode_with_rewards([0.8, 0.9])
+      stub_extraction_llm()
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn [%{content: system} | _], _schema, _opts ->
+        refute system =~ "prescription quality"
+
+        content =
+          if system =~ "actionable instructions" do
+            %{
+              instructions: [
+                %{
+                  intent: "Optimize slow database queries",
+                  condition: "Query exceeds 1s",
+                  instruction: "Add an index",
+                  expected_outcome: "Sub-100ms response"
+                }
+              ]
+            }
+          else
+            %{facts: []}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      expect(Mnemosyne.MockLLM, :evaluate, fn state, questions, opts ->
+        assert opts[:model] == "test:decision"
+        assert [%{id: "p0", instruction: "Add an index"}] = state.prescriptions
+        assert Map.keys(questions) == ["return_0"]
+
+        {:ok, %LLM.Response{content: %{"return_0" => 0.85}, model: "mock:test", usage: %{}}}
+      end)
+
+      config = %{@test_config | decision: %{model: "test:decision", opts: %{}}}
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts ++ [config: config])
+
+      assert [%Mnemosyne.Graph.Node.Procedural{return_score: 0.85} = node] =
+               Enum.filter(cs.additions, &match?(%Mnemosyne.Graph.Node.Procedural{}, &1))
+
+      assert %NodeMetadata{cumulative_reward: 0.85, reward_count: 1} = cs.metadata[node.id]
     end
 
     test "links facts to the step they came from and creates per-step sibling links" do

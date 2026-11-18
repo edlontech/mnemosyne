@@ -3,9 +3,9 @@ if Code.ensure_loaded?(ReqLLM) do
     @moduledoc """
     LLM adapter backed by the optional ReqLLM dependency.
 
-    Translates `Mnemosyne.LLM` calls to ReqLLM's `generate_text/3` and
-    `generate_object/4` APIs. Structured output is parsed through the supplied
-    Zoi schema to preserve the key types expected by Mnemosyne's prompts.
+    Translates `Mnemosyne.LLM` calls to ReqLLM's `generate_text/3`,
+    `generate_object/4` and `evaluate/4` APIs. Structured output is parsed through
+    the supplied Zoi schema to preserve the key types expected by Mnemosyne's prompts.
 
     Requires a `:model` option in ReqLLM's `"provider:model"` format. The optional
     `:step` is used for telemetry; remaining options are forwarded to ReqLLM.
@@ -50,6 +50,35 @@ if Code.ensure_loaded?(ReqLLM) do
           end
         end
       )
+    end
+
+    @impl true
+    def evaluate(state, questions, opts) do
+      {model, req_opts} = Keyword.pop!(opts, :model)
+      {step, req_opts} = Keyword.pop(req_opts, :step)
+
+      Mnemosyne.Telemetry.span([:llm, :evaluate], %{model: model, step: step}, fn ->
+        case ReqLLM.evaluate(model, state, boolean_questions(questions), req_opts) do
+          {:ok, response} ->
+            success(response, probabilities(response.object))
+
+          {:error, reason} ->
+            failure(reason, :evaluate)
+        end
+      end)
+    end
+
+    defp boolean_questions(questions) do
+      Map.new(questions, fn {id, instructions} ->
+        {id, %{type: :boolean, instructions: instructions}}
+      end)
+    end
+
+    defp probabilities(answers) do
+      for {id, %{"probability" => probability}} <- answers,
+          is_number(probability),
+          into: %{},
+          do: {id, probability}
     end
 
     defp parse_object(schema, object) do

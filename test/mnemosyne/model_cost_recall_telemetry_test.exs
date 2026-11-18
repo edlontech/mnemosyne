@@ -74,13 +74,12 @@ defmodule Mnemosyne.ModelCostRecallTelemetryTest do
     assert result.reasoned.procedural == "Inspect connection pool metrics."
     assert result.trace.refinements != []
 
-    events = collect_model_calls(10)
+    events = collect_model_calls(9)
 
     assert Enum.frequencies_by(events, fn {_measurements, metadata} ->
              {metadata.kind, metadata.callback, metadata.step}
            end) == %{
-             {:llm, :chat, :get_mode} => 1,
-             {:llm, :chat, :get_plan} => 1,
+             {:llm, :chat_structured, :get_plan} => 1,
              {:embedding, :embed_batch, :retrieval} => 1,
              {:llm, :chat_structured, :multi_hop_control} => 1,
              {:embedding, :embed, :retrieval_focus} => 1,
@@ -148,18 +147,12 @@ defmodule Mnemosyne.ModelCostRecallTelemetryTest do
   defp stub_model_calls do
     usage = %{input_tokens: 11, output_tokens: 4, total_cost: 0.4, currency: "USD"}
 
-    stub(Mnemosyne.MockLLM, :chat, fn messages, _opts ->
-      content =
-        if system_content(messages) =~ "classifying memory retrieval",
-          do: "mixed",
-          else: "timeout\nconnection pool"
-
-      {:ok, %LLM.Response{content: content, model: "test-model", usage: usage}}
-    end)
-
     stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
       content =
         case system_content(messages) do
+          "You are an expert at planning memory retrieval" <> _ ->
+            %{mode: "mixed", tags: ["timeout", "connection pool"]}
+
           "You are a retrieval controller" <> _ ->
             %{enough: false, top_indices: [0]}
 

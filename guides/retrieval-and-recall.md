@@ -4,11 +4,11 @@ This guide explains how Mnemosyne retrieves relevant memories from the knowledge
 
 ## How Recall Works
 
-When you call `Mnemosyne.recall/3`, the retrieval pipeline runs through four stages:
+When you call `Mnemosyne.recall/3`, the retrieval pipeline runs through four stages. Stages 1 and 2 share a single LLM call that returns both the mode and the tags.
 
 ### 1. Mode Classification
 
-The query is classified into one of four retrieval modes using an LLM call:
+The query is classified into one of four retrieval modes:
 
 | Mode | Description | Target Node Types |
 |------|-------------|-------------------|
@@ -53,6 +53,16 @@ On top of the routing expansion, retrieval tags are regenerated per hop conditio
 This runs for up to `max_hops` iterations (default: 2), each time re-ranking the merged candidate set. The controller degrades gracefully: on any LLM failure it simply continues the hop without focus candidates.
 
 For episodic mode, an additional provenance expansion step follows Source nodes back to their originating episodes, applying a decay factor (0.5) to the parent's score.
+
+### Decision Model Control
+
+When `config.decision` names a decision model, it replaces the LLM controller. One request per hop asks whether the evidence is enough and whether each of the top 20 candidates helps answer the query. The answers do three things:
+
+- Retrieval stops when "enough" is at least 0.5 likely.
+- The most relevant candidates become the focus of the next hop.
+- Each judged candidate takes its relevance probability as raw score, and candidates below their node type's `threshold` are dropped. Candidates outside the top 20 keep their cosine score.
+
+The final pool is judged once more before the value function ranks it, even with `max_hops: 0`. If the request fails, retrieval continues with the candidates unchanged.
 
 ## Value Function
 
@@ -231,6 +241,18 @@ value_function: %{
 ```
 
 The `reasoned` field contains natural-language summaries per memory type (`nil` when no candidates of that type were found). The reasoning step runs in parallel across the three types.
+
+### Skipping Reasoning
+
+Reasoning is the slowest part of a recall. When the caller is itself an LLM agent it can read the memories directly:
+
+```elixir
+{:ok, result} = Mnemosyne.recall("my-repo", "How do I deploy?", reasoning: false)
+
+memories = for %{node: node} when node != nil <- result.touched_nodes, do: node
+```
+
+With `reasoning: false`, `reasoned` is `nil` and the touched nodes listed in `reasoned_ids` (the per-type `top_k` cut the reasoner would have read) carry their `node` regardless of `trace_verbosity`. Access metadata is recorded for those nodes as usual.
 
 The `touched_nodes` field lists every node that contributed to the result, sorted by score. Each entry carries the node's origin phase (`:initial`, `:multi_hop`, `:refinement`, or `:provenance`) and hop number. When `config.trace_verbosity` is `:detailed`, the full node struct is included in the `node` field; at `:summary` (the default) it is `nil`.
 

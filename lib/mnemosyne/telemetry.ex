@@ -10,6 +10,7 @@ defmodule Mnemosyne.Telemetry do
   ### LLM Adapter
   - `[:mnemosyne, :llm, :chat, :start | :stop | :exception]`
   - `[:mnemosyne, :llm, :chat_structured, :start | :stop | :exception]`
+  - `[:mnemosyne, :llm, :evaluate, :start | :stop | :exception]`
 
   ### Embedding Adapter
   - `[:mnemosyne, :embedding, :embed, :start | :stop | :exception]`
@@ -64,6 +65,7 @@ defmodule Mnemosyne.Telemetry do
   @events [
     @prefix ++ [:llm, :chat],
     @prefix ++ [:llm, :chat_structured],
+    @prefix ++ [:llm, :evaluate],
     @prefix ++ [:embedding, :embed],
     @prefix ++ [:embedding, :embed_batch],
     @prefix ++ [:model, :call],

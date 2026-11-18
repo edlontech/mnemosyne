@@ -84,7 +84,12 @@ defmodule Mnemosyne.MemoryStore do
     GenServer.call(server, :get_graph)
   end
 
-  @doc "Runs async retrieval + reasoning and returns the result."
+  @doc """
+  Runs async retrieval + reasoning and returns the result.
+
+  With `reasoning: false` no summary is generated: `reasoned` is `nil` and the
+  touched nodes listed in `reasoned_ids` carry their `node`.
+  """
   @spec recall(GenServer.server(), String.t(), keyword()) ::
           {:ok, RecallResult.t()} | {:error, Mnemosyne.Errors.error()}
   def recall(server, query, opts \\ []) do
@@ -1143,6 +1148,7 @@ defmodule Mnemosyne.MemoryStore do
     repo_id = state.repo_id
     verbosity = config.trace_verbosity
     context = model_context(state, :recall, source_id)
+    reasoning? = Keyword.get(opts, :reasoning, true)
 
     retrieval_opts = [
       repo_id: repo_id,
@@ -1169,15 +1175,17 @@ defmodule Mnemosyne.MemoryStore do
       with {:ok, backend} <- read_backend(read_state, opts),
            {:ok, result, trace} <-
              Retrieval.retrieve(query, Keyword.put(retrieval_opts, :backend, backend)),
-           {:ok, reasoned} <- Reasoning.reason(result, reasoning_opts) do
+           {:ok, reasoned} <- maybe_reason(reasoning?, result, reasoning_opts) do
+        reasoned_ids = Reasoning.reasoned_ids(result, config)
+
+        returned_ids = returned_ids(reasoning?, reasoned_ids)
+
         touched_nodes =
           result.candidates
           |> Map.values()
           |> List.flatten()
-          |> Enum.map(&TouchedNode.from_tagged(&1, verbosity))
+          |> Enum.map(&touched_node(&1, returned_ids, verbosity))
           |> Enum.sort_by(& &1.score, :desc)
-
-        reasoned_ids = Reasoning.reasoned_ids(result, config)
 
         {:ok,
          %RecallResult{
@@ -1189,6 +1197,21 @@ defmodule Mnemosyne.MemoryStore do
       end
     end)
   end
+
+  # Without a reasoner the caller reads the nodes itself, so they ship with the result.
+  defp returned_ids(true, _reasoned_ids), do: MapSet.new()
+
+  defp returned_ids(false, reasoned_ids),
+    do: reasoned_ids |> Map.values() |> List.flatten() |> MapSet.new()
+
+  defp touched_node(candidate, returned_ids, verbosity) do
+    if MapSet.member?(returned_ids, Node.id(candidate.node)),
+      do: TouchedNode.from_tagged(candidate, :detailed),
+      else: TouchedNode.from_tagged(candidate, verbosity)
+  end
+
+  defp maybe_reason(true, result, opts), do: Reasoning.reason(result, opts)
+  defp maybe_reason(false, _result, _opts), do: {:ok, nil}
 
   # Access is recorded only for nodes the reasoner read, plus the semantic
   # nodes that produced reasoned episodic results.

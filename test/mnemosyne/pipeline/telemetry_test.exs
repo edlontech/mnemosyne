@@ -40,10 +40,10 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
     |> stub(:chat, fn _messages, _opts ->
       {:ok, %LLM.Response{content: "0.8", model: "mock:test", usage: %{}}}
     end)
-    |> stub(:chat_structured, fn _messages, _schema, _opts ->
+    |> stub(:chat_structured, fn messages, _schema, _opts ->
       {:ok,
        %LLM.Response{
-         content: %{reasoning: "analysis", subgoal: "test subgoal"},
+         content: Mnemosyne.TestPrompts.annotations(messages),
          model: "mock:test",
          usage: %{}
        }}
@@ -72,7 +72,7 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
       content =
         cond do
           system_content =~ "subgoal" ->
-            %{reasoning: "analysis", subgoal: "test subgoal"}
+            Mnemosyne.TestPrompts.annotations(messages)
 
           system_content =~ "factual knowledge" ->
             %{
@@ -115,21 +115,9 @@ defmodule Mnemosyne.Pipeline.TelemetryTest do
   end
 
   defp stub_retrieval_llm do
-    Mnemosyne.MockLLM
-    |> stub(:chat, fn messages, _opts ->
-      system_content =
-        messages
-        |> Enum.find(%{content: ""}, &(&1.role == :system))
-        |> Map.get(:content)
-
-      content =
-        cond do
-          system_content =~ "classifying memory retrieval" -> "semantic"
-          system_content =~ "planning memory retrieval" -> "BEAM VM"
-          true -> "default"
-        end
-
-      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+    stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+      plan = %{mode: "semantic", tags: ["BEAM VM"]}
+      {:ok, %LLM.Response{content: plan, model: "mock:test", usage: %{}}}
     end)
   end
 

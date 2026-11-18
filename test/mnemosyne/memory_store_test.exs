@@ -871,15 +871,49 @@ defmodule Mnemosyne.MemoryStoreTest do
       assert reasoning_opts[:model_context].source_id == nil
     end
 
-    test "runs retrieval and reasoning pipeline, returns ReasonedMemory", %{tmp_dir: tmp_dir} do
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
+    test "reasoning: false skips the reasoner and returns the nodes it would have read",
+         %{tmp_dir: tmp_dir} do
+      near = make_semantic("near", "Close match")
+      far = make_semantic("far", "Weaker match")
+
+      stub(Retrieval, :retrieve, fn _query, _opts ->
+        candidates = %{
+          semantic: [
+            Retrieval.TaggedCandidate.from_hop_0(near, 0.9),
+            Retrieval.TaggedCandidate.from_hop_0(far, 0.4)
+          ]
+        }
+
+        {:ok, %Retrieval.Result{candidates: candidates}, %Mnemosyne.Notifier.Trace.Recall{}}
       end)
 
+      reject(&Reasoning.reason/2)
+
+      {:ok, config} =
+        Zoi.parse(Config.t(), %{
+          llm: %{model: "test-model", opts: %{}},
+          embedding: %{model: "test-embed", opts: %{}},
+          value_function: %{params: %{semantic: %{top_k: 1}}}
+        })
+
+      pid = start_store(tmp_dir, config: config)
+
+      assert {:ok, %RecallResult{reasoned: nil, reasoned_ids: %{semantic: ["near"]}} = result} =
+               MemoryStore.recall(pid, "query", reasoning: false)
+
+      assert %{"near" => ^near, "far" => nil} = Map.new(result.touched_nodes, &{&1.id, &1.node})
+    end
+
+    test "runs retrieval and reasoning pipeline, returns ReasonedMemory", %{tmp_dir: tmp_dir} do
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
         {:ok,
          %LLM.Response{
-           content: %{reasoning: "analysis", information: "Summary."},
+           content: %{
+             mode: "semantic",
+             tags: ["semantic"],
+             reasoning: "analysis",
+             information: "Summary."
+           },
            model: "test",
            usage: %{}
          }}
@@ -913,14 +947,15 @@ defmodule Mnemosyne.MemoryStoreTest do
     end
 
     test "recall result includes touched_nodes and trace", %{tmp_dir: tmp_dir} do
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
-      end)
-
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
         {:ok,
          %LLM.Response{
-           content: %{reasoning: "analysis", information: "Summary."},
+           content: %{
+             mode: "semantic",
+             tags: ["semantic"],
+             reasoning: "analysis",
+             information: "Summary."
+           },
            model: "test",
            usage: %{}
          }}
@@ -962,8 +997,9 @@ defmodule Mnemosyne.MemoryStoreTest do
     } do
       test_pid = self()
 
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
+      stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
+        plan = %{mode: "semantic", tags: ["semantic"]}
+        {:ok, %LLM.Response{content: plan, model: "test", usage: %{}}}
       end)
 
       stub(Mnemosyne.MockEmbedding, :embed, fn _text, _opts ->
@@ -1298,14 +1334,15 @@ defmodule Mnemosyne.MemoryStoreTest do
 
   describe "recall updates access metadata" do
     test "increments access_count for retrieved nodes", %{tmp_dir: tmp_dir} do
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
-      end)
-
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
         {:ok,
          %LLM.Response{
-           content: %{reasoning: "analysis", information: "Summary."},
+           content: %{
+             mode: "semantic",
+             tags: ["semantic"],
+             reasoning: "analysis",
+             information: "Summary."
+           },
            model: "test",
            usage: %{}
          }}
@@ -1352,14 +1389,15 @@ defmodule Mnemosyne.MemoryStoreTest do
     test "records access only for the nodes the reasoner read", %{tmp_dir: tmp_dir} do
       query_vector = List.duplicate(0.1, 128)
 
-      stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-        {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
-      end)
-
       stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
         {:ok,
          %LLM.Response{
-           content: %{reasoning: "analysis", information: "Summary."},
+           content: %{
+             mode: "semantic",
+             tags: ["semantic"],
+             reasoning: "analysis",
+             information: "Summary."
+           },
            model: "test",
            usage: %{}
          }}

@@ -31,6 +31,7 @@ defmodule LongMemEval do
     llm: :string,
     embedding: :string,
     judge: :string,
+    decision: :string,
     concurrency: :integer,
     segmentation_threshold: :float,
     reasoning_effort: :string
@@ -39,7 +40,7 @@ defmodule LongMemEval do
   @defaults [
     variant: "s",
     limit: 100,
-    llm: "openrouter:deepseek/deepseek-v4.1-flash",
+    llm: "openai:gpt-6-luna",
     embedding: "openai:text-embedding-3-small",
     judge: "openai:gpt-6-luna",
     concurrency: 2,
@@ -160,6 +161,7 @@ defmodule LongMemEval do
           opts: %{reasoning_effort: String.to_atom(opts[:reasoning_effort])}
         },
         embedding: %{model: opts[:embedding]},
+        decision: opts[:decision] && %{model: opts[:decision]},
         segmentation_threshold: opts[:segmentation_threshold]
       })
 
@@ -175,7 +177,11 @@ defmodule LongMemEval do
     :ok =
       :telemetry.attach_many(
         "longmemeval-usage",
-        [[:sycophant, :request, :stop], [:sycophant, :embedding, :stop]],
+        [
+          [:sycophant, :request, :stop],
+          [:sycophant, :embedding, :stop],
+          [:sycophant, :evaluation, :stop]
+        ],
         &__MODULE__.track_usage/4,
         usage
       )

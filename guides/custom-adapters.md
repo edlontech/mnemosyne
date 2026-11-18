@@ -46,7 +46,48 @@ defmodule MyApp.LLMAdapter do
 end
 ```
 
-`chat/2` returns string content. Mnemosyne uses it for state and reward inference and initial recall mode/tag planning. `chat_structured/3` receives a Zoi schema and returns parsed content; it is used for subgoal, semantic, procedural, and return extraction, multi-hop control and refinement, typed reasoning, intent merging, and semantic consolidation.
+`chat/2` returns string content. Mnemosyne uses it for reward inference. `chat_structured/3` receives a Zoi schema and returns parsed content; it is used for step annotation (state and subgoal), semantic, procedural, and return extraction, recall planning, multi-hop control and refinement, typed reasoning, intent merging, and semantic consolidation.
+
+### Decision models
+
+`evaluate/3` is an optional callback for decision models such as Jev or the OpenAI Decisions API, which answer typed questions with probabilities instead of generating text. Mnemosyne calls it only when `Mnemosyne.Config` sets `:decision`:
+
+```elixir
+config = %Mnemosyne.Config{
+  llm: %{model: "openrouter:deepseek/deepseek-v4.1-flash", opts: %{}},
+  embedding: %{model: "openai:text-embedding-3-small", opts: %{}},
+  decision: %{model: "typesafe:jev-latest", opts: %{}}
+}
+```
+
+The callback receives a shared `state` (a string, map or list), a map of question id to yes/no instructions, and the decision model opts. It returns a `Response` whose `content` maps every answered question id to the probability of "yes"; unanswered questions are left out.
+
+```elixir
+@impl true
+def evaluate(state, questions, opts) do
+  {model, provider_opts} = Keyword.pop!(opts, :model)
+
+  case call_decision_provider(model, state, questions, provider_opts) do
+    {:ok, probabilities, usage} ->
+      {:ok, %Response{content: probabilities, model: model, usage: usage}}
+
+    {:error, reason} ->
+      {:error, AdapterError.exception(adapter: __MODULE__, operation: :evaluate, reason: reason)}
+  end
+end
+```
+
+With a decision model configured:
+
+| Step | Without | With |
+|------|---------|------|
+| Reward scoring | one `chat` call per step | one request per window of steps |
+| Fact extraction gate | every step is extracted | steps below `fact_gate_threshold` are skipped |
+| Return scoring | one `chat_structured` call per segment | one request per segment |
+| Hop control | one `chat_structured` call per hop | one request per hop, which also reranks and filters candidates |
+| Final pool | not judged | judged once more before ranking |
+
+The built-in Sycophant and ReqLLM adapters implement `evaluate/3`. Setting `:decision` with an adapter that does not implement it makes those calls raise.
 
 ## Embedding Behaviour
 
@@ -167,9 +208,9 @@ An override model replaces the base model; override options merge over base opti
 
 | Stage | Keys | Callback |
 |-------|------|----------|
-| Episode | `get_state`, `get_subgoal`, `get_reward` | `chat` for state/reward; `chat_structured` for subgoal |
-| Structuring | `get_state`, `get_semantic`, `get_procedural`, `get_return` | `chat` for state; otherwise `chat_structured` |
-| Retrieval | `get_mode`, `get_plan` | `chat` |
+| Episode | `annotate_steps`, `get_reward` | `chat_structured` for annotation; `chat` for reward |
+| Structuring | `get_semantic`, `get_procedural`, `get_return` | `chat_structured` |
+| Retrieval | `get_plan` | `chat_structured` |
 | Hop control | `multi_hop_control`, `get_refined_query` | `chat_structured` |
 | Reasoning | `reason_episodic`, `reason_semantic`, `reason_procedural` | `chat_structured` |
 | Intent merger | `merge_intent` | `chat_structured` |

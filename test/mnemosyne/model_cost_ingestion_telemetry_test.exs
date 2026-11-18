@@ -59,13 +59,12 @@ defmodule Mnemosyne.ModelCostIngestionTelemetryTest do
 
     assert {:ok, _receipt} = Mnemosyne.ingest(repo_id, trajectory, supervisor: supervisor)
 
-    events = collect_model_calls(12)
+    events = collect_model_calls(11)
 
     assert Enum.frequencies_by(events, fn {_measurements, metadata} ->
              {metadata.kind, metadata.callback, metadata.step}
            end) == %{
-             {:llm, :chat, :get_state} => 1,
-             {:llm, :chat_structured, :get_subgoal} => 1,
+             {:llm, :chat_structured, :annotate_steps} => 1,
              {:embedding, :embed_batch, :get_subgoal} => 1,
              {:llm, :chat, :get_reward} => 1,
              {:llm, :chat_structured, :get_semantic} => 1,
@@ -116,8 +115,8 @@ defmodule Mnemosyne.ModelCostIngestionTelemetryTest do
 
       content =
         cond do
-          prompt =~ "infer the subgoal" ->
-            %{reasoning: "analysis", subgoal: "Inspect timeout evidence"}
+          prompt =~ "analysing agent trajectories" ->
+            Mnemosyne.TestPrompts.annotations(messages, subgoal: "Inspect timeout evidence")
 
           prompt =~ "factual knowledge" ->
             %{facts: [%{proposition: "The service timed out", concepts: ["timeouts"]}]}

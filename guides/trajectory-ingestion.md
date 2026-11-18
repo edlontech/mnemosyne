@@ -46,7 +46,7 @@ trajectory = %Mnemosyne.Trajectory{
 
 When it is set:
 
-- The state and fact extraction prompts are shown the date, so relative expressions such as "today" can be stored as absolute dates.
+- The step annotation and fact extraction prompts are shown the date, so relative expressions such as "today" can be stored as absolute dates.
 - The episodic, source, subgoal, semantic, and procedural nodes from that ingestion get `created_at` set to `occurred_at`. The reasoning prompts print that timestamp next to each memory.
 
 `occurred_at` must be a `DateTime` or `nil`. It does not change `Mnemosyne.NodeMetadata.created_at`, so recency scoring, decay, and `latest/3` still follow ingestion time. Tags and Intents keep their own creation time because they are shared across ingestions.

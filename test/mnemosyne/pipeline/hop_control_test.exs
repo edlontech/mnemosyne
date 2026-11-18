@@ -104,6 +104,89 @@ defmodule Mnemosyne.Pipeline.HopControlTest do
     end
   end
 
+  describe "assess/5 with a decision model" do
+    @decision_config %{@config | decision: %{model: "test:decision", opts: %{}}}
+
+    defp decision_ctx, do: %{ctx() | config: @decision_config}
+
+    test "stops when the evidence is likely enough, reranking by probability and dropping irrelevant candidates" do
+      candidates = [
+        semantic_candidate("s1", 0.9, 0),
+        semantic_candidate("s2", 0.8, 0),
+        semantic_candidate("s3", 0.7, 0)
+      ]
+
+      reject(&MockLLM.chat_structured/3)
+
+      expect(MockLLM, :evaluate, fn state, questions, opts ->
+        assert opts[:model] == "test:decision"
+        assert state.query == "query"
+        assert Enum.map(state.candidates, & &1.id) == ["c0", "c1", "c2"]
+        assert Map.keys(questions) == ["c0", "c1", "c2", "enough"]
+
+        probabilities = %{"enough" => 0.8, "c0" => 0.1, "c1" => 0.6, "c2" => 0.95}
+        {:ok, %LLM.Response{content: probabilities, model: "test", usage: %{}}}
+      end)
+
+      assert {:stop, reranked, state} =
+               HopControl.assess(%State{}, "query", candidates, 1, decision_ctx())
+
+      assert Enum.map(reranked, &{&1.node.id, &1.score}) == [{"s3", 0.95}, {"s2", 0.6}]
+      assert state.stopped_early_at == 1
+    end
+
+    test "continues with the most relevant candidates as focus, keeping unjudged ones" do
+      candidates = Enum.map(1..3, &semantic_candidate("s#{&1}", 1.0 - &1 / 10, 0))
+
+      expect(MockLLM, :evaluate, fn _state, _questions, _opts ->
+        probabilities = %{"enough" => 0.2, "c0" => 0.4, "c2" => 0.7}
+        {:ok, %LLM.Response{content: probabilities, model: "test", usage: %{}}}
+      end)
+
+      assert {:continue, focus, reranked, state} =
+               HopControl.assess(%State{}, "query", candidates, 1, decision_ctx())
+
+      assert Enum.map(focus, & &1.node.id) == ["s3", "s1"]
+
+      assert Enum.map(reranked, &{&1.node.id, &1.score}) == [
+               {"s2", 0.8},
+               {"s3", 0.7},
+               {"s1", 0.4}
+             ]
+
+      assert state.stopped_early_at == nil
+    end
+
+    test "degrades to :continue with unchanged candidates when the decision call fails" do
+      candidates = [semantic_candidate("s1", 0.9, 0)]
+
+      expect(MockLLM, :evaluate, fn _state, _questions, _opts -> {:error, :unavailable} end)
+
+      assert {:continue, [], ^candidates, _state} =
+               HopControl.assess(%State{}, "query", candidates, 1, decision_ctx())
+    end
+  end
+
+  describe "rerank/3" do
+    test "returns candidates untouched without a decision model" do
+      candidates = [semantic_candidate("s1", 0.9, 0)]
+      reject(&MockLLM.evaluate/3)
+
+      assert HopControl.rerank("query", candidates, ctx()) == candidates
+    end
+
+    test "rescores and filters candidates with a decision model" do
+      candidates = [semantic_candidate("s1", 0.9, 0), semantic_candidate("s2", 0.8, 0)]
+
+      expect(MockLLM, :evaluate, fn _state, _questions, _opts ->
+        {:ok, %LLM.Response{content: %{"c0" => 0.05, "c1" => 0.9}, model: "test", usage: %{}}}
+      end)
+
+      assert [%TaggedCandidate{node: %{id: "s2"}, score: 0.9}] =
+               HopControl.rerank("query", candidates, decision_ctx())
+    end
+  end
+
   describe "assess/5 - sufficiency decision" do
     test "returns :stop and records the hop when the controller says enough" do
       candidates = [semantic_candidate("s1", 0.9, 0)]
@@ -112,7 +195,9 @@ defmodule Mnemosyne.Pipeline.HopControlTest do
         control_response(true, [])
       end)
 
-      assert {:stop, state} = HopControl.assess(%State{}, "query", candidates, 1, ctx())
+      assert {:stop, ^candidates, state} =
+               HopControl.assess(%State{}, "query", candidates, 1, ctx())
+
       assert state.stopped_early_at == 1
     end
 
@@ -127,7 +212,7 @@ defmodule Mnemosyne.Pipeline.HopControlTest do
         control_response(false, [2, 0])
       end)
 
-      assert {:continue, focus, _state} =
+      assert {:continue, focus, ^candidates, _state} =
                HopControl.assess(%State{}, "query", candidates, 1, ctx())
 
       assert Enum.map(focus, & &1.node.id) == ["s3", "s1"]
@@ -144,14 +229,14 @@ defmodule Mnemosyne.Pipeline.HopControlTest do
         control_response(false, [99, -1, 1, 0, 2])
       end)
 
-      assert {:continue, focus, _state} =
+      assert {:continue, focus, ^candidates, _state} =
                HopControl.assess(%State{}, "query", candidates, 1, ctx())
 
       assert Enum.map(focus, & &1.node.id) == ["s2", "s1"]
     end
 
     test "continues without an LLM call when there are no candidates" do
-      assert {:continue, [], %State{}} = HopControl.assess(%State{}, "query", [], 1, ctx())
+      assert {:continue, [], [], %State{}} = HopControl.assess(%State{}, "query", [], 1, ctx())
     end
 
     test "degrades to :continue with no focus on LLM error" do
@@ -161,7 +246,8 @@ defmodule Mnemosyne.Pipeline.HopControlTest do
         {:error, %Mnemosyne.Errors.Framework.AdapterError{adapter: MockLLM}}
       end)
 
-      assert {:continue, [], _state} = HopControl.assess(%State{}, "query", candidates, 1, ctx())
+      assert {:continue, [], ^candidates, _state} =
+               HopControl.assess(%State{}, "query", candidates, 1, ctx())
     end
 
     test "degrades to :continue on unparseable controller output" do
@@ -171,7 +257,8 @@ defmodule Mnemosyne.Pipeline.HopControlTest do
         {:ok, %LLM.Response{content: %{summary: "unrelated"}, model: "test", usage: %{}}}
       end)
 
-      assert {:continue, [], _state} = HopControl.assess(%State{}, "query", candidates, 1, ctx())
+      assert {:continue, [], ^candidates, _state} =
+               HopControl.assess(%State{}, "query", candidates, 1, ctx())
     end
 
     test "presents indexed candidates to the controller" do
@@ -188,7 +275,8 @@ defmodule Mnemosyne.Pipeline.HopControlTest do
         control_response(false, [])
       end)
 
-      assert {:continue, [], _state} = HopControl.assess(%State{}, "query", candidates, 1, ctx())
+      assert {:continue, [], ^candidates, _state} =
+               HopControl.assess(%State{}, "query", candidates, 1, ctx())
     end
   end
 

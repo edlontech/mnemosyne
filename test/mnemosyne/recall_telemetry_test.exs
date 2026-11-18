@@ -130,19 +130,11 @@ defmodule Mnemosyne.RecallTelemetryTest do
   end
 
   defp stub_model_calls do
-    stub(Mnemosyne.MockLLM, :chat, fn messages, _opts ->
-      content =
-        if system_content(messages) =~ "classifying memory retrieval",
-          do: "mixed",
-          else: "timeout"
-
-      {:ok, %LLM.Response{content: content, model: "test-model", usage: %{}}}
-    end)
-
     stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
       {:ok,
        %LLM.Response{
          content: %{
+           mode: "mixed",
            enough: true,
            top_indices: [],
            tags: ["timeout"],

@@ -2,79 +2,69 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
   use ExUnit.Case, async: true
 
   alias Mnemosyne.Errors.Invalid.PromptError
+  alias Mnemosyne.Pipeline.Prompts.AnnotateSteps
   alias Mnemosyne.Pipeline.Prompts.GetProcedural
   alias Mnemosyne.Pipeline.Prompts.GetReturn
   alias Mnemosyne.Pipeline.Prompts.GetReward
   alias Mnemosyne.Pipeline.Prompts.GetSemantic
-  alias Mnemosyne.Pipeline.Prompts.GetState
-  alias Mnemosyne.Pipeline.Prompts.GetSubgoal
 
-  describe "GetSubgoal" do
-    test "build_messages appends overlay to system message when provided" do
+  describe "AnnotateSteps" do
+    @steps [
+      %{number: 3, observation: "Slow query found", action: "Added index"},
+      %{number: 4, observation: "Index applied", action: "Ran benchmark"}
+    ]
+
+    test "build_messages lists the numbered steps and marks the first window as initial" do
       messages =
-        GetSubgoal.build_messages(%{
-          observation: "X",
-          action: "Y",
-          goal: "Test",
-          state: "some state",
+        AnnotateSteps.build_messages(%{
+          steps: @steps,
+          goal: "Optimize",
+          previous: nil,
           overlay: "Focus on API contracts."
         })
 
-      assert [%{role: :system, content: system}, _] = messages
-      assert system =~ "Focus on API contracts."
-    end
-
-    test "build_messages includes state when provided" do
-      messages =
-        GetSubgoal.build_messages(%{
-          observation: "The file exists",
-          action: "Read the file",
-          goal: "Extract data from logs",
-          state: "Agent has identified the log directory"
-        })
-
       assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
-      assert system =~ "subgoal"
-      assert user =~ "Extract data from logs"
-      assert user =~ "The file exists"
-      assert user =~ "Read the file"
-      assert user =~ "Agent has identified the log directory"
+      assert system =~ "Focus on API contracts."
+      assert user =~ "Goal: Optimize"
+      assert user =~ "[initial state - no prior context]"
+      assert user =~ "Step 3:\nObservation: Slow query found\nAction: Added index"
+      assert user =~ "Step 4:\nObservation: Index applied\nAction: Ran benchmark"
     end
 
-    test "build_messages handles nil state for initial step" do
-      messages =
-        GetSubgoal.build_messages(%{
-          observation: "The file exists",
-          action: "Read the file",
-          goal: "Extract data from logs",
-          state: nil
+    test "build_messages carries the preceding state, action and event time" do
+      [_, %{content: user}] =
+        AnnotateSteps.build_messages(%{
+          steps: @steps,
+          goal: "Optimize",
+          previous: %{state: "DB is slow", action: "Ran EXPLAIN"},
+          occurred_at: ~U[2023-04-10 07:43:00Z]
         })
 
-      assert [%{role: :system, content: _}, %{role: :user, content: user}] = messages
-      assert user =~ "initial state"
+      assert user =~ "State before the first listed step: DB is slow"
+      assert user =~ "Action taken from that state: Ran EXPLAIN"
+      assert user =~ "Occurred at: Monday, 2023-04-10 07:43"
     end
 
-    test "schema returns a valid Zoi schema with reasoning and subgoal" do
-      schema = GetSubgoal.schema()
-      assert {:ok, _} = Zoi.parse(schema, %{"reasoning" => "r", "subgoal" => "s"})
+    test "parse_response returns trimmed annotations in the requested order" do
+      response = %{
+        steps: [
+          %{step: 4, state: " after index ", subgoal: "Measure"},
+          %{step: 3, state: "slow", subgoal: " Speed up "}
+        ]
+      }
+
+      assert {:ok, [%{state: "slow", subgoal: "Speed up"}, %{state: "after index"}]} =
+               AnnotateSteps.parse_response(response, [3, 4])
     end
 
-    test "parse_response extracts subgoal from structured output" do
-      assert {:ok, "Navigate to the config directory"} =
-               GetSubgoal.parse_response(%{
-                 reasoning: "analysis",
-                 subgoal: "  Navigate to the config directory  "
-               })
-    end
+    test "parse_response rejects a missing step or a blank field" do
+      incomplete = %{steps: [%{step: 3, state: "slow", subgoal: "Speed up"}]}
+      blank = %{steps: [%{step: 3, state: "  ", subgoal: "Speed up"}]}
 
-    test "parse_response rejects empty subgoal" do
-      assert {:error, %PromptError{reason: :empty_response}} =
-               GetSubgoal.parse_response(%{reasoning: "analysis", subgoal: "   "})
-    end
-
-    test "parse_response rejects invalid schema" do
-      assert {:error, %PromptError{reason: :invalid_schema}} =
-               GetSubgoal.parse_response(%{"wrong" => "format"})
+      for {response, numbers} <- [{incomplete, [3, 4]}, {blank, [3]}, {%{}, [3]}] do
+        assert {:error, %PromptError{reason: :incomplete_steps}} =
+                 AnnotateSteps.parse_response(response, numbers)
+      end
     end
   end
 
@@ -127,64 +117,6 @@ defmodule Mnemosyne.Pipeline.Prompts.StructuringPromptsTest do
 
     test "parse_response rejects non-numeric" do
       assert {:error, %PromptError{reason: :invalid_float}} = GetReward.parse_response("high")
-    end
-  end
-
-  describe "GetState" do
-    test "build_messages appends overlay to system message when provided" do
-      messages =
-        GetState.build_messages(%{
-          previous_state: nil,
-          action: nil,
-          observation: "Saw door",
-          goal: "Find the key",
-          overlay: "Be concise."
-        })
-
-      assert [%{role: :system, content: system}, _] = messages
-      assert system =~ "Be concise."
-    end
-
-    test "build_messages for first step uses only goal and observation" do
-      messages =
-        GetState.build_messages(%{
-          previous_state: nil,
-          action: nil,
-          observation: "Saw door",
-          goal: "Find the key"
-        })
-
-      assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
-      assert system =~ "initial observation"
-      assert user =~ "Saw door"
-      assert user =~ "Find the key"
-      refute user =~ "Action"
-    end
-
-    test "build_messages for subsequent step with previous state" do
-      messages =
-        GetState.build_messages(%{
-          previous_state: "Agent is in a hallway",
-          action: "Looked around",
-          observation: "Entered room",
-          goal: "Find the key"
-        })
-
-      assert [%{role: :system, content: system}, %{role: :user, content: user}] = messages
-      assert system =~ "previous environment state"
-      assert user =~ "Agent is in a hallway"
-      assert user =~ "Looked around"
-      assert user =~ "Entered room"
-      assert user =~ "Find the key"
-    end
-
-    test "parse_response returns trimmed state string" do
-      assert {:ok, "The agent is in a dark room."} =
-               GetState.parse_response("  The agent is in a dark room.  ")
-    end
-
-    test "parse_response rejects empty response" do
-      assert {:error, %PromptError{reason: :empty_response}} = GetState.parse_response("")
     end
   end
 

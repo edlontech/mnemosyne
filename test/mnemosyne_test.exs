@@ -40,7 +40,7 @@ defmodule MnemosyneTest do
       content =
         cond do
           String.contains?(system_content, "subgoal") ->
-            %{reasoning: "analysis", subgoal: "test subgoal"}
+            Mnemosyne.TestPrompts.annotations(messages)
 
           String.contains?(system_content, "factual knowledge") ->
             %{facts: [%{proposition: "some fact", concepts: ["concept1", "concept2"]}]}
@@ -78,14 +78,15 @@ defmodule MnemosyneTest do
   end
 
   defp stub_recall_success do
-    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-      {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
-    end)
-
     stub(Mnemosyne.MockLLM, :chat_structured, fn _messages, _schema, _opts ->
       {:ok,
        %LLM.Response{
-         content: %{reasoning: "analysis", information: "Summary."},
+         content: %{
+           mode: "semantic",
+           tags: ["semantic"],
+           reasoning: "analysis",
+           information: "Summary."
+         },
          model: "test",
          usage: %{}
        }}
@@ -102,18 +103,21 @@ defmodule MnemosyneTest do
   end
 
   defp stub_recall_query_capture(test_pid) do
-    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
-      {:ok, %LLM.Response{content: "semantic", model: "test", usage: %{}}}
-    end)
-
     stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
       user_content = messages |> List.last() |> Map.fetch!(:content)
-      [_, query] = Regex.run(~r/Query: (.*?)\n\nKnown Facts:/s, user_content)
-      send(test_pid, {:reasoning_query, query})
+
+      with [_, query] <- Regex.run(~r/Query: (.*?)\n\nKnown Facts:/s, user_content) do
+        send(test_pid, {:reasoning_query, query})
+      end
 
       {:ok,
        %LLM.Response{
-         content: %{reasoning: "analysis", information: "Summary."},
+         content: %{
+           mode: "semantic",
+           tags: ["semantic"],
+           reasoning: "analysis",
+           information: "Summary."
+         },
          model: "test",
          usage: %{}
        }}
@@ -209,7 +213,7 @@ defmodule MnemosyneTest do
       prompts = for {:llm_prompt, prompt} <- messages, do: prompt
       dated = "Occurred at: Thursday, 2023-04-06 19:35"
 
-      assert Enum.any?(prompts, &(&1 =~ dated and &1 =~ "Current environment state:"))
+      assert Enum.any?(prompts, &(&1 =~ dated and &1 =~ "State before the first listed step:"))
       assert Enum.any?(prompts, &(&1 =~ dated and &1 =~ "Facts learned:"))
 
       {:ok, nodes} = Mnemosyne.get_nodes(repo, node_ids)
@@ -394,11 +398,17 @@ defmodule MnemosyneTest do
       stub_recall_query_capture(test_pid)
 
       stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
-        send(test_pid, {:reasoning_prompt, messages |> List.last() |> Map.fetch!(:content)})
+        prompt = messages |> List.last() |> Map.fetch!(:content)
+        if prompt =~ "Known Facts:", do: send(test_pid, {:reasoning_prompt, prompt})
 
         {:ok,
          %LLM.Response{
-           content: %{reasoning: "analysis", information: "Summary."},
+           content: %{
+             mode: "semantic",
+             tags: ["semantic"],
+             reasoning: "analysis",
+             information: "Summary."
+           },
            model: "test",
            usage: %{}
          }}

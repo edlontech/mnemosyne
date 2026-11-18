@@ -1,6 +1,9 @@
 defmodule Mnemosyne.Notifier.Trace.Structuring do
   @moduledoc """
   Trace struct capturing structuring pipeline execution details.
+
+  `gated_steps` counts the steps whose fact extraction was skipped because a
+  decision model scored them below `Config.fact_gate_threshold`.
   """
 
   defstruct verbosity: :summary,
@@ -11,6 +14,7 @@ defmodule Mnemosyne.Notifier.Trace.Structuring do
             intent_count: 0,
             provenance_fallbacks: 0,
             invalid_source_steps: 0,
+            gated_steps: 0,
             duration_us: 0,
             semantic_nodes: nil,
             procedural_nodes: nil,
@@ -26,6 +30,7 @@ defmodule Mnemosyne.Notifier.Trace.Structuring do
           intent_count: non_neg_integer(),
           provenance_fallbacks: non_neg_integer(),
           invalid_source_steps: non_neg_integer(),
+          gated_steps: non_neg_integer(),
           duration_us: non_neg_integer(),
           semantic_nodes: [map()] | nil,
           procedural_nodes: [map()] | nil,

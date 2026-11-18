@@ -2,10 +2,17 @@ defmodule Mnemosyne.Pipeline.Episode do
   @moduledoc """
   Standardizes a complete observation-action trajectory into an episode.
 
-  For each step `t` the module derives a state `s_t = f(s_{t-1}, a_{t-1}, o_t)`
-  (a sequential LLM chain), then infers subgoal `g_t = f(s_t, o_t, a_t)` and
-  reward `r_t = f(s_t, a_t, g_t, o_{t+1})` for all steps concurrently, embeds
-  every subgoal in one batch, and segments the steps into trajectories where
+  Steps are annotated in windows: one LLM call derives the state
+  `s_t = f(s_{t-1}, a_{t-1}, o_t)` and the subgoal `g_t = f(s_t, o_t, a_t)` for
+  every step of a window, and the last state is carried into the next window.
+  A window holds up to #{8} steps and is cut earlier when its text grows large.
+
+  Rewards `r_t = f(a_t, g_t, o_{t+1})` are then scored for all steps
+  concurrently. With `Config.decision` set, one decision request per window
+  scores the rewards and each step's salience (the probability that it holds
+  information worth remembering, used to gate fact extraction); otherwise
+  each step gets its own reward prompt and no salience. Finally every subgoal
+  is embedded in one batch and the steps are segmented into trajectories where
   adjacent subgoal similarity drops below `Config.segmentation_threshold`.
   """
   require Logger
@@ -13,11 +20,11 @@ defmodule Mnemosyne.Pipeline.Episode do
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
   alias Mnemosyne.Errors.Invalid.EpisodeError
+  alias Mnemosyne.Errors.Invalid.PromptError
   alias Mnemosyne.Graph.Similarity
   alias Mnemosyne.ModelCall
+  alias Mnemosyne.Pipeline.Prompts.AnnotateSteps
   alias Mnemosyne.Pipeline.Prompts.GetReward
-  alias Mnemosyne.Pipeline.Prompts.GetState
-  alias Mnemosyne.Pipeline.Prompts.GetSubgoal
   alias Mnemosyne.Telemetry
   alias Mnemosyne.Trajectory
 
@@ -25,6 +32,8 @@ defmodule Mnemosyne.Pipeline.Episode do
   @step_timeout :timer.seconds(60)
   @final_observation "[Episode ended - no further observation]"
   @fallback_reward 0.5
+  @window_steps 8
+  @window_chars 24_000
 
   @enforce_keys [:id, :goal]
   defstruct [:id, :goal, :occurred_at, steps: [], trajectories: [], closed: false]
@@ -46,6 +55,7 @@ defmodule Mnemosyne.Pipeline.Episode do
           subgoal: String.t(),
           state: String.t() | nil,
           reward: float() | nil,
+          salience: float() | nil,
           embedding: [float()] | nil,
           trajectory_id: String.t()
         }
@@ -96,8 +106,8 @@ defmodule Mnemosyne.Pipeline.Episode do
           model_context: Keyword.get(opts, :model_context)
         }
 
-        with {:ok, states} <- derive_states(raw_steps, ctx),
-             {:ok, steps} <- annotate_steps(raw_steps, states, ctx),
+        with {:ok, steps} <- annotate_steps(raw_steps, ctx),
+             steps = score_steps(steps, ctx),
              {:ok, steps} <- embed_subgoals(steps, ctx),
              {:ok, closed} <- close(%{episode | steps: segment(steps, threshold(ctx.config))}) do
           {{:ok, closed},
@@ -135,60 +145,182 @@ defmodule Mnemosyne.Pipeline.Episode do
     }
   end
 
-  defp derive_states(raw_steps, ctx) do
+  defp annotate_steps(raw_steps, ctx) do
     raw_steps
-    |> Enum.zip([nil | raw_steps])
-    |> Enum.reduce_while({:ok, []}, fn {step, previous}, {:ok, states} ->
-      previous_action = if previous, do: previous.action
-
-      case derive_state(ctx, List.first(states), previous_action, step.observation) do
-        {:ok, state} -> {:cont, {:ok, [state | states]}}
+    |> Enum.with_index(fn raw, index ->
+      %{
+        index: index,
+        observation: raw.observation,
+        action: raw.action,
+        subgoal: nil,
+        state: nil,
+        reward: nil,
+        salience: nil,
+        embedding: nil,
+        trajectory_id: nil
+      }
+    end)
+    |> windows()
+    |> Enum.reduce_while({:ok, []}, fn window, {:ok, annotated} ->
+      case annotate_window(ctx, window, List.last(annotated)) do
+        {:ok, steps} -> {:cont, {:ok, annotated ++ steps}}
         error -> {:halt, error}
       end
     end)
-    |> case do
-      {:ok, states} -> {:ok, Enum.reverse(states)}
-      error -> error
-    end
   end
 
-  defp annotate_steps(raw_steps, states, ctx) do
-    next_observations =
-      raw_steps |> Enum.drop(1) |> Enum.map(& &1.observation) |> Kernel.++([@final_observation])
+  # Cuts steps into windows of at most @window_steps steps and about
+  # @window_chars characters, so one oversized step cannot crowd a request.
+  defp windows(steps) do
+    Enum.chunk_while(
+      steps,
+      {[], 0},
+      fn step, {window, size} ->
+        step_size = String.length(step.observation) + String.length(step.action)
 
-    [raw_steps, states, next_observations]
-    |> Enum.zip()
-    |> Enum.with_index()
-    |> Task.async_stream(
-      fn {{raw, state, next_observation}, index} ->
-        annotate_step(ctx, index, raw, state, next_observation)
+        if window != [] and
+             (length(window) == @window_steps or size + step_size > @window_chars),
+           do: {:cont, Enum.reverse(window), {[step], step_size}},
+           else: {:cont, {[step | window], size + step_size}}
       end,
-      timeout: @step_timeout
+      fn
+        {[], _size} -> {:cont, nil}
+        {window, _size} -> {:cont, Enum.reverse(window), nil}
+      end
     )
-    |> Enum.reduce_while({:ok, []}, fn
-      {:ok, {:ok, step}}, {:ok, steps} -> {:cont, {:ok, [step | steps]}}
-      {:ok, error}, _acc -> {:halt, error}
-    end)
-    |> case do
-      {:ok, steps} -> {:ok, Enum.reverse(steps)}
-      error -> error
+  end
+
+  # A model that skips a step gets the window again in two halves, down to
+  # single steps, before the ingestion fails.
+  defp annotate_window(ctx, window, previous) do
+    case request_annotations(ctx, window, previous) do
+      {:ok, annotations} ->
+        {:ok, Enum.zip_with(window, annotations, &Map.merge/2)}
+
+      {:error, %PromptError{reason: :incomplete_steps}} when length(window) > 1 ->
+        {first, second} = Enum.split(window, div(length(window), 2))
+
+        with {:ok, first} <- annotate_window(ctx, first, previous),
+             {:ok, second} <- annotate_window(ctx, second, List.last(first)) do
+          {:ok, first ++ second}
+        end
+
+      error ->
+        error
     end
   end
 
-  defp annotate_step(ctx, index, raw, state, next_observation) do
-    with {:ok, subgoal} <- infer_subgoal(ctx, raw.observation, raw.action, state) do
-      {:ok,
-       %{
-         index: index,
-         observation: raw.observation,
-         action: raw.action,
-         subgoal: subgoal,
-         state: state,
-         reward: evaluate_reward(ctx, state, raw.action, subgoal, next_observation),
-         embedding: nil,
-         trajectory_id: nil
-       }}
+  defp request_annotations(ctx, window, previous) do
+    messages =
+      AnnotateSteps.build_messages(%{
+        steps:
+          Enum.map(
+            window,
+            &%{number: &1.index + 1, observation: &1.observation, action: &1.action}
+          ),
+        goal: ctx.goal,
+        occurred_at: ctx.occurred_at,
+        previous: previous,
+        overlay: Config.resolve_overlay(ctx.config, :annotate_steps)
+      })
+
+    with {:ok, %{content: content}} <-
+           ModelCall.chat_structured(
+             ctx.model_context,
+             ctx.llm,
+             :annotate_steps,
+             messages,
+             AnnotateSteps.schema(),
+             Config.llm_opts(ctx.config, :annotate_steps, ctx.llm_opts)
+           ) do
+      AnnotateSteps.parse_response(content, Enum.map(window, &(&1.index + 1)))
     end
+  end
+
+  defp score_steps(steps, ctx) do
+    observations = Map.new(steps, &{&1.index, &1.observation})
+    next_observation = &Map.get(observations, &1.index + 1, @final_observation)
+
+    case Config.decision_opts(ctx.config) do
+      nil ->
+        steps
+        |> Task.async_stream(
+          &%{&1 | reward: evaluate_reward(ctx, &1, next_observation.(&1))},
+          timeout: @step_timeout
+        )
+        |> Enum.map(fn {:ok, step} -> step end)
+
+      opts ->
+        steps
+        |> windows()
+        |> Task.async_stream(
+          &judge_window(ctx, &1, next_observation.(List.last(&1)), opts),
+          timeout: @step_timeout
+        )
+        |> Enum.flat_map(fn {:ok, window} -> window end)
+    end
+  end
+
+  # One decision request scores, for every step of the window, whether its
+  # action served its subgoal and whether it is worth remembering.
+  defp judge_window(ctx, steps, next_observation, opts) do
+    last = List.last(steps)
+    overlay = Config.resolve_overlay(ctx.config, :get_reward)
+
+    state = %{
+      goal: ctx.goal,
+      steps:
+        Enum.map(steps, fn step ->
+          %{
+            step: step.index + 1,
+            observation: step.observation,
+            action: step.action,
+            subgoal: step.subgoal
+          }
+        end),
+      next_observation: next_observation
+    }
+
+    questions =
+      Enum.reduce(steps, %{}, fn step, acc ->
+        number = step.index + 1
+
+        outcome =
+          if step == last, do: "next_observation", else: "the observation in step #{number + 1}"
+
+        reward =
+          "Did the action in step #{number} serve the subgoal of that step, " <>
+            "judging by #{outcome}?" <> if overlay, do: "\n\n#{overlay}", else: ""
+
+        memorable =
+          "Does step #{number} contain facts, decisions, preferences or outcomes " <>
+            "worth remembering after this task ends?"
+
+        acc |> Map.put("reward_#{number}", reward) |> Map.put("memorable_#{number}", memorable)
+      end)
+
+    probabilities =
+      case ModelCall.evaluate(ctx.model_context, ctx.llm, :get_reward, state, questions, opts) do
+        {:ok, %{content: probabilities}} ->
+          probabilities
+
+        {:error, reason} ->
+          Logger.warning(
+            "decision scoring failed, using fallback reward #{@fallback_reward}: #{inspect(reason)}"
+          )
+
+          %{}
+      end
+
+    Enum.map(steps, fn step ->
+      number = step.index + 1
+
+      %{
+        step
+        | reward: Map.get(probabilities, "reward_#{number}", @fallback_reward) / 1,
+          salience: probabilities["memorable_#{number}"]
+      }
+    end)
   end
 
   defp embed_subgoals(steps, ctx) do
@@ -237,58 +369,12 @@ defmodule Mnemosyne.Pipeline.Episode do
     end
   end
 
-  defp derive_state(ctx, previous_state, previous_action, observation) do
-    messages =
-      GetState.build_messages(%{
-        previous_state: previous_state,
-        action: previous_action,
-        observation: observation,
-        goal: ctx.goal,
-        occurred_at: ctx.occurred_at,
-        overlay: Config.resolve_overlay(ctx.config, :get_state)
-      })
-
-    with {:ok, %{content: content}} <-
-           ModelCall.chat(
-             ctx.model_context,
-             ctx.llm,
-             :get_state,
-             messages,
-             Config.llm_opts(ctx.config, :get_state, ctx.llm_opts)
-           ) do
-      GetState.parse_response(content)
-    end
-  end
-
-  defp infer_subgoal(ctx, observation, action, state) do
-    messages =
-      GetSubgoal.build_messages(%{
-        observation: observation,
-        action: action,
-        goal: ctx.goal,
-        state: state,
-        overlay: Config.resolve_overlay(ctx.config, :get_subgoal)
-      })
-
-    with {:ok, %{content: content}} <-
-           ModelCall.chat_structured(
-             ctx.model_context,
-             ctx.llm,
-             :get_subgoal,
-             messages,
-             GetSubgoal.schema(),
-             Config.llm_opts(ctx.config, :get_subgoal, ctx.llm_opts)
-           ) do
-      GetSubgoal.parse_response(content)
-    end
-  end
-
-  defp evaluate_reward(ctx, state, action, subgoal, next_observation) do
+  defp evaluate_reward(ctx, step, next_observation) do
     messages =
       GetReward.build_messages(%{
-        state: state,
-        action: action,
-        subgoal: subgoal,
+        state: step.state,
+        action: step.action,
+        subgoal: step.subgoal,
         next_observation: next_observation,
         overlay: Config.resolve_overlay(ctx.config, :get_reward)
       })

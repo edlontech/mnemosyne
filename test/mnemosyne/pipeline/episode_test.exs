@@ -5,8 +5,10 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
   alias Mnemosyne.Config
   alias Mnemosyne.Embedding
   alias Mnemosyne.Errors.Invalid.EpisodeError
+  alias Mnemosyne.Errors.Invalid.PromptError
   alias Mnemosyne.LLM
   alias Mnemosyne.Pipeline.Episode
+  alias Mnemosyne.TestPrompts
 
   @default_opts [llm: Mnemosyne.MockLLM, embedding: Mnemosyne.MockEmbedding]
   @test_config %Config{
@@ -21,36 +23,27 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
   ]
 
   defp user_content(messages), do: Enum.find(messages, &(&1.role == :user)).content
-  defp system_content(messages), do: Enum.find(messages, &(&1.role == :system)).content
 
-  # State responses echo the observation so step order can be asserted; reward
-  # responses are looked up by the step's action.
+  # Annotations echo the observation as state so step order can be asserted;
+  # reward responses are looked up by the step's action.
   defp stub_llm(opts \\ []) do
     rewards = Keyword.get(opts, :rewards, %{})
-    subgoals = Keyword.get(opts, :subgoals, %{})
+    subgoals = Keyword.get(opts, :subgoals, "default subgoal")
 
     Mnemosyne.MockLLM
     |> stub(:chat, fn messages, _opts ->
-      user = user_content(messages)
-
-      content =
-        if system_content(messages) =~ "evaluating agent performance",
-          do: by_action(rewards, user, "0.5"),
-          else: "state after: " <> (Regex.run(~r/Observation: (.*)/, user) |> Enum.at(1))
-
-      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      reward = reward_for(rewards, user_content(messages))
+      {:ok, %LLM.Response{content: reward, model: "mock:test", usage: %{}}}
     end)
     |> stub(:chat_structured, fn messages, _schema, _opts ->
-      subgoal = by_action(subgoals, user_content(messages), "default subgoal")
-
-      {:ok,
-       %LLM.Response{content: %{reasoning: "r", subgoal: subgoal}, model: "mock:test", usage: %{}}}
+      annotations = TestPrompts.annotations(messages, subgoal: subgoals)
+      {:ok, %LLM.Response{content: annotations, model: "mock:test", usage: %{}}}
     end)
   end
 
-  defp by_action(responses, user, default) do
-    Enum.find_value(responses, default, fn {action, response} ->
-      if user =~ action, do: response
+  defp reward_for(rewards, user) do
+    Enum.find_value(rewards, "0.5", fn {action, reward} ->
+      if user =~ "Action (at time t): #{action}", do: reward
     end)
   end
 
@@ -103,7 +96,8 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
                action: "did something",
                subgoal: "Navigate to config",
                state: "state after: saw something",
-               reward: 0.8
+               reward: 0.8,
+               salience: nil
              } = step_0
 
       assert %{
@@ -120,35 +114,111 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       assert [%{steps: [_, _]}] = episode.trajectories
     end
 
-    test "chains state derivation and scores rewards against the next observation" do
+    test "annotates a window of steps per call and carries state into the next window" do
+      stub_llm()
+      stub_embedding()
+      test_pid = self()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn messages, _schema, _opts ->
+        send(test_pid, {:annotate, user_content(messages)})
+        annotations = TestPrompts.annotations(messages)
+        {:ok, %LLM.Response{content: annotations, model: "mock:test", usage: %{}}}
+      end)
+
+      raw_steps = for n <- 1..9, do: %{observation: "obs #{n}", action: "act #{n}"}
+
+      assert {:ok, episode} =
+               Episode.standardize(Episode.new("Test goal"), raw_steps, @default_opts)
+
+      assert Enum.map(episode.steps, & &1.state) == for(n <- 1..9, do: "state after: obs #{n}")
+
+      assert_received {:annotate, first}
+      assert first =~ "[initial state - no prior context]"
+      assert first =~ "Step 1:" and first =~ "Step 8:"
+      refute first =~ "Step 9:"
+
+      assert_received {:annotate, second}
+      assert second =~ "State before the first listed step: state after: obs 8"
+      assert second =~ "Action taken from that state: act 8"
+      assert second =~ "Step 9:"
+      refute_received {:annotate, _}
+    end
+
+    test "starts a new window before the size budget is exceeded" do
+      stub_llm()
+      stub_embedding()
+      test_pid = self()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn messages, _schema, _opts ->
+        annotations = TestPrompts.annotations(messages)
+        send(test_pid, {:annotated, Enum.map(annotations.steps, & &1.step)})
+        {:ok, %LLM.Response{content: annotations, model: "mock:test", usage: %{}}}
+      end)
+
+      large = String.duplicate("x", 20_000)
+      raw_steps = for _ <- 1..3, do: %{observation: large, action: "act"}
+
+      assert {:ok, _episode} =
+               Episode.standardize(Episode.new("Test goal"), raw_steps, @default_opts)
+
+      for numbers <- [[1], [2], [3]], do: assert_received({:annotated, ^numbers})
+    end
+
+    test "splits the window and retries when the model skips a step" do
+      stub_llm()
+      stub_embedding()
+      test_pid = self()
+
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn messages, _schema, _opts ->
+        annotations = TestPrompts.annotations(messages)
+        send(test_pid, {:annotated, length(annotations.steps)})
+
+        content =
+          if length(annotations.steps) > 1,
+            do: %{steps: Enum.take(annotations.steps, 1)},
+            else: annotations
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      assert {:ok, episode} =
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
+
+      assert Enum.map(episode.steps, & &1.state) == [
+               "state after: saw something",
+               "state after: result appeared"
+             ]
+
+      for count <- [2, 1, 1], do: assert_received({:annotated, ^count})
+    end
+
+    test "fails when a single step cannot be annotated" do
+      Mnemosyne.MockLLM
+      |> stub(:chat_structured, fn _messages, _schema, _opts ->
+        {:ok, %LLM.Response{content: %{steps: []}, model: "mock:test", usage: %{}}}
+      end)
+
+      assert {:error, %PromptError{prompt: :annotate_steps, reason: :incomplete_steps}} =
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
+    end
+
+    test "scores rewards against the next observation" do
       stub_llm()
       stub_embedding()
       test_pid = self()
 
       Mnemosyne.MockLLM
       |> stub(:chat, fn messages, _opts ->
-        send(test_pid, {:chat, system_content(messages), user_content(messages)})
+        send(test_pid, {:reward, user_content(messages)})
         {:ok, %LLM.Response{content: "0.5", model: "mock:test", usage: %{}}}
       end)
 
       assert {:ok, _} = Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
 
-      assert_received {:chat, first_state_system, first_state_user}
-      assert first_state_system =~ "initial observation"
-      assert first_state_user =~ "saw something"
-      refute first_state_user =~ "did something"
-
-      assert_received {:chat, _, second_state_user}
-      assert second_state_user =~ "Previous state: 0.5"
-      assert second_state_user =~ "Action: did something"
-      assert second_state_user =~ "Observation: result appeared"
-
-      rewards =
-        for _ <- 1..2 do
-          assert_received {:chat, system, user}
-          assert system =~ "evaluating agent performance"
-          user
-        end
+      rewards = for _ <- 1..2, do: assert_received({:reward, user}) && user
 
       assert Enum.any?(rewards, &(&1 =~ "Observation (at time t + 1): result appeared"))
       assert Enum.any?(rewards, &(&1 =~ "[Episode ended - no further observation]"))
@@ -191,11 +261,7 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       stub_embedding()
 
       Mnemosyne.MockLLM
-      |> stub(:chat, fn messages, _opts ->
-        if system_content(messages) =~ "evaluating agent performance",
-          do: {:error, :llm_failure},
-          else: {:ok, %LLM.Response{content: "state", model: "mock:test", usage: %{}}}
-      end)
+      |> stub(:chat, fn _messages, _opts -> {:error, :llm_failure} end)
 
       assert {:ok, episode} =
                Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
@@ -210,41 +276,30 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
                Episode.standardize(closed, @raw_steps, @default_opts)
     end
 
-    test "accepts config option and resolves per-step opts" do
+    test "resolves per-step model overrides from config" do
       stub_embedding()
+      test_pid = self()
 
       Mnemosyne.MockLLM
       |> stub(:chat, fn _messages, opts ->
-        assert Keyword.get(opts, :model) == "test:model"
-        {:ok, %LLM.Response{content: "derived state", model: "mock:test", usage: %{}}}
+        send(test_pid, {:reward_model, Keyword.get(opts, :model)})
+        {:ok, %LLM.Response{content: "0.5", model: "mock:test", usage: %{}}}
       end)
-      |> stub(:chat_structured, fn _messages, _schema, opts ->
-        assert Keyword.get(opts, :model) == "test:model"
-
-        {:ok,
-         %LLM.Response{
-           content: %{reasoning: "r", subgoal: "subgoal"},
-           model: "mock:test",
-           usage: %{}
-         }}
+      |> stub(:chat_structured, fn messages, _schema, opts ->
+        send(test_pid, {:annotate_model, Keyword.get(opts, :model)})
+        annotations = TestPrompts.annotations(messages)
+        {:ok, %LLM.Response{content: annotations, model: "mock:test", usage: %{}}}
       end)
 
-      opts = @default_opts ++ [config: @test_config]
+      config = %{@test_config | overrides: %{annotate_steps: %{model: "test:fast"}}}
+      opts = @default_opts ++ [config: config]
 
       assert {:ok, _episode} = Episode.standardize(Episode.new("Test goal"), @raw_steps, opts)
+      assert_received {:annotate_model, "test:fast"}
+      assert_received {:reward_model, "test:model"}
     end
 
-    test "propagates LLM errors from state derivation" do
-      Mnemosyne.MockLLM
-      |> stub(:chat, fn _messages, _opts -> {:error, :llm_failure} end)
-
-      assert {:error, :llm_failure} =
-               Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
-    end
-
-    test "propagates LLM errors from subgoal inference" do
-      stub_llm()
-
+    test "propagates LLM errors from step annotation" do
       Mnemosyne.MockLLM
       |> stub(:chat_structured, fn _messages, _schema, _opts -> {:error, :llm_failure} end)
 
@@ -260,6 +315,54 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
       assert {:error, :embed_failure} =
                Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
+    end
+  end
+
+  describe "standardize/3 with a decision model" do
+    @decision_opts @default_opts ++
+                     [config: %{@test_config | decision: %{model: "test:decision", opts: %{}}}]
+
+    test "scores reward and salience for all steps in one request" do
+      stub_llm()
+      stub_embedding()
+      reject(&Mnemosyne.MockLLM.chat/2)
+
+      expect(Mnemosyne.MockLLM, :evaluate, fn state, questions, opts ->
+        assert opts[:model] == "test:decision"
+        assert state.goal == "Test goal"
+        assert state.next_observation == "[Episode ended - no further observation]"
+
+        assert [
+                 %{step: 1, observation: "saw something", action: "did something"},
+                 %{step: 2, observation: "result appeared", action: "clicked it"}
+               ] = state.steps
+
+        assert Map.keys(questions) == ["memorable_1", "memorable_2", "reward_1", "reward_2"]
+        assert questions["reward_1"] =~ "step 2"
+        assert questions["reward_2"] =~ "next_observation"
+
+        probabilities = %{"reward_1" => 0.9, "memorable_1" => 0.05, "memorable_2" => 0.7}
+        {:ok, %LLM.Response{content: probabilities, model: "mock:decision", usage: %{}}}
+      end)
+
+      assert {:ok, episode} =
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @decision_opts)
+
+      assert [%{reward: 0.9, salience: 0.05}, %{reward: 0.5, salience: 0.7}] = episode.steps
+    end
+
+    test "falls back to neutral rewards and no salience when the request fails" do
+      stub_llm()
+      stub_embedding()
+
+      expect(Mnemosyne.MockLLM, :evaluate, fn _state, _questions, _opts ->
+        {:error, :unavailable}
+      end)
+
+      assert {:ok, episode} =
+               Episode.standardize(Episode.new("Test goal"), @raw_steps, @decision_opts)
+
+      assert [%{reward: 0.5, salience: nil}, %{reward: 0.5, salience: nil}] = episode.steps
     end
   end
 
