@@ -32,17 +32,19 @@ defmodule LongMemEval do
     embedding: :string,
     judge: :string,
     concurrency: :integer,
-    segmentation_threshold: :float
+    segmentation_threshold: :float,
+    reasoning_effort: :string
   ]
 
   @defaults [
     variant: "s",
     limit: 100,
-    llm: "openrouter:google/gemini-3-flash-preview",
+    llm: "openrouter:deepseek/deepseek-v4.1-flash",
     embedding: "openai:text-embedding-3-small",
-    judge: "openai:gpt-4o-2024-08-06",
+    judge: "openai:gpt-6-luna",
     concurrency: 2,
-    segmentation_threshold: 0.3
+    segmentation_threshold: 0.3,
+    reasoning_effort: "none"
   ]
 
   @ks [1, 3, 5, 10]
@@ -86,7 +88,13 @@ defmodule LongMemEval do
 
     usage = start(opts)
     {:ok, tasks} = Task.Supervisor.start_link()
-    ctx = %{run_dir: run_dir, llm: opts[:llm], judge: opts[:judge]}
+
+    ctx = %{
+      run_dir: run_dir,
+      llm: opts[:llm],
+      judge: opts[:judge],
+      effort: String.to_atom(opts[:reasoning_effort])
+    }
 
     stream =
       Task.Supervisor.async_stream_nolink(tasks, pending, &run_question(&1, ctx),
@@ -147,7 +155,10 @@ defmodule LongMemEval do
   defp start(opts) do
     {:ok, config} =
       Zoi.parse(Mnemosyne.Config.t(), %{
-        llm: %{model: opts[:llm]},
+        llm: %{
+          model: opts[:llm],
+          opts: %{reasoning_effort: String.to_atom(opts[:reasoning_effort])}
+        },
         embedding: %{model: opts[:embedding]},
         segmentation_threshold: opts[:segmentation_threshold]
       })
@@ -207,9 +218,15 @@ defmodule LongMemEval do
                )
              end),
            memory = memory_text(recall.reasoned),
-           {:ok, hypothesis} <- chat(ctx.llm, reader_prompt(memory, question), []),
-           # Upstream asks for 10 tokens; OpenAI now rejects anything below 16.
-           {:ok, verdict} <- chat(ctx.judge, judge_prompt(question, hypothesis), max_tokens: 16) do
+           {:ok, hypothesis} <-
+             chat(ctx.llm, reader_prompt(memory, question), reasoning_effort: ctx.effort),
+           # Upstream caps the verdict at 10 tokens. A reasoning judge spends output tokens
+           # on thinking first, so a tight cap can leave no room for the verdict.
+           {:ok, verdict} <-
+             chat(ctx.judge, judge_prompt(question, hypothesis),
+               reasoning_effort: :low,
+               max_tokens: 512
+             ) do
         abstention = String.ends_with?(repo, "_abs")
         gold = question["answer_session_ids"]
 

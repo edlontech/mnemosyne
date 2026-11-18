@@ -23,10 +23,11 @@ The dataset is downloaded to `benchmark/data/` on first use (15 MB for `oracle`,
 | `--variant` | `s` | `s` (about 115k tokens of history per question) or `oracle` (evidence sessions only) |
 | `--limit` | `100` | Number of questions, taken in a fixed order (hash of `question_id`) |
 | `--run` | the variant | Output directory name under `benchmark/runs/` |
-| `--llm` | `openrouter:google/gemini-3-flash-preview` | Model for ingestion, recall and the reader |
+| `--llm` | `openrouter:deepseek/deepseek-v4.1-flash` | Model for ingestion, recall and the reader |
 | `--embedding` | `openai:text-embedding-3-small` | Embedding model |
-| `--judge` | `openai:gpt-4o-2024-08-06` | Model that grades answers (the version upstream pins) |
+| `--judge` | `openai:gpt-6-luna` | Model that grades answers, at low reasoning effort. Upstream pins `gpt-4o-2024-08-06`, so accuracy is not directly comparable to published numbers |
 | `--concurrency` | `2` | Questions processed in parallel |
+| `--reasoning-effort` | `none` | Reasoning effort for `--llm` (`none`, `minimal`, `low`, `medium`, `high`). With the default model, `low` still spent about 1,000 output tokens per call and hit the 60-second task timeout |
 | `--segmentation-threshold` | `0.3` | `Config.segmentation_threshold`; 0.3 fits `text-embedding-3-small`, where consecutive same-session subgoals score a median of 0.49 and random pairs 0.19 |
 
 Model strings are Sycophant identifiers. Keep one `--run` per configuration or branch you want to compare, since a run directory is never reset.
@@ -68,7 +69,7 @@ Scaled by history size, plan for about $125 and 14 GB of disk per 100 questions,
 
 ### Differences from upstream
 
-- The judge gets `max_tokens: 16` instead of 10, because OpenAI rejects values below 16.
+- The judge gets `max_tokens: 512` instead of 10. A reasoning model spends output tokens on thinking first, so a tight cap can cut off the verdict.
 - The reader prompt is upstream's "facts extracted from history chats" variant, fed with Mnemosyne's reasoned summaries instead of raw sessions.
 - Retrieval is scored at session level only. Turn-level `has_answer` labels are not used.
 
