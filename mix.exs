@@ -61,7 +61,6 @@ defmodule Mnemosyne.MixProject do
       {:mix_audit, ">= 0.0.0", only: [:dev, :test], runtime: false},
       {:recode, "~> 0.8", only: [:dev], runtime: false},
       {:req_llm, "~> 1.22", optional: true},
-      {:scholar, "~> 0.5"},
       {:splode, "~> 0.3"},
       {:sycophant, "~> 0.1", optional: true},
       {:telemetry, "~> 1.3"},
