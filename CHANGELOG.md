@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.8.0...mnemosyne-v0.9.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* Batched step annotation, merged recall planning, optional reasoning and decision model support
+
+### Features
+
+* Added recall reference time and trajectory event time ([3211064](https://github.com/edlontech/mnemosyne/commit/3211064d1e6e43dee567959567a903eb3fe9343f))
+* Batched step annotation, merged recall planning, optional reasoning and decision model support ([1809cdb](https://github.com/edlontech/mnemosyne/commit/1809cdb1423147fd0868f15720dfef1887affdfd))
+* Extract facts per step and made the segmentation threshold configurable ([eb53897](https://github.com/edlontech/mnemosyne/commit/eb53897c56d82e3f72d94d84b0ddb0a4d64a78cd))
+
+
+### Bug Fixes
+
+* Aligned reasoning and state prompts with PlugMem ([e53004a](https://github.com/edlontech/mnemosyne/commit/e53004af322aeeb9d1969ffda238d7a35b22659d))
+* Replaced per-pair Nx tensors in cosine similarity with plain arithmetic ([65a0d6d](https://github.com/edlontech/mnemosyne/commit/65a0d6d8556238beb8c6f84ee5eb8476b35fdf47))
+
 ## [0.8.0](https://github.com/edlontech/mnemosyne/compare/mnemosyne-v0.7.0...mnemosyne-v0.8.0) (2026-11-13)
 
 
