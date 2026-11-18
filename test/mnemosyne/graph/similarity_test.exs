@@ -19,6 +19,16 @@ defmodule Mnemosyne.Graph.SimilarityTest do
     test "empty vectors return 0.0" do
       assert Similarity.cosine_similarity([], []) == 0.0
     end
+
+    test "a zero vector returns 0.0" do
+      assert Similarity.cosine_similarity([0.0, 0.0], [1.0, 2.0]) == 0.0
+    end
+
+    test "vectors of different lengths raise" do
+      assert_raise FunctionClauseError, fn ->
+        Similarity.cosine_similarity([1.0, 2.0, 3.0], [1.0, 2.0])
+      end
+    end
   end
 
   describe "top_k/3" do
