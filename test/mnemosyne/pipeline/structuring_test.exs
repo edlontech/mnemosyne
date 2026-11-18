@@ -341,7 +341,57 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       assert [_ | _] = cs.links
     end
 
-    test "links facts to their source steps and creates per-step sibling links" do
+    test "extracts facts from each step alone and procedures from the whole segment" do
+      test_pid = self()
+      episode = build_closed_episode_with_rewards([0.8, 0.9])
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn [%{content: system}, %{content: user}],
+                                                   _schema,
+                                                   _opts ->
+        content =
+          cond do
+            system =~ "factual knowledge" ->
+              send(test_pid, {:fact_prompt, user})
+              [step] = Regex.run(~r/obs_\d/, user)
+              %{facts: [%{proposition: "Fact from #{step}", concepts: [step], source_steps: [1]}]}
+
+            system =~ "actionable instructions" ->
+              send(test_pid, {:procedure_prompt, user})
+              %{instructions: []}
+          end
+
+        {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
+      end)
+
+      stub_default_embedding()
+
+      {:ok, cs} = Structuring.extract(episode, @default_opts)
+
+      {:messages, messages} = Process.info(self(), :messages)
+      fact_prompts = for {:fact_prompt, prompt} <- messages, do: prompt
+      procedure_prompts = for {:procedure_prompt, prompt} <- messages, do: prompt
+
+      assert length(fact_prompts) == 2
+      assert Enum.any?(fact_prompts, &(&1 =~ "obs_0" and not (&1 =~ "obs_1")))
+      assert Enum.any?(fact_prompts, &(&1 =~ "obs_1" and not (&1 =~ "obs_0")))
+      assert [procedure_prompt] = procedure_prompts
+      assert procedure_prompt =~ "obs_0" and procedure_prompt =~ "obs_1"
+
+      observation_by_id =
+        for %Mnemosyne.Graph.Node.Episodic{} = node <- cs.additions,
+            into: %{},
+            do: {node.id, node.observation}
+
+      for %Mnemosyne.Graph.Node.Semantic{} = fact <- cs.additions do
+        sources =
+          for {from, to, :provenance} <- cs.links, from == fact.id, do: observation_by_id[to]
+
+        assert ["obs_" <> _ = observation] = sources
+        assert fact.proposition == "Fact from #{observation}"
+      end
+    end
+
+    test "links facts to the step they came from and creates per-step sibling links" do
       episode = build_closed_episode()
 
       Mnemosyne.MockLLM
@@ -354,13 +404,16 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         content =
           cond do
             system_content =~ "factual knowledge" ->
-              %{
-                facts: [
-                  %{proposition: "Fact one", concepts: ["c1"], source_steps: [1]},
-                  %{proposition: "Fact two", concepts: ["c2"], source_steps: [2]},
-                  %{proposition: "Fact three", concepts: ["c3"], source_steps: [1]}
-                ]
-              }
+              if List.last(messages).content =~ "Slow query found" do
+                %{
+                  facts: [
+                    %{proposition: "Fact one", concepts: ["c1"], source_steps: [1]},
+                    %{proposition: "Fact three", concepts: ["c3"], source_steps: [1]}
+                  ]
+                }
+              else
+                %{facts: [%{proposition: "Fact two", concepts: ["c2"], source_steps: [1]}]}
+              end
 
             system_content =~ "actionable instructions" ->
               %{
@@ -423,7 +476,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       refute cross_step_pair in sibling_pairs
     end
 
-    test "facts without source steps fall back to whole-trajectory provenance" do
+    test "facts without source steps link to the step they came from" do
       episode = build_closed_episode()
       stub_extraction_llm()
 
@@ -440,15 +493,15 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
         |> Enum.filter(&match?(%Mnemosyne.Graph.Node.Semantic{}, &1))
         |> Enum.map(& &1.id)
 
-      Enum.each(semantic_ids, fn sem_id ->
-        linked =
-          cs.links
-          |> Enum.filter(fn {from, _to, type} -> from == sem_id and type == :provenance end)
-          |> Enum.map(fn {_from, to, _type} -> to end)
-          |> Enum.sort()
+      linked =
+        Enum.map(semantic_ids, fn sem_id ->
+          assert [episodic_id] =
+                   for({from, to, :provenance} <- cs.links, from == sem_id, do: to)
 
-        assert linked == episodic_ids
-      end)
+          episodic_id
+        end)
+
+      assert linked |> Enum.uniq() |> Enum.sort() == episodic_ids
     end
 
     test "creates tag nodes as concept indices linked to semantic nodes" do
@@ -662,7 +715,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       end
     end
 
-    test "adds pairwise sibling links between semantic nodes from same trajectory" do
+    test "adds pairwise sibling links between semantic nodes from the same step" do
       episode = build_closed_episode()
       stub_extraction_llm()
 
@@ -678,11 +731,11 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
           MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
         end)
 
-      # 2 semantic nodes => 2 choose 2 = 1 pair
-      assert length(sibling_links) == 1
+      # 2 semantic nodes per step => 1 pair per step, over 2 steps
+      assert length(sibling_links) == 2
     end
 
-    test "three semantic nodes produce three sibling links" do
+    test "three semantic nodes from one step produce three sibling links" do
       episode = build_closed_episode()
 
       Mnemosyne.MockLLM
@@ -739,8 +792,8 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
           MapSet.member?(semantic_ids, from) and MapSet.member?(semantic_ids, to)
         end)
 
-      # 3 semantic nodes => 3 choose 2 = 3 pairs
-      assert length(sibling_links) == 3
+      # 3 semantic nodes per step => 3 choose 2 = 3 pairs per step, over 2 steps
+      assert length(sibling_links) == 6
     end
 
     test "single semantic node produces no sibling links" do
@@ -848,9 +901,8 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
           MapSet.member?(semantic_ids, from) and MapSet.member?(episodic_ids, to)
         end)
 
-      # each semantic node links to each episodic node
-      expected_count = MapSet.size(semantic_ids) * MapSet.size(episodic_ids)
-      assert length(provenance_links) == expected_count
+      # each semantic node links to the one episodic node it was extracted from
+      assert length(provenance_links) == MapSet.size(semantic_ids)
     end
 
     test "procedural nodes have provenance links to episodic nodes" do
@@ -1036,10 +1088,9 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       assert {:ok, %Changeset{} = cs, trace} =
                Structuring.extract_trajectory(trajectory, episode.goal, @default_opts)
 
-      assert trace.provenance_fallbacks == 2
-      assert trace.invalid_source_steps == 2
-
-      episodic_count = Enum.count(cs.additions, &match?(%Mnemosyne.Graph.Node.Episodic{}, &1))
+      # facts are extracted once per step, so both steps report 2 fallbacks and 2 invalid steps
+      assert trace.provenance_fallbacks == 4
+      assert trace.invalid_source_steps == 4
 
       sem_id =
         cs.additions
@@ -1049,7 +1100,7 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
       provenance_count =
         Enum.count(cs.links, fn {from, _to, type} -> from == sem_id and type == :provenance end)
 
-      assert provenance_count == episodic_count
+      assert provenance_count == 1
     end
 
     test "propagates LLM errors" do

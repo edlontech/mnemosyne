@@ -34,7 +34,9 @@ trajectory = %Mnemosyne.Trajectory{
 {:ok, receipt} = Mnemosyne.ingest("my-repo", trajectory)
 ```
 
-Ingestion constructs an internal **episode** from the complete input. As each step is annotated, embedding similarity detects coherent **extraction trajectories** within that episode. Knowledge extraction runs per coherent segment so unrelated topics are not combined. Source provenance uses the caller's source ID.
+Ingestion constructs an internal **episode** from the complete input. As each step is annotated, embedding similarity detects coherent **extraction trajectories** within that episode. Facts are extracted from each step on its own, and procedures from each coherent segment so unrelated topics are not combined into one workflow. Source provenance uses the caller's source ID.
+
+A segment ends where the similarity between adjacent subgoals drops below `segmentation_threshold` in `Mnemosyne.Config` (default `0.75`). The right value depends on the embedding model, because models differ in how high their similarities run. If nearly every step becomes its own segment, lower it.
 
 Neither an episode nor an extraction trajectory is caller-visible lifecycle state. Mnemosyne returns only after the final changeset and source ingestion record are committed.
 

@@ -166,6 +166,26 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
       assert [%{subgoal: "first"}, %{subgoal: "second"}] = episode.trajectories
     end
 
+    test "cuts trajectories at the configured segmentation threshold" do
+      stub_llm(subgoals: %{"did something" => "first", "clicked it" => "second"})
+      # cosine similarity between the two subgoal vectors is 0.5
+      stub_embedding(%{"first" => [1.0, 0.0], "second" => [0.5, 0.8660254]})
+
+      standardize = fn config ->
+        {:ok, episode} =
+          Episode.standardize(
+            Episode.new("Test goal"),
+            @raw_steps,
+            @default_opts ++ [config: config]
+          )
+
+        length(episode.trajectories)
+      end
+
+      assert standardize.(@test_config) == 2
+      assert standardize.(%{@test_config | segmentation_threshold: 0.3}) == 1
+    end
+
     test "falls back to 0.5 when reward scoring fails" do
       stub_llm()
       stub_embedding()

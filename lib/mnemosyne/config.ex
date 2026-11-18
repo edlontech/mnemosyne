@@ -140,6 +140,11 @@ defmodule Mnemosyne.Config do
                        description:
                          "Cosine similarity threshold above which incoming intents are silently deduplicated"
                      ),
+                   segmentation_threshold:
+                     Zoi.default(Zoi.float(), 0.75,
+                       description:
+                         "Cosine similarity between adjacent subgoal embeddings below which ingestion starts a new trajectory segment. Depends on the embedding model: lower it for models whose similarities run low"
+                     ),
                    refinement_budget:
                      Zoi.default(Zoi.non_negative(Zoi.integer()), 1,
                        description:
@@ -184,6 +189,11 @@ defmodule Mnemosyne.Config do
       Zoi.default(Zoi.float(), 0.95,
         description:
           "Cosine similarity threshold above which incoming intents are silently deduplicated"
+      ),
+    segmentation_threshold:
+      Zoi.default(Zoi.float(), 0.75,
+        description:
+          "Cosine similarity between adjacent subgoal embeddings below which ingestion starts a new trajectory segment. Depends on the embedding model: lower it for models whose similarities run low"
       ),
     refinement_budget:
       Zoi.default(Zoi.non_negative(Zoi.integer()), 1,

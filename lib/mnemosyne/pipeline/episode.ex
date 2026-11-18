@@ -6,7 +6,7 @@ defmodule Mnemosyne.Pipeline.Episode do
   (a sequential LLM chain), then infers subgoal `g_t = f(s_t, o_t, a_t)` and
   reward `r_t = f(s_t, a_t, g_t, o_{t+1})` for all steps concurrently, embeds
   every subgoal in one batch, and segments the steps into trajectories where
-  adjacent subgoal similarity drops below a threshold.
+  adjacent subgoal similarity drops below `Config.segmentation_threshold`.
   """
   require Logger
 
@@ -21,7 +21,7 @@ defmodule Mnemosyne.Pipeline.Episode do
   alias Mnemosyne.Telemetry
   alias Mnemosyne.Trajectory
 
-  @trajectory_similarity_threshold 0.75
+  @default_segmentation_threshold 0.75
   @step_timeout :timer.seconds(60)
   @final_observation "[Episode ended - no further observation]"
   @fallback_reward 0.5
@@ -99,7 +99,7 @@ defmodule Mnemosyne.Pipeline.Episode do
         with {:ok, states} <- derive_states(raw_steps, ctx),
              {:ok, steps} <- annotate_steps(raw_steps, states, ctx),
              {:ok, steps} <- embed_subgoals(steps, ctx),
-             {:ok, closed} <- close(%{episode | steps: segment(steps)}) do
+             {:ok, closed} <- close(%{episode | steps: segment(steps, threshold(ctx.config))}) do
           {{:ok, closed},
            %{step_count: length(closed.steps), trajectory_count: length(closed.trajectories)}}
         else
@@ -204,11 +204,16 @@ defmodule Mnemosyne.Pipeline.Episode do
     end
   end
 
-  defp segment(steps) do
+  defp threshold(%Config{segmentation_threshold: threshold}), do: threshold
+  defp threshold(nil), do: @default_segmentation_threshold
+
+  defp segment(steps, threshold) do
     {segmented, _} =
       Enum.map_reduce(steps, {generate_id("traj"), nil}, fn step, {trajectory_id, previous} ->
         trajectory_id =
-          if boundary?(previous, step.embedding), do: generate_id("traj"), else: trajectory_id
+          if boundary?(previous, step.embedding, threshold),
+            do: generate_id("traj"),
+            else: trajectory_id
 
         {%{step | trajectory_id: trajectory_id}, {trajectory_id, step.embedding}}
       end)
@@ -216,14 +221,14 @@ defmodule Mnemosyne.Pipeline.Episode do
     segmented
   end
 
-  defp boundary?(nil, _embedding), do: false
+  defp boundary?(nil, _embedding, _threshold), do: false
 
-  defp boundary?(previous, embedding) do
+  defp boundary?(previous, embedding, threshold) do
     similarity = Similarity.cosine_similarity(previous, embedding)
 
-    if similarity < @trajectory_similarity_threshold do
+    if similarity < threshold do
       Logger.debug(
-        "trajectory boundary detected (similarity=#{similarity} threshold=#{@trajectory_similarity_threshold})"
+        "trajectory boundary detected (similarity=#{similarity} threshold=#{threshold})"
       )
 
       true

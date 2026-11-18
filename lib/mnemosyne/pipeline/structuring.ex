@@ -3,8 +3,10 @@ defmodule Mnemosyne.Pipeline.Structuring do
   Orchestrates knowledge extraction from a closed episode.
 
   Trajectory segments are extracted concurrently. Within each segment,
-  GetSemantic and GetProcedural run in parallel, GetReturn scores the
-  resulting prescriptions, and everything is assembled into a Graph.Changeset.
+  GetSemantic runs once per step, so every fact comes from a single episodic
+  unit, while GetProcedural runs once over the whole segment and GetReturn
+  scores the resulting prescriptions. Everything is assembled into a
+  Graph.Changeset.
   """
 
   require Logger
@@ -140,7 +142,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
     extraction_tasks = [
       Task.async(fn ->
-        extract_semantic(
+        extract_step_facts(
           trajectory,
           goal,
           model_context,
@@ -229,6 +231,45 @@ defmodule Mnemosyne.Pipeline.Structuring do
 
       {:ok, cs, trace}
     end
+  end
+
+  # Facts are extracted from each step on its own, as in PlugMem, where a
+  # proposition comes from one episodic unit. Segments only shape procedures.
+  defp extract_step_facts(
+         trajectory,
+         goal,
+         model_context,
+         adapters,
+         llm_opts,
+         config,
+         avg_reward,
+         episodic_ids
+       ) do
+    trajectory.steps
+    |> Enum.zip(episodic_ids)
+    |> Task.async_stream(
+      fn {step, episodic_id} ->
+        extract_semantic(
+          %{trajectory | steps: [step]},
+          goal,
+          model_context,
+          adapters,
+          llm_opts,
+          config,
+          avg_reward,
+          [episodic_id]
+        )
+      end,
+      timeout: :timer.seconds(60)
+    )
+    |> Enum.reduce_while({:ok, Changeset.new(), @empty_provenance_stats}, fn
+      {:ok, {:ok, cs, stats}}, {:ok, acc_cs, acc_stats} ->
+        merged = Map.merge(acc_stats, stats, fn _key, a, b -> a + b end)
+        {:cont, {:ok, Changeset.merge(acc_cs, cs), merged}}
+
+      {:ok, {:error, _} = err}, _acc ->
+        {:halt, err}
+    end)
   end
 
   defp trajectory_avg_reward(%{steps: steps}) do
