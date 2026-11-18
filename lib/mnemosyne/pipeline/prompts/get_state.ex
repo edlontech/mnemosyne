@@ -23,7 +23,9 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
           You are an expert at deriving environment state from agent interactions.
           Given the agent's goal and its initial observation, derive the current environment state.
 
-          Respond with ONLY the state summary as a brief paragraph. No explanation.\
+          Respond with ONLY the state summary as a concise paragraph. Keep the specific
+          details from the observation, especially names, places and times.
+          No explanation.\
           """ <> overlay
       },
       %{
@@ -57,7 +59,9 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
           You are an expert at deriving environment state from agent interactions.
           Given the previous environment state, the action the agent then took, and the resulting observation, derive the updated environment state.
 
-          Respond with ONLY the state summary as a brief paragraph. No explanation.\
+          Respond with ONLY the state summary as a concise paragraph. Keep the specific
+          details from the action and observation, especially names, places and times.
+          No explanation.\
           """ <> overlay
       },
       %{

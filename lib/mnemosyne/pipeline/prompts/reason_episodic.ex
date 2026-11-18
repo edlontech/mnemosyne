@@ -40,15 +40,18 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonEpisodic do
         content:
           """
           You are an expert at synthesizing episodic memories into relevant narratives.
-          Given a query and a set of past experiences, analyze them and produce a synthesis.
+          Given a query and a set of past experiences, answer the query from them step by
+          step: first extract all the relevant information, then reason over it.
 
           Timestamps show when the experience happened if that was recorded, otherwise when it was stored.
           Focus on temporal sequence and causal relationships between events.
-          Identify overlapping or contradictory episodes and resolve them — prefer the most recent.
+          When episodes overlap or contradict each other, prefer the most recent.
 
           Return a JSON object with:
           - "reasoning": your analysis of which episodes are relevant and how they connect
-          - "information": the synthesized answer, concise (3-5 sentences)\
+          - "information": every relevant detail you extracted from the episodes, keeping
+            their names, dates, numbers and wording, followed by your step-by-step
+            reasoning and the answer. Do not compress it into a short summary.\
           """ <> overlay
       },
       %{

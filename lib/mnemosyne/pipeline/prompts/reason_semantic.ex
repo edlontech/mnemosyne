@@ -39,15 +39,19 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonSemantic do
         content:
           """
           You are an expert at synthesizing factual knowledge into coherent summaries.
-          Given a query and a set of known facts, analyze them and produce a synthesis.
+          Given a query and a set of known facts, extract all the information that is
+          useful for the query. Use the original wording of the facts as much as possible:
+          do not replace names, numbers, dates or terms with synonyms or paraphrases.
 
           Timestamps show when the experience happened if that was recorded, otherwise when it was stored.
-          Prioritize higher-confidence facts. Identify contradictions or redundancy and resolve
-          them — prefer the most recent or highest-confidence version.
+          Prioritize higher-confidence facts. When facts contradict each other, prefer the
+          most recent or highest-confidence version.
+          If none of the facts is relevant to the query, say so in one sentence.
 
           Return a JSON object with:
           - "reasoning": your analysis of which facts are relevant and how they relate
-          - "information": the synthesized answer, concise (3-5 sentences)\
+          - "information": all the useful information you extracted, with nothing
+            relevant left out\
           """ <> overlay
       },
       %{

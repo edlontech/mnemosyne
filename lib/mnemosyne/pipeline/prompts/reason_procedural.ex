@@ -41,7 +41,9 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonProcedural do
         content:
           """
           You are an expert at synthesizing procedural knowledge into actionable guidance.
-          Given a query and a set of known procedures, analyze them and produce a synthesis.
+          Given a query and a set of known procedures, integrate everything useful in them
+          into one coherent piece of guidance. When the procedures are insufficient or
+          contradictory, give the most plausible guidance.
 
           Timestamps show when the experience happened if that was recorded, otherwise when it was stored.
           Return scores indicate how successful each procedure was (0.0 = failed, 1.0 = succeeded).
@@ -50,7 +52,7 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonProcedural do
 
           Return a JSON object with:
           - "reasoning": your analysis of which procedures apply and their track record
-          - "information": the synthesized guidance, concise (3-5 sentences)\
+          - "information": the synthesized guidance, concise and directly actionable\
           """ <> overlay
       },
       %{
