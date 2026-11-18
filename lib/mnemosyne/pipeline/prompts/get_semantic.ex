@@ -101,7 +101,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
       %{
         role: :user,
         content: """
-        Goal: #{goal}
+        Goal: #{goal}#{occurred_line(variables[:occurred_at])}
 
         Trajectory Segment:
         #{formatted_steps}
@@ -140,4 +140,8 @@ defmodule Mnemosyne.Pipeline.Prompts.GetSemantic do
   end
 
   defp parse_source_steps(_), do: []
+  defp occurred_line(nil), do: ""
+
+  defp occurred_line(%DateTime{} = occurred_at),
+    do: "\nOccurred at: #{Calendar.strftime(occurred_at, "%A, %Y-%m-%d %H:%M")}"
 end

@@ -161,6 +161,19 @@ The caller can augment `recall/3` with transient active-task state:
 
 The goal and at most the last three recent observation/action pairs augment the query in caller order. Context is used only by retrieval and reasoning: it is not persisted, does not create graph nodes, and does not reserve the source ID. `source_id` is optional correlation metadata for traces, notifier events, and telemetry; it does not change candidate scoring.
 
+## Reference Time
+
+The reasoning prompts tell the model the current date so it can resolve relative questions such as "how many days ago". That date is the wall clock by default. When replaying a past query, pass the time it was asked:
+
+```elixir
+{:ok, memories} =
+  Mnemosyne.recall("my-repo", "How many days ago was the service?",
+    now: ~U[2023-04-10 07:43:00Z]
+  )
+```
+
+`:now` only changes the date shown to the reasoning prompts. It does not affect scoring or which memories are retrieved.
+
 ## Custom Value Functions
 
 Implement the `Mnemosyne.ValueFunction` behaviour to create your own scoring logic:

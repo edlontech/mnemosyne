@@ -23,12 +23,15 @@ defmodule MnemosyneTest do
 
   setup :set_mimic_global
 
-  defp stub_extraction_success do
-    stub(Mnemosyne.MockLLM, :chat, fn _messages, _opts ->
+  defp stub_extraction_success(notify \\ nil) do
+    stub(Mnemosyne.MockLLM, :chat, fn messages, _opts ->
+      notify && send(notify, {:llm_prompt, List.last(messages).content})
       {:ok, %LLM.Response{content: "0.5", model: "test", usage: %{}}}
     end)
 
     stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+      notify && send(notify, {:llm_prompt, List.last(messages).content})
+
       system_content =
         messages
         |> Enum.find(%{content: ""}, &(&1.role == :system))
@@ -193,6 +196,32 @@ defmodule MnemosyneTest do
       assert Enum.all?(node_ids, &Map.has_key?(graph.nodes, &1))
     end
 
+    test "stamps content nodes and extraction prompts with occurred_at", %{tmp_dir: tmp_dir} do
+      occurred_at = ~U[2023-04-06 19:35:00Z]
+      stub_extraction_success(self())
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      assert {:ok, %IngestionReceipt{node_ids: node_ids}} =
+               Mnemosyne.ingest(repo, trajectory(occurred_at: occurred_at))
+
+      {:messages, messages} = Process.info(self(), :messages)
+      prompts = for {:llm_prompt, prompt} <- messages, do: prompt
+      dated = "Occurred at: Thursday, 2023-04-06 19:35"
+
+      assert Enum.any?(prompts, &(&1 =~ dated and &1 =~ "Current environment state:"))
+      assert Enum.any?(prompts, &(&1 =~ dated and &1 =~ "Facts learned:"))
+
+      {:ok, nodes} = Mnemosyne.get_nodes(repo, node_ids)
+
+      {routing, content} =
+        Enum.split_with(nodes, &(Mnemosyne.Graph.Node.node_type(&1) in [:tag, :intent]))
+
+      assert routing != [] and content != []
+      assert Enum.all?(content, &(&1.created_at == occurred_at))
+      assert Enum.all?(routing, &(&1.created_at != occurred_at))
+    end
+
     test "returns a repo not-found error", %{tmp_dir: tmp_dir} do
       start_supervisor(tmp_dir)
 
@@ -346,6 +375,43 @@ defmodule MnemosyneTest do
 
       assert_received {:retrieval_query, "Unchanged query"}
       assert_received {:reasoning_query, "Unchanged query"}
+    end
+
+    test "reasons with :now as the current date", %{tmp_dir: tmp_dir} do
+      test_pid = self()
+      start_supervisor(tmp_dir)
+      repo = open_test_repo(tmp_dir)
+
+      node = %Semantic{
+        id: "dated-node",
+        proposition: "The service was on April 6, 2023",
+        confidence: 0.9,
+        embedding: List.duplicate(0.1, 128)
+      }
+
+      :ok = Mnemosyne.apply_changeset(repo, Changeset.add_node(Changeset.new(), node))
+      assert_eventually(Mnemosyne.get_graph(repo).nodes["dated-node"] != nil)
+      stub_recall_query_capture(test_pid)
+
+      stub(Mnemosyne.MockLLM, :chat_structured, fn messages, _schema, _opts ->
+        send(test_pid, {:reasoning_prompt, messages |> List.last() |> Map.fetch!(:content)})
+
+        {:ok,
+         %LLM.Response{
+           content: %{reasoning: "analysis", information: "Summary."},
+           model: "test",
+           usage: %{}
+         }}
+      end)
+
+      assert {:ok, %RecallResult{}} =
+               Mnemosyne.recall(repo, "How many days ago was the service?",
+                 now: ~U[2023-04-10 07:43:00Z],
+                 max_hops: 0
+               )
+
+      assert_received {:reasoning_prompt, prompt}
+      assert prompt =~ "Current Date: 2023-04-10"
     end
 
     test "returns error when repo does not exist", %{tmp_dir: tmp_dir} do

@@ -29,7 +29,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
       %{
         role: :user,
         content: """
-        Goal: #{goal}
+        Goal: #{goal}#{occurred_line(variables[:occurred_at])}
 
         Observation: #{observation}
 
@@ -63,7 +63,7 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
       %{
         role: :user,
         content: """
-        Goal: #{goal}
+        Goal: #{goal}#{occurred_line(variables[:occurred_at])}
 
         Previous state: #{prev}
         Action: #{action}
@@ -82,4 +82,9 @@ defmodule Mnemosyne.Pipeline.Prompts.GetState do
       state -> {:ok, state}
     end
   end
+
+  defp occurred_line(nil), do: ""
+
+  defp occurred_line(%DateTime{} = occurred_at),
+    do: "\nOccurred at: #{Calendar.strftime(occurred_at, "%A, %Y-%m-%d %H:%M")}"
 end

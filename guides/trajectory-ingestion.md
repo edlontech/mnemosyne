@@ -29,6 +29,30 @@ trajectory = %Mnemosyne.Trajectory{
 
 The pipeline creates an internal episode identified by `source_id`, annotates each step in order, scores the final step, closes the episode, and extracts a graph changeset. Source provenance therefore carries the caller's source ID.
 
+## Event Time
+
+By default Mnemosyne only knows when a trajectory was ingested. If you ingest later than the interaction happened (a queue, a backfill, an import), set `occurred_at`:
+
+```elixir
+trajectory = %Mnemosyne.Trajectory{
+  source_id: "chat-2023-04-06",
+  goal: "Help the user find volunteer work",
+  occurred_at: ~U[2023-04-06 19:35:00Z],
+  steps: [
+    %{observation: "I attended the Maundy Thursday service today", action: "Acknowledged"}
+  ]
+}
+```
+
+When it is set:
+
+- The state and fact extraction prompts are shown the date, so relative expressions such as "today" can be stored as absolute dates.
+- The episodic, source, subgoal, semantic, and procedural nodes from that ingestion get `created_at` set to `occurred_at`. The reasoning prompts print that timestamp next to each memory.
+
+`occurred_at` must be a `DateTime` or `nil`. It does not change `Mnemosyne.NodeMetadata.created_at`, so recency scoring, decay, and `latest/3` still follow ingestion time. Tags and Intents keep their own creation time because they are shared across ingestions.
+
+When set, `occurred_at` is part of ingestion payload identity: the same `source_id` with a different instant is a source conflict. Trajectories without it keep the digest they had before this field existed. To answer a past question against the date it was asked, see the `:now` option in [Retrieval and Recall](retrieval-and-recall.md#reference-time).
+
 ## Custom Node Metadata
 
 The trajectory's `metadata` map is copied into `Mnemosyne.NodeMetadata.custom` for every extracted node. It defaults to `%{}` and is stored separately from node content and internal scoring fields. Mnemosyne does not use this map for recall filtering, ranking, embeddings, authorization, or LLM prompts.

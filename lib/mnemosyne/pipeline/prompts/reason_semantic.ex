@@ -41,7 +41,7 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonSemantic do
           You are an expert at synthesizing factual knowledge into coherent summaries.
           Given a query and a set of known facts, analyze them and produce a synthesis.
 
-          Timestamps reflect when knowledge was extracted, not when the original event occurred.
+          Timestamps show when the experience happened if that was recorded, otherwise when it was stored.
           Prioritize higher-confidence facts. Identify contradictions or redundancy and resolve
           them — prefer the most recent or highest-confidence version.
 
@@ -53,7 +53,7 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonSemantic do
       %{
         role: :user,
         content: """
-        Current Date: #{Calendar.strftime(DateTime.utc_now(), "%Y-%m-%d")}
+        Current Date: #{Calendar.strftime(variables[:now] || DateTime.utc_now(), "%Y-%m-%d")}
 
         Query: #{query}
 

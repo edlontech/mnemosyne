@@ -330,6 +330,7 @@ defmodule Mnemosyne.Pipeline.Structuring do
       SemanticPrompt.build_messages(%{
         trajectory: trajectory.steps,
         goal: goal,
+        occurred_at: trajectory[:occurred_at],
         overlay: Config.resolve_overlay(config, :get_semantic)
       })
 

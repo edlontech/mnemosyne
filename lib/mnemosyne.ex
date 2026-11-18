@@ -296,6 +296,9 @@ defmodule Mnemosyne do
       The goal and last three recent steps augment the query without being persisted.
     * `:source_id` - Optional correlation identifier included in recall traces,
       notifier metadata, and pipeline telemetry. It does not augment the query.
+    * `:now` - `DateTime` the reasoning prompts present as the current date. Defaults to
+      the wall clock. Set it when replaying past queries, so relative dates resolve against
+      the time the query was asked. It does not affect scoring or which memories are retrieved.
 
   ## Examples
 

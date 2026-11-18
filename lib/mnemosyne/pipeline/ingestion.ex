@@ -4,12 +4,14 @@ defmodule Mnemosyne.Pipeline.Ingestion do
   """
 
   alias Mnemosyne.Errors.Invalid.IngestionError
+  alias Mnemosyne.Graph.Node, as: NodeProtocol
   alias Mnemosyne.Pipeline.Episode
   alias Mnemosyne.Pipeline.Structuring
   alias Mnemosyne.Trajectory
 
   @fingerprint_version 1
   @external_term_minor_version 2
+  @content_types [:episodic, :source, :subgoal, :semantic, :procedural]
 
   @doc "Returns the version used by the current payload fingerprint."
   @spec fingerprint_version() :: pos_integer()
@@ -38,7 +40,9 @@ defmodule Mnemosyne.Pipeline.Ingestion do
           {:ok, Mnemosyne.Graph.Changeset.t()} | {:error, Mnemosyne.Errors.error()}
   def run(%Trajectory{} = trajectory, opts) do
     opts = Keyword.put(opts, :source_id, trajectory.source_id)
-    episode = Episode.new(trajectory.goal, id: trajectory.source_id)
+
+    episode =
+      Episode.new(trajectory.goal, id: trajectory.source_id, occurred_at: trajectory.occurred_at)
 
     with {:ok, episode} <- Episode.standardize(episode, trajectory.steps, opts),
          {:ok, changeset} <- Structuring.extract(episode, opts) do
@@ -47,8 +51,21 @@ defmodule Mnemosyne.Pipeline.Ingestion do
           {id, %{meta | custom: trajectory.metadata}}
         end)
 
-      {:ok, %{changeset | metadata: metadata}}
+      {:ok, stamp_occurred_at(%{changeset | metadata: metadata}, trajectory.occurred_at)}
     end
+  end
+
+  defp stamp_occurred_at(changeset, nil), do: changeset
+
+  defp stamp_occurred_at(changeset, occurred_at) do
+    additions =
+      Enum.map(changeset.additions, fn node ->
+        if NodeProtocol.node_type(node) in @content_types,
+          do: %{node | created_at: occurred_at},
+          else: node
+      end)
+
+    %{changeset | additions: additions}
   end
 
   defp normalize_audience(nil), do: {:ok, nil}
@@ -65,6 +82,7 @@ defmodule Mnemosyne.Pipeline.Ingestion do
       not non_blank_binary?(trajectory.source_id) -> {:error, :invalid_source_id}
       not non_blank_binary?(trajectory.goal) -> {:error, :invalid_goal}
       not valid_metadata?(trajectory.metadata) -> {:error, :invalid_metadata}
+      not valid_occurred_at?(trajectory.occurred_at) -> {:error, :invalid_occurred_at}
       true -> validate_steps(trajectory.steps)
     end
   end
@@ -73,6 +91,17 @@ defmodule Mnemosyne.Pipeline.Ingestion do
     identity =
       {:mnemosyne_trajectory, @fingerprint_version, trajectory.goal,
        Enum.map(trajectory.steps, &{&1.observation, &1.action}), trajectory.metadata}
+
+    # Wrapped only when set, so payloads stored before this field keep their digest.
+    identity =
+      case trajectory.occurred_at do
+        nil ->
+          identity
+
+        occurred_at ->
+          {:mnemosyne_occurred_at, @fingerprint_version,
+           DateTime.to_unix(occurred_at, :microsecond), identity}
+      end
 
     identity =
       case trajectory.audience do
@@ -107,6 +136,9 @@ defmodule Mnemosyne.Pipeline.Ingestion do
   end
 
   defp valid_step?(_step), do: false
+
+  defp valid_occurred_at?(occurred_at),
+    do: is_nil(occurred_at) or is_struct(occurred_at, DateTime)
 
   defp valid_metadata?(metadata) when is_map(metadata), do: deterministic_term?(metadata)
   defp valid_metadata?(_metadata), do: false

@@ -225,6 +225,25 @@ defmodule Mnemosyne.Pipeline.IngestionTest do
     end
   end
 
+  test "rejects an occurred_at that is not a DateTime" do
+    for occurred_at <- ["2023-04-06", ~N[2023-04-06 19:35:00], 1_680_809_700] do
+      assert {:error, %IngestionError{reason: :invalid_occurred_at}} =
+               Ingestion.prepare(trajectory(occurred_at: occurred_at))
+    end
+  end
+
+  test "changes when occurred_at is set or names another instant" do
+    {:ok, undated} = Ingestion.prepare(trajectory())
+    {:ok, dated} = Ingestion.prepare(trajectory(occurred_at: ~U[2023-04-06 19:35:00Z]))
+    {:ok, later} = Ingestion.prepare(trajectory(occurred_at: ~U[2023-04-07 19:35:00Z]))
+
+    refute undated == dated
+    refute dated == later
+
+    assert {:ok, ^dated} =
+             Ingestion.prepare(trajectory(occurred_at: ~U[2023-04-06 19:35:00.000000Z]))
+  end
+
   test "rejects improper step lists" do
     steps = [%{observation: "Timeout from upstream", action: "Inspect request logs"} | :tail]
 

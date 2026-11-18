@@ -27,11 +27,12 @@ defmodule Mnemosyne.Pipeline.Episode do
   @fallback_reward 0.5
 
   @enforce_keys [:id, :goal]
-  defstruct [:id, :goal, steps: [], trajectories: [], closed: false]
+  defstruct [:id, :goal, :occurred_at, steps: [], trajectories: [], closed: false]
 
   @type t :: %__MODULE__{
           id: String.t(),
           goal: String.t(),
+          occurred_at: DateTime.t() | nil,
           steps: [step()],
           trajectories: [trajectory()],
           closed: boolean()
@@ -51,15 +52,20 @@ defmodule Mnemosyne.Pipeline.Episode do
 
   @typedoc "A completed trajectory segment"
   @type trajectory :: %{
-          id: String.t(),
-          steps: [step()],
-          subgoal: String.t()
+          required(:id) => String.t(),
+          required(:steps) => [step()],
+          required(:subgoal) => String.t(),
+          optional(:occurred_at) => DateTime.t() | nil
         }
 
   @doc "Creates a new open episode targeting the given goal."
   @spec new(String.t(), keyword()) :: t()
   def new(goal, opts \\ []) do
-    %__MODULE__{id: Keyword.get_lazy(opts, :id, fn -> generate_id("ep") end), goal: goal}
+    %__MODULE__{
+      id: Keyword.get_lazy(opts, :id, fn -> generate_id("ep") end),
+      goal: goal,
+      occurred_at: Keyword.get(opts, :occurred_at)
+    }
   end
 
   @doc """
@@ -82,6 +88,7 @@ defmodule Mnemosyne.Pipeline.Episode do
       fn ->
         ctx = %{
           goal: episode.goal,
+          occurred_at: episode.occurred_at,
           llm: Keyword.fetch!(opts, :llm),
           embedding: Keyword.fetch!(opts, :embedding),
           llm_opts: Keyword.get(opts, :llm_opts, []),
@@ -232,6 +239,7 @@ defmodule Mnemosyne.Pipeline.Episode do
         action: previous_action,
         observation: observation,
         goal: ctx.goal,
+        occurred_at: ctx.occurred_at,
         overlay: Config.resolve_overlay(ctx.config, :get_state)
       })
 
@@ -303,7 +311,9 @@ defmodule Mnemosyne.Pipeline.Episode do
   defp build_trajectories(episode) do
     episode.steps
     |> Enum.group_by(& &1.trajectory_id)
-    |> Enum.map(fn {_traj_id, steps} -> build_trajectory_from_steps(steps) end)
+    |> Enum.map(fn {_traj_id, steps} ->
+      steps |> build_trajectory_from_steps() |> Map.put(:occurred_at, episode.occurred_at)
+    end)
     |> Enum.sort_by(fn traj -> hd(traj.steps).index end)
   end
 

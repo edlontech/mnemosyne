@@ -44,6 +44,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     - `:llm_opts` - Additional LLM options (default: [])
     - `:config` - Config struct for per-step model overrides
     - `:source_id` - Optional correlation identifier for telemetry
+    - `:now` - `DateTime` the reasoning prompts present as the current date (default: the wall clock)
   """
   @spec reason(Retrieval.Result.t(), keyword()) ::
           {:ok, ReasonedMemory.t()} | {:error, Mnemosyne.Errors.error()}
@@ -63,6 +64,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     llm_opts = Keyword.get(opts, :llm_opts, [])
     config = Keyword.get(opts, :config)
     model_context = Keyword.get(opts, :model_context)
+    now = Keyword.get(opts, :now)
 
     candidate_types =
       candidates
@@ -79,7 +81,8 @@ defmodule Mnemosyne.Pipeline.Reasoning do
             model_context,
             llm,
             llm_opts,
-            config
+            config,
+            now
           ),
           maybe_reason(
             :semantic,
@@ -88,7 +91,8 @@ defmodule Mnemosyne.Pipeline.Reasoning do
             model_context,
             llm,
             llm_opts,
-            config
+            config,
+            now
           ),
           maybe_reason(
             :procedural,
@@ -97,7 +101,8 @@ defmodule Mnemosyne.Pipeline.Reasoning do
             model_context,
             llm,
             llm_opts,
-            config
+            config,
+            now
           )
         ],
         &is_nil/1
@@ -129,14 +134,14 @@ defmodule Mnemosyne.Pipeline.Reasoning do
       reraise e, __STACKTRACE__
   end
 
-  defp maybe_reason(type, candidates, query, model_context, llm, llm_opts, config) do
+  defp maybe_reason(type, candidates, query, model_context, llm, llm_opts, config, now) do
     nodes = extract_nodes(candidates, type, config)
 
     if nodes == [] do
       nil
     else
       Task.async(fn ->
-        run_reasoning(type, query, nodes, model_context, llm, llm_opts, config)
+        run_reasoning(type, query, nodes, model_context, llm, llm_opts, config, now)
       end)
     end
   end
@@ -180,11 +185,12 @@ defmodule Mnemosyne.Pipeline.Reasoning do
   defp default_top_k(:semantic), do: 20
   defp default_top_k(:procedural), do: 10
 
-  defp run_reasoning(:episodic, query, nodes, model_context, llm, llm_opts, config) do
+  defp run_reasoning(:episodic, query, nodes, model_context, llm, llm_opts, config, now) do
     messages =
       ReasonEpisodic.build_messages(%{
         query: query,
         nodes: nodes,
+        now: now,
         overlay: Config.resolve_overlay(config, :reason_episodic)
       })
 
@@ -202,11 +208,12 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     end
   end
 
-  defp run_reasoning(:semantic, query, nodes, model_context, llm, llm_opts, config) do
+  defp run_reasoning(:semantic, query, nodes, model_context, llm, llm_opts, config, now) do
     messages =
       ReasonSemantic.build_messages(%{
         query: query,
         nodes: nodes,
+        now: now,
         overlay: Config.resolve_overlay(config, :reason_semantic)
       })
 
@@ -224,7 +231,7 @@ defmodule Mnemosyne.Pipeline.Reasoning do
     end
   end
 
-  defp run_reasoning(:procedural, query, nodes, model_context, llm, llm_opts, config) do
+  defp run_reasoning(:procedural, query, nodes, model_context, llm, llm_opts, config, _now) do
     messages =
       ReasonProcedural.build_messages(%{
         query: query,

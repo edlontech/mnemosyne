@@ -9,10 +9,17 @@ defmodule Mnemosyne.Trajectory do
   Protected repos require an explicit `audience`: `:repo` or a nonempty list of
   `{organization_id, group_id}` tuples. It is immutable, part of payload identity,
   and inherited by every extracted node. Unrestricted repos use nil.
+
+  `occurred_at` is when the interaction happened. Set it when ingesting later than
+  the interaction, so relative dates such as "today" resolve against that moment:
+  extraction prompts are shown it, and the extracted episodic, source, subgoal,
+  semantic, and procedural nodes carry it as `created_at` in place of the ingestion
+  time. It defaults to nil, is part of payload identity when set, and does not
+  affect recency scoring or decay.
   """
 
   @enforce_keys [:source_id, :goal, :steps]
-  defstruct [:source_id, :goal, :audience, steps: [], metadata: %{}]
+  defstruct [:source_id, :goal, :audience, :occurred_at, steps: [], metadata: %{}]
 
   @typedoc "A raw observation-action pair."
   @type step :: %{
@@ -24,6 +31,7 @@ defmodule Mnemosyne.Trajectory do
           source_id: String.t(),
           goal: String.t(),
           audience: :repo | [{String.t(), String.t()}] | nil,
+          occurred_at: DateTime.t() | nil,
           steps: [step()],
           metadata: map()
         }

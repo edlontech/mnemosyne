@@ -42,7 +42,7 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonEpisodic do
           You are an expert at synthesizing episodic memories into relevant narratives.
           Given a query and a set of past experiences, analyze them and produce a synthesis.
 
-          Timestamps reflect when knowledge was extracted, not when the original event occurred.
+          Timestamps show when the experience happened if that was recorded, otherwise when it was stored.
           Focus on temporal sequence and causal relationships between events.
           Identify overlapping or contradictory episodes and resolve them — prefer the most recent.
 
@@ -54,7 +54,7 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonEpisodic do
       %{
         role: :user,
         content: """
-        Current Date: #{Calendar.strftime(DateTime.utc_now(), "%Y-%m-%d")}
+        Current Date: #{Calendar.strftime(variables[:now] || DateTime.utc_now(), "%Y-%m-%d")}
 
         Query: #{query}
 

@@ -43,7 +43,7 @@ defmodule Mnemosyne.Pipeline.Prompts.ReasonProcedural do
           You are an expert at synthesizing procedural knowledge into actionable guidance.
           Given a query and a set of known procedures, analyze them and produce a synthesis.
 
-          Timestamps reflect when knowledge was extracted, not when the original event occurred.
+          Timestamps show when the experience happened if that was recorded, otherwise when it was stored.
           Return scores indicate how successful each procedure was (0.0 = failed, 1.0 = succeeded).
           Distinguish proven procedures (high return) from failed ones (low return).
           Identify redundant procedures and keep the most successful version.

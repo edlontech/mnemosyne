@@ -132,6 +132,22 @@ defmodule Mnemosyne.Pipeline.Prompts.RetrievalPromptsTest do
       assert user =~ "What happened during the outage?"
     end
 
+    test "build_messages uses :now as the current date" do
+      nodes = [
+        %{observation: "X", action: "Y", state: "S", reward: 0.5, created_at: DateTime.utc_now()}
+      ]
+
+      messages =
+        ReasonEpisodic.build_messages(%{
+          query: "How long ago?",
+          nodes: nodes,
+          now: ~U[2023-04-10 07:43:00Z]
+        })
+
+      assert [_, %{role: :user, content: user}] = messages
+      assert user =~ "Current Date: 2023-04-10"
+    end
+
     test "parse_response extracts information from structured response" do
       assert {:ok, "The server crashed and was restarted."} =
                ReasonEpisodic.parse_response(%{

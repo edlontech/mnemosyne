@@ -1161,7 +1161,8 @@ defmodule Mnemosyne.MemoryStore do
       llm: llm,
       query: query,
       config: config,
-      model_context: context
+      model_context: context,
+      now: Keyword.get(opts, :now)
     ]
 
     Task.Supervisor.async_nolink(state.task_supervisor, fn ->
