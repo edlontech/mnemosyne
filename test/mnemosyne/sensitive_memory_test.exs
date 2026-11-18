@@ -121,7 +121,7 @@ defmodule Mnemosyne.SensitiveMemoryTest do
     assert Enum.map(nodes, & &1.id) |> Enum.sort() == ["legacy", "shared"]
 
     assert {:ok, linked} =
-             Mnemosyne.get_linked_nodes(ctx.repo, ["shared", "secret", "legacy"], opts)
+             Mnemosyne.get_nodes(ctx.repo, ["shared", "secret", "legacy"], opts)
 
     assert Enum.map(linked, & &1.id) |> Enum.sort() == ["legacy", "shared"]
 
@@ -579,7 +579,7 @@ defmodule Mnemosyne.SensitiveMemoryTest do
 
     opts = [supervisor: ctx.sup, authorization: auth([{"org", "security"}])]
     assert {:ok, receipt} = Mnemosyne.ingest(ctx.repo, trajectory, opts)
-    assert {:ok, nodes} = Mnemosyne.get_linked_nodes(ctx.repo, receipt.node_ids, opts)
+    assert {:ok, nodes} = Mnemosyne.get_nodes(ctx.repo, receipt.node_ids, opts)
 
     assert nodes |> Enum.map(&Node.node_type/1) |> Enum.uniq() |> Enum.sort() ==
              [:episodic, :intent, :procedural, :semantic, :source, :subgoal, :tag]
@@ -589,7 +589,7 @@ defmodule Mnemosyne.SensitiveMemoryTest do
     assert Enum.all?(metadata, fn {_id, meta} -> meta.audience == [{"org", "security"}] end)
 
     assert {:ok, []} =
-             Mnemosyne.get_linked_nodes(ctx.repo, receipt.node_ids,
+             Mnemosyne.get_nodes(ctx.repo, receipt.node_ids,
                supervisor: ctx.sup,
                authorization: auth()
              )

@@ -155,10 +155,4 @@ defmodule Mnemosyne.RecallTelemetryTest do
       {:ok, %Embedding.Response{vectors: vectors, model: "e", usage: %{}}}
     end)
   end
-
-  defp system_content(messages) do
-    messages
-    |> Enum.find(%{content: ""}, &(&1.role == :system))
-    |> Map.fetch!(:content)
-  end
 end

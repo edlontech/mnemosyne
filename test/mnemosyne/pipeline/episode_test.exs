@@ -218,7 +218,11 @@ defmodule Mnemosyne.Pipeline.EpisodeTest do
 
       assert {:ok, _} = Episode.standardize(Episode.new("Test goal"), @raw_steps, @default_opts)
 
-      rewards = for _ <- 1..2, do: assert_received({:reward, user}) && user
+      rewards =
+        for _ <- 1..2 do
+          assert_received {:reward, user}
+          user
+        end
 
       assert Enum.any?(rewards, &(&1 =~ "Observation (at time t + 1): result appeared"))
       assert Enum.any?(rewards, &(&1 =~ "[Episode ended - no further observation]"))

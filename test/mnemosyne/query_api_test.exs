@@ -118,15 +118,15 @@ defmodule Mnemosyne.QueryApiTest do
     end
   end
 
-  describe "get_linked_nodes/3" do
+  describe "get_nodes/3" do
     test "returns nodes by IDs (batch fetch)", %{repo_id: repo_id, sup: sup} do
-      assert {:ok, nodes} = Mnemosyne.get_linked_nodes(repo_id, ["t1", "s1"], supervisor: sup)
+      assert {:ok, nodes} = Mnemosyne.get_nodes(repo_id, ["t1", "s1"], supervisor: sup)
       ids = Enum.map(nodes, & &1.id) |> Enum.sort()
       assert ids == ["s1", "t1"]
     end
 
     test "returns empty list for unknown IDs", %{repo_id: repo_id, sup: sup} do
-      assert {:ok, []} = Mnemosyne.get_linked_nodes(repo_id, ["nonexistent"], supervisor: sup)
+      assert {:ok, []} = Mnemosyne.get_nodes(repo_id, ["nonexistent"], supervisor: sup)
     end
   end
 

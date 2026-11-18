@@ -83,21 +83,6 @@ defmodule Mnemosyne.Pipeline.StructuringTest do
     end)
   end
 
-  defp stub_chat_structured_responses(responses) do
-    {:ok, agent} = Agent.start_link(fn -> responses end)
-
-    Mnemosyne.MockLLM
-    |> stub(:chat_structured, fn _messages, _schema, _opts ->
-      content =
-        Agent.get_and_update(agent, fn
-          [head | tail] -> {head, tail}
-          [] -> {%{}, []}
-        end)
-
-      {:ok, %LLM.Response{content: content, model: "mock:test", usage: %{}}}
-    end)
-  end
-
   defp stub_default_embedding do
     Mnemosyne.MockEmbedding
     |> stub(:embed, fn _text, _opts ->
