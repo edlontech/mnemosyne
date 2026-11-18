@@ -118,3 +118,7 @@ plugmem_article.md
 plugmem_src.xml
 
 # End of https://www.toptal.com/developers/gitignore/api/elixir,erlang,macos,visualstudiocode,vim
+
+# LongMemEval benchmark datasets and run outputs
+benchmark/data/
+benchmark/runs/
