@@ -31,7 +31,8 @@ defmodule LongMemEval do
     llm: :string,
     embedding: :string,
     judge: :string,
-    concurrency: :integer
+    concurrency: :integer,
+    segmentation_threshold: :float
   ]
 
   @defaults [
@@ -40,7 +41,8 @@ defmodule LongMemEval do
     llm: "openrouter:google/gemini-3-flash-preview",
     embedding: "openai:text-embedding-3-small",
     judge: "openai:gpt-4o-2024-08-06",
-    concurrency: 2
+    concurrency: 2,
+    segmentation_threshold: 0.3
   ]
 
   @ks [1, 3, 5, 10]
@@ -146,7 +148,8 @@ defmodule LongMemEval do
     {:ok, config} =
       Zoi.parse(Mnemosyne.Config.t(), %{
         llm: %{model: opts[:llm]},
-        embedding: %{model: opts[:embedding]}
+        embedding: %{model: opts[:embedding]},
+        segmentation_threshold: opts[:segmentation_threshold]
       })
 
     {:ok, _pid} =

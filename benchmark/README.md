@@ -27,6 +27,7 @@ The dataset is downloaded to `benchmark/data/` on first use (15 MB for `oracle`,
 | `--embedding` | `openai:text-embedding-3-small` | Embedding model |
 | `--judge` | `openai:gpt-4o-2024-08-06` | Model that grades answers (the version upstream pins) |
 | `--concurrency` | `2` | Questions processed in parallel |
+| `--segmentation-threshold` | `0.3` | `Config.segmentation_threshold`; 0.3 fits `text-embedding-3-small`, where consecutive same-session subgoals score a median of 0.49 and random pairs 0.19 |
 
 Model strings are Sycophant identifiers. Keep one `--run` per configuration or branch you want to compare, since a run directory is never reset.
 
@@ -61,7 +62,9 @@ Retrieved sessions are ranked by the score of their best `touched_nodes` entry. 
 
 Measured on a 3-question `oracle` run (6 sessions, about 21k tokens of chat): 219 LLM calls, 214k input and 32k output tokens, $0.20 with the default models, and about 40 seconds per session.
 
-Scaled by history size, an `s` question should need roughly 1,200 LLM calls and cost around $1, so plan for about $100 and several hours per 100 questions. That is an extrapolation, so check the usage table of a small `s` run first.
+Measured on 2 `s` questions (90 sessions, about 246k tokens of chat): 3,018 LLM calls, $2.52, about 12 minutes of ingestion at the default concurrency, and one 142 MB repo file per question. Ingestion makes three calls per step (state, subgoal, reward) and up to three per trajectory segment (facts, procedures, return scoring).
+
+Scaled by history size, plan for about $125 and 14 GB of disk per 100 questions, and about $630 for all 500.
 
 ### Differences from upstream
 
